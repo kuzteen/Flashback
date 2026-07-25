@@ -111,6 +111,11 @@
         {/each}
       </div>
 
+      <div class="pitch">
+        <span class="pitch-title">{t('share.dragTitle')}</span>
+        <span class="pitch-sub">{t('share.dragHint')}</span>
+      </div>
+
       <div
         class="drop"
         class:busy={shareState.preparing}
@@ -143,7 +148,7 @@
           {:else}
             <div class="veil hint">
               <span class="veil-title">{t('share.dragTitle')}</span>
-              <span class="veil-sub">{t('share.dragHint')}</span>
+              <span class="veil-sub">{t('share.dragOver')}</span>
             </div>
           {/if}
         </div>
@@ -216,6 +221,7 @@
   .label {
     margin-bottom: 8px;
     font-size: 12.5px;
+    text-align: center;
     color: var(--text-2);
   }
   .sizes {
@@ -257,6 +263,25 @@
      y se enciende el acento, igual que una zona de drop activa. */
   /* El borde discontinuo marca la zona de soltado y no se mueve; el fotograma vive un poco por
      dentro para que se lea como algo agarrable dentro de ella, no como el propio recuadro. */
+  .pitch {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    margin-bottom: 14px;
+    text-align: center;
+  }
+  .pitch-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-0);
+  }
+  .pitch-sub {
+    font-size: 12px;
+    line-height: 1.35;
+    color: var(--text-2);
+  }
+
   /* El padding en porcentaje se resuelve contra el ancho también arriba y abajo, así que un único
      valor deja la misma separación en píxeles por los cuatro lados. El alto lo marca el fotograma,
      que es quien conserva el 16:9. */
