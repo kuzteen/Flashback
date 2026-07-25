@@ -15,15 +15,12 @@
   const clip = $derived(shareState.clip);
 
   let poster = $state<string | null>(null);
-  let hovering = $state(false);
-  let videoReady = $state(false);
 
-  // Mismo patrón que la tarjeta: póster ligero siempre, y el <video> solo montado en hover para
-  // no dejar un decodificador vivo mientras el diálogo está abierto sin que nadie lo mire.
+  // Solo el fotograma: aquí lo que importa es reconocer el clip y arrastrarlo, no reproducirlo.
+  // Un <video> en hover además competiría con el gesto de arrastre por el mismo puntero.
   $effect(() => {
     const path = clip?.path;
     poster = null;
-    videoReady = false;
     if (!path) return;
     let alive = true;
     requestThumb(path).then((u) => {
@@ -105,30 +102,12 @@
         onpointermove={onPointerMove}
         onpointerup={() => (origin = null)}
         onpointerleave={() => (origin = null)}
-        onmouseenter={() => (hovering = true)}
-        onmouseleave={() => {
-          hovering = false;
-          videoReady = false;
-        }}
         onkeydown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') startDrag();
         }}
       >
         {#if poster}
-          <img class="media" class:hide={hovering && videoReady} src={poster} alt="" draggable="false" />
-        {/if}
-        {#if hovering && clip.previewSrc && !shareState.preparing}
-          <video
-            class="media vid"
-            class:show={videoReady}
-            src={clip.previewSrc}
-            muted
-            loop
-            autoplay
-            playsinline
-            draggable="false"
-            onloadeddata={() => (videoReady = true)}
-          ></video>
+          <img class="media" src={poster} alt="" draggable="false" />
         {/if}
 
         <span class="dur mono">{formatDuration(clip.durationSec)}</span>
@@ -278,17 +257,6 @@
     object-fit: cover;
     pointer-events: none;
   }
-  .media.hide {
-    opacity: 0;
-  }
-  .vid {
-    opacity: 0;
-    transition: opacity 0.18s ease;
-  }
-  .vid.show {
-    opacity: 1;
-  }
-
   .dur {
     position: absolute;
     top: 8px;
@@ -374,7 +342,6 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .vid,
     .veil.hint,
     .fill {
       transition: none;
