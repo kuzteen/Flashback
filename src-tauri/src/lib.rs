@@ -270,7 +270,7 @@ async fn export_clip(
     // Marca de agua: solo si está activada. Se hornea únicamente aquí (export), nunca en captura.
     let watermark = config::get_watermark(&app).then(|| config::get_watermark_corner(&app));
     tokio::task::spawn_blocking(move || {
-        editor::export_clip(src, dst, edit, watermark, move |p: f32| {
+        editor::export_clip(src, dst, edit, watermark, None, None, move |p: f32| {
             let _ = app.emit("export-progress", p);
         })
     })

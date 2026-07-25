@@ -111,7 +111,15 @@ pub fn clip_fps(_path: String) -> Result<u32, String> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn export_clip<F: Fn(f32)>(_src: String, _dst: String, _edit: ClipEdit, _progress: F) -> Result<(), String> {
+pub fn export_clip<F: Fn(f32)>(
+    _src: String,
+    _dst: String,
+    _edit: ClipEdit,
+    _watermark: Option<String>,
+    _bitrate: Option<u32>,
+    _max_height: Option<u32>,
+    _progress: F,
+) -> Result<(), String> {
     Err("El editor solo está disponible en Windows".into())
 }
 
@@ -466,12 +474,14 @@ mod win {
         dst: String,
         edit: ClipEdit,
         watermark: Option<String>,
+        bitrate: Option<u32>,
+        max_height: Option<u32>,
         progress: F,
     ) -> std::result::Result<(), String> {
         std::thread::spawn(move || {
             unsafe { let _ = CoInitializeEx(None, COINIT_MULTITHREADED); }
             ensure_mf();
-            let r = do_export(&src, &dst, &edit, watermark.as_deref(), &progress);
+            let r = do_export(&src, &dst, &edit, watermark.as_deref(), bitrate, max_height, &progress);
             unsafe { CoUninitialize(); }
             // El clip editado hereda el origen del original (juego/monitor) embebiéndolo igual que
             // en la captura, para que conserve su etiqueta en la biblioteca.
@@ -577,6 +587,8 @@ mod win {
         dst: &str,
         edit: &ClipEdit,
         watermark: Option<&str>,
+        bitrate: Option<u32>,
+        max_height: Option<u32>,
         progress: &dyn Fn(f32),
     ) -> std::result::Result<(), String> {
         let mf = |e: windows::core::Error| format!("{e:?}");
@@ -584,19 +596,13 @@ mod win {
         if edit.segments.is_empty() {
             return Err("No hay segmentos para exportar".into());
         }
-        let meta = read_video_meta(src).map_err(mf)?;
+        let mut meta = read_video_meta(src).map_err(mf)?;
+        // Compartir con un tamaño objetivo impone su propio bitrate; el export normal pasa None y
+        // conserva el que se dedujo del origen.
+        if let Some(bps) = bitrate {
+            meta.bitrate = bps.max(100_000);
+        }
 
-        // Marca de agua: se rasteriza una vez al tamaño de salida. Best-effort: si falla, se exporta
-        // sin marca (no se rompe el export). El blend por frame va más abajo, antes de WriteSample.
-        let logo = watermark.and_then(|c| {
-            match crate::watermark::Logo::rasterize(meta.width, meta.height, crate::watermark::Corner::parse(c)) {
-                Ok(l) => Some(l),
-                Err(e) => {
-                    eprintln!("watermark: rasterización falló, exporto sin marca: {e:?}");
-                    None
-                }
-            }
-        });
         let keyframes = keyframe_times_inner(src)?;
         let frame_dur = (10_000_000 / meta.fps.max(1) as i64).max(1);
 
@@ -631,15 +637,45 @@ mod win {
         let v_idx = find_stream(&v_reader, MFMediaType_Video).map_err(mf)?;
         unsafe { v_reader.SetStreamSelection(ALL_STREAMS, false).map_err(mf)? };
         unsafe { v_reader.SetStreamSelection(v_idx, true).map_err(mf)? };
+        // Reescalado opcional (presets de tamaño de compartir): el lector ya tiene "advanced video
+        // processing", así que puede entregar el RGB32 con otro tamaño sin insertar ningún MFT a
+        // mano. Se pide el objetivo y, si lo rechaza, se reintenta con el nativo en vez de fallar.
+        let (req_w, req_h) = match max_height {
+            Some(mh) if mh < meta.height => {
+                let w = (meta.width as u64 * mh as u64 / meta.height.max(1) as u64) as u32;
+                ((w + 1) & !1, (mh + 1) & !1)
+            }
+            _ => (meta.width, meta.height),
+        };
         let rgb = unsafe { MFCreateMediaType().map_err(mf)? };
         unsafe {
             rgb.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video).map_err(mf)?;
             rgb.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32).map_err(mf)?;
-            rgb.SetUINT64(&MF_MT_FRAME_SIZE, pack2(meta.width, meta.height)).map_err(mf)?;
-            v_reader.SetCurrentMediaType(v_idx, None, &rgb).map_err(mf)?;
+            rgb.SetUINT64(&MF_MT_FRAME_SIZE, pack2(req_w, req_h)).map_err(mf)?;
+            if v_reader.SetCurrentMediaType(v_idx, None, &rgb).is_err() {
+                rgb.SetUINT64(&MF_MT_FRAME_SIZE, pack2(meta.width, meta.height)).map_err(mf)?;
+                v_reader.SetCurrentMediaType(v_idx, None, &rgb).map_err(mf)?;
+            }
         }
         let v_in = unsafe { v_reader.GetCurrentMediaType(v_idx).map_err(mf)? };
         unsafe { v_in.SetUINT64(&MF_MT_FRAME_RATE, pack2(meta.fps, 1)).map_err(mf)? };
+        // Tamaño REAL concedido por el lector: manda sobre el pedido. El resto del pipeline (salida
+        // del encoder y marca de agua) tiene que cuadrar con lo que de verdad entrega el decoder.
+        let out_size = unsafe { v_in.GetUINT64(&MF_MT_FRAME_SIZE) }.unwrap_or(pack2(meta.width, meta.height));
+        let out_w = (out_size >> 32) as u32;
+        let out_h = (out_size & 0xFFFF_FFFF) as u32;
+
+        // Marca de agua: se rasteriza una vez al tamaño de salida. Best-effort: si falla, se exporta
+        // sin marca (no se rompe el export). El blend por frame va más abajo, antes de WriteSample.
+        let logo = watermark.and_then(|c| {
+            match crate::watermark::Logo::rasterize(out_w, out_h, crate::watermark::Corner::parse(c)) {
+                Ok(l) => Some(l),
+                Err(e) => {
+                    eprintln!("watermark: rasterización falló, exporto sin marca: {e:?}");
+                    None
+                }
+            }
+        });
 
         // SinkWriter con transformaciones por hardware habilitadas: usa el encoder H.264 por
         // hardware si está disponible (el mismo tipo que la captura), con fallback a software.
@@ -660,7 +696,7 @@ mod win {
         unsafe {
             v_out.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video).map_err(mf)?;
             v_out.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264).map_err(mf)?;
-            v_out.SetUINT64(&MF_MT_FRAME_SIZE, pack2(meta.width, meta.height)).map_err(mf)?;
+            v_out.SetUINT64(&MF_MT_FRAME_SIZE, pack2(out_w, out_h)).map_err(mf)?;
             v_out.SetUINT64(&MF_MT_FRAME_RATE, pack2(meta.fps, 1)).map_err(mf)?;
             v_out.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32).map_err(mf)?;
             v_out.SetUINT32(&MF_MT_AVG_BITRATE, meta.bitrate).map_err(mf)?;
@@ -734,7 +770,7 @@ mod win {
                 // huecos en la salida (mismo mapeo origen→salida que el audio para mantener el sync).
                 let out_t = (t - start_hns) + kept_before;
                 if let Some(logo) = &logo {
-                    blend_watermark(&sample, logo, meta.width, meta.height);
+                    blend_watermark(&sample, logo, out_w, out_h);
                 }
                 unsafe {
                     sample.SetSampleTime(out_t).map_err(mf)?;
