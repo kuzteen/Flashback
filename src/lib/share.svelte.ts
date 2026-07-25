@@ -224,7 +224,7 @@ export async function startDrag(): Promise<boolean> {
     // Vacío = la preparación se abortó (cambio de tamaño o cierre): no hay nada que arrastrar.
     if (!path || shareState.clip !== clip) return false;
     shareState.dragging = true;
-    return await invoke<boolean>('start_file_drag', { path });
+    return await invoke<boolean>('start_file_drag', { path, thumbSrc: clip.path });
   } catch (e) {
     shareState.error = String(e);
     console.error('share drag', e);

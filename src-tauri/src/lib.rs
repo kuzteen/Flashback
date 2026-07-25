@@ -351,7 +351,11 @@ fn share_cancel() {
 // Bloquea ese hilo mientras dura el arrastre —igual que el Explorador—, pero la captura, el encoder
 // y el audio viven en sus propios hilos y siguen corriendo sin enterarse.
 #[tauri::command]
-async fn start_file_drag(app: tauri::AppHandle, path: String) -> Result<bool, String> {
+async fn start_file_drag(
+    app: tauri::AppHandle,
+    path: String,
+    thumb_src: Option<String>,
+) -> Result<bool, String> {
     use tauri::Manager;
     if !std::path::Path::new(&path).is_file() {
         return Err("El archivo ya no existe".into());
@@ -361,26 +365,41 @@ async fn start_file_drag(app: tauri::AppHandle, path: String) -> Result<bool, St
         .and_then(|w| w.hwnd().ok())
         .map(|h| h.0 as isize)
         .unwrap_or(0);
+    // La miniatura es la del clip de origen, no la del archivo que se arrastra: con un preset de
+    // tamaño ese es un temporal recodificado que no tiene miniatura propia.
+    let thumb = thumb_src
+        .and_then(|c| thumb_path_for(&app, &c))
+        .filter(|p| p.is_file())
+        .map(|p| p.to_string_lossy().into_owned());
     // Canal asíncrono a propósito: el arrastre dura lo que el usuario tarde en soltar, y esperarlo
     // con un recv() bloqueante dejaría atascado un worker de tokio (y con él otros comandos).
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
-        let _ = tx.send(dragdrop::drag(hwnd, &path));
+        let _ = tx.send(dragdrop::drag(hwnd, &path, thumb.as_deref()));
     })
     .map_err(|e| e.to_string())?;
     rx.await.map_err(|e| e.to_string())?
 }
 
+// Ruta de la miniatura cacheada de un clip. La comparten el comando que la genera y el arrastre,
+// que la reutiliza como imagen bajo el cursor: si los dos no derivan el nombre igual, el arrastre
+// se quedaría sin imagen aunque la miniatura ya exista.
+fn thumb_path_for(app: &tauri::AppHandle, clip: &str) -> Option<std::path::PathBuf> {
+    use std::hash::{Hash, Hasher};
+    use tauri::Manager;
+    let dir = app.path().app_data_dir().ok()?.join("thumbs");
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    clip.hash(&mut h);
+    Some(dir.join(format!("{:016x}.jpg", h.finish())))
+}
+
 #[tauri::command]
 async fn clip_thumbnail(app: tauri::AppHandle, path: String) -> Result<String, String> {
-    use tauri::Manager;
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("thumbs");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dst = thumb_path_for(&app, &path).ok_or("No hay carpeta de datos")?;
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
     let thumb_path = tokio::task::spawn_blocking(move || -> Result<String, String> {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        path.hash(&mut h);
-        let dst = dir.join(format!("{:016x}.jpg", h.finish()));
         let ready = dst.metadata().map(|m| m.len() > 0).unwrap_or(false);
         if !ready {
             thumbnail::generate(path, dst.to_string_lossy().into_owned(), 0)?;
