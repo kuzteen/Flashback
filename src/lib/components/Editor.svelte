@@ -1188,7 +1188,7 @@
         </button>
         <WatermarkToggle />
         <button
-          class="act"
+          class="act share"
           onclick={handleShare}
           disabled={editorState.exporting}
           aria-label={t('card.share')}
@@ -1694,6 +1694,14 @@
     background: color-mix(in srgb, var(--rec) 16%, transparent);
     border-color: transparent;
   }
+  /* Share: solo icono, del mismo alto y tratamiento que Exportar (ambas son salidas del clip). */
+  .act.share {
+    padding: 7px 10px;
+    color: var(--bg-0);
+    background: var(--bright);
+    border-color: transparent;
+  }
+  .act.share:hover { opacity: 0.9; background: var(--bright); color: var(--bg-0); }
   .act.export {
     padding: 7px 15px;
     gap: 7px;
