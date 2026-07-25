@@ -9,6 +9,7 @@ mod dragdrop;
 mod editor;
 mod edits;
 mod library;
+mod share;
 #[cfg(target_os = "windows")]
 mod overlay;
 mod thumbnail;
@@ -279,6 +280,66 @@ async fn export_clip(
     .map_err(|e| format!("Error interno: {e}"))?
 }
 
+// Decide qué archivo se arrastra al compartir. El camino rápido —clip sin cortes, sin preset de
+// tamaño y sin marca de agua— devuelve el original sin tocar nada, que es el caso habitual desde la
+// biblioteca. Lo demás se materializa en un temporal cacheado, siempre por el export (§2: el único
+// camino que recodifica).
+#[tauri::command]
+async fn share_prepare(
+    app: tauri::AppHandle,
+    src: String,
+    edit: editor::ClipEdit,
+    target_bytes: Option<u64>,
+    watermark: bool,
+) -> Result<String, String> {
+    use tauri::Emitter;
+    let path = std::path::PathBuf::from(&src);
+    if !path.is_file() {
+        return Err("El archivo ya no existe".into());
+    }
+    let duration = library::mp4_duration_secs(&path).unwrap_or(0.0);
+    let corner = watermark.then(|| config::get_watermark_corner(&app));
+
+    if target_bytes.is_none() && corner.is_none() && share::is_identity(&edit, duration) {
+        return Ok(src);
+    }
+
+    let dir = share::dir(&app);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dst = dir.join(share::cache_name(&path, &edit, target_bytes, corner.as_deref()));
+    if dst.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+        return Ok(dst.to_string_lossy().into_owned());
+    }
+
+    let (bitrate, max_height) = match target_bytes {
+        Some(bytes) => {
+            let (w, h, fps) = editor::clip_dims(src.clone())?;
+            // El presupuesto se reparte sobre lo que realmente se conserva, no sobre el clip entero:
+            // si hay cortes, el material a codificar es más corto y le toca más bitrate.
+            let kept: f64 = edit
+                .segments
+                .iter()
+                .filter(|s| !s.disabled.unwrap_or(false))
+                .map(|s| (s.end_ms - s.start_ms).max(0.0) / 1000.0)
+                .sum();
+            let t = share::plan(bytes, if kept > 0.0 { kept } else { duration }, w, h, fps);
+            (Some(t.bitrate), t.max_height)
+        }
+        None => (None, None),
+    };
+
+    let dst_str = dst.to_string_lossy().into_owned();
+    let out = dst_str.clone();
+    tokio::task::spawn_blocking(move || {
+        editor::export_clip(src, dst_str, edit, corner, bitrate, max_height, move |p: f32| {
+            let _ = app.emit("share-progress", p);
+        })
+    })
+    .await
+    .map_err(|e| format!("Error interno: {e}"))??;
+    Ok(out)
+}
+
 // SHDoDragDrop es modal y exige STA con OLE inicializado y la captura del ratón, así que solo
 // funciona en el hilo del bucle de eventos; los comandos de Tauri corren en el runtime async (MTA).
 // Bloquea ese hilo mientras dura el arrastre —igual que el Explorador—, pero la captura, el encoder
@@ -456,6 +517,9 @@ pub fn run() {
             config::allow_asset_scopes(app.handle());
             // Rich Presence de Discord: arranca el gestor con el valor persistido (off por defecto).
             discord::init(app.handle().clone(), config::get_discord_rpc(app.handle()));
+            // Temporales de compartir: se purgan en segundo plano para no retrasar el arranque.
+            let share_dir = share::dir(app.handle());
+            std::thread::spawn(move || share::cleanup(&share_dir));
             // Arranque con el sistema: el instalador escribe la clave Run con `--autostart`.
             // En ese caso la app abre directamente en la bandeja (el replay se arma solo en
             // el webview oculto). En un arranque normal la ventana nace oculta (visible:false
@@ -548,6 +612,7 @@ pub fn run() {
             clip_thumbnail,
             capture_frame,
             export_clip,
+            share_prepare,
             start_file_drag,
             get_watermark,
             set_watermark,

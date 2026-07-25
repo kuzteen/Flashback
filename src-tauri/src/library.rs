@@ -176,7 +176,7 @@ fn read_u64(f: &mut File) -> Option<u64> {
 // Duración leyendo el árbol de cajas ISO-BMFF: se recorren las cajas de nivel
 // superior saltando `mdat` por su tamaño (sin leer su contenido) hasta `moov`, y
 // dentro de `moov` se busca `mvhd` (timescale + duration). Sin dependencias.
-fn mp4_duration_secs(path: &Path) -> Option<f64> {
+pub fn mp4_duration_secs(path: &Path) -> Option<f64> {
     let mut f = File::open(path).ok()?;
     let file_len = f.metadata().ok()?.len();
     let mut pos = 0u64;
