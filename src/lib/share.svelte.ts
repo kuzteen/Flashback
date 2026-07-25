@@ -24,6 +24,8 @@ export const SIZE_PRESETS = [10, 50, 100] as const;
 export const shareState = $state<{
   clip: Clip | null;
   edit: ShareEdit | null;
+  // Duración de lo que realmente se comparte: con cortes activos no es la del clip de origen.
+  durationSec: number;
   watermark: boolean;
   preset: number | null;
   preparing: boolean;
@@ -33,6 +35,7 @@ export const shareState = $state<{
 }>({
   clip: null,
   edit: null,
+  durationSec: 0,
   watermark: false,
   preset: null,
   preparing: false,
@@ -56,7 +59,12 @@ let requestId = 0;
 let unlistenProgress: (() => void) | null = null;
 let sessionId = 0;
 
-export function openShare(clip: Clip, edit: ShareEdit | null = null, watermark = false) {
+export function openShare(
+  clip: Clip,
+  edit: ShareEdit | null = null,
+  watermark = false,
+  durationSec?: number
+) {
   requestId++;
   readyPaths = new Map();
   unlistenProgress?.();
@@ -72,18 +80,24 @@ export function openShare(clip: Clip, edit: ShareEdit | null = null, watermark =
   });
   shareState.clip = clip;
   shareState.edit = edit;
+  shareState.durationSec = durationSec ?? clip.durationSec;
   shareState.watermark = watermark;
   shareState.preset = null;
   shareState.preparing = false;
   shareState.progress = 0;
   shareState.error = null;
   shareState.dragging = false;
+  // Se prepara al abrir, no al arrastrar: desde el editor con cortes incluso "Original" hay que
+  // materializarlo, y esperar al gesto dejaba al usuario tirando de algo que aún no existía. Sin
+  // cortes ni preset el backend devuelve el archivo original y esto no cuesta nada.
+  track(clip, null).catch(() => {});
 }
 
 export function closeShare() {
   requestId++;
   sessionId++;
-  if (shareState.preparing) invoke('share_cancel').catch(() => {});
+  if (inFlight) invoke('share_cancel').catch(() => {});
+  inFlight = null;
   unlistenProgress?.();
   unlistenProgress = null;
   shareState.clip = null;
@@ -108,12 +122,12 @@ export function selectPreset(mb: number | null) {
   if (shareState.preset === mb && !shareState.error) return;
   shareState.preset = mb;
   shareState.error = null;
-  if (mb === null || readyPaths.has(mb)) {
-    cancelPrepare();
-    return;
-  }
   const clip = shareState.clip;
-  if (clip) track(clip, mb).catch(() => {});
+  if (!clip) return;
+  // Abandona el trabajo del preset anterior antes de pedir el nuevo. "Original" también se prepara:
+  // desde el editor con cortes hay que materializarlo igual (si ya está en caché, es instantáneo).
+  if (inFlight && inFlight.preset !== mb) cancelPrepare();
+  track(clip, mb).catch(() => {});
 }
 
 // Una sola preparación por preset en vuelo: sin esto, arrastrar mientras se prepara arrancaría un
@@ -129,9 +143,12 @@ function track(clip: Clip, preset: number | null): Promise<string> {
   return promise;
 }
 
+// `inFlight` y no `shareState.preparing`: ese flag se enciende con retardo, así que cancelar en los
+// primeros milisegundos no habría abortado nada en el backend.
 export function cancelPrepare() {
   requestId++;
-  if (shareState.preparing) invoke('share_cancel').catch(() => {});
+  if (inFlight) invoke('share_cancel').catch(() => {});
+  inFlight = null;
   shareState.preparing = false;
   shareState.progress = 0;
 }
@@ -158,8 +175,12 @@ function prepare(clip: Clip, preset: number | null): Promise<string> {
 async function runPrepare(clip: Clip, preset: number | null): Promise<string> {
   const mine = ++requestId;
   const current = () => requestId === mine;
-  shareState.preparing = true;
   shareState.progress = 0;
+  // El velo de progreso solo aparece si la preparación de verdad tarda. El camino rápido (sin
+  // cortes ni preset) resuelve en milisegundos y encenderlo siempre lo dejaba destellando.
+  const veil = setTimeout(() => {
+    if (current()) shareState.preparing = true;
+  }, 150);
   try {
     const path = await invoke<string>('share_prepare', {
       src: clip.path,
@@ -174,6 +195,7 @@ async function runPrepare(clip: Clip, preset: number | null): Promise<string> {
     if (!String(e).includes(CANCELLED)) throw e;
     return '';
   } finally {
+    clearTimeout(veil);
     if (current()) {
       shareState.preparing = false;
       shareState.progress = 0;

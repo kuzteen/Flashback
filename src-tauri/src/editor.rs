@@ -111,7 +111,7 @@ pub fn clip_fps(_path: String) -> Result<u32, String> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn clip_dims(_path: String) -> Result<(u32, u32, u32), String> {
+pub fn clip_dims(_path: String) -> Result<(u32, u32, u32, u32), String> {
     Err("El editor solo está disponible en Windows".into())
 }
 
@@ -455,10 +455,10 @@ mod win {
         with_mf(move || read_video_meta(&path).map(|m| m.fps).map_err(|e| format!("{e:?}")))
     }
 
-    pub fn clip_dims(path: String) -> std::result::Result<(u32, u32, u32), String> {
+    pub fn clip_dims(path: String) -> std::result::Result<(u32, u32, u32, u32), String> {
         with_mf(move || {
             read_video_meta(&path)
-                .map(|m| (m.width, m.height, m.fps))
+                .map(|m| (m.width, m.height, m.fps, m.bitrate))
                 .map_err(|e| format!("{e:?}"))
         })
     }

@@ -313,7 +313,7 @@ async fn share_prepare(
 
     let (bitrate, max_height) = match target_bytes {
         Some(bytes) => {
-            let (w, h, fps) = editor::clip_dims(src.clone())?;
+            let (w, h, fps, src_bps) = editor::clip_dims(src.clone())?;
             // El presupuesto se reparte sobre lo que realmente se conserva, no sobre el clip entero:
             // si hay cortes, el material a codificar es más corto y le toca más bitrate.
             let kept: f64 = edit
@@ -322,7 +322,7 @@ async fn share_prepare(
                 .filter(|s| !s.disabled.unwrap_or(false))
                 .map(|s| (s.end_ms - s.start_ms).max(0.0) / 1000.0)
                 .sum();
-            let t = share::plan(bytes, if kept > 0.0 { kept } else { duration }, w, h, fps);
+            let t = share::plan(bytes, if kept > 0.0 { kept } else { duration }, w, h, fps, src_bps);
             (Some(t.bitrate), t.max_height)
         }
         None => (None, None),

@@ -47,10 +47,13 @@ pub fn plan(
     src_w: u32,
     src_h: u32,
     src_fps: u32,
+    src_bitrate: u32,
 ) -> Target {
     let secs = duration_s.max(0.1);
     let usable = (target_bytes as f64 * 8.0 * 0.97) - (AUDIO_BPS as f64 * secs);
-    let bitrate = ((usable / secs).max(MIN_VIDEO_BPS as f64)) as u32;
+    // Techo en el bitrate del origen: recodificar por encima de él no recupera calidad que ya se
+    // perdió, solo engorda el archivo. Pasa con clips cortos y presets grandes.
+    let bitrate = ((usable / secs).max(MIN_VIDEO_BPS as f64) as u32).min(src_bitrate.max(MIN_VIDEO_BPS));
 
     // Umbral de calidad: por debajo de w*h*fps/60 bits/s la imagen se rompe en bloques. Se prueba la
     // resolución original y, si el presupuesto no la sostiene, se baja por la escalera hasta el
@@ -163,9 +166,11 @@ mod tests {
         }
     }
 
+    const SRC_BPS: u32 = 40_000_000;
+
     #[test]
     fn ten_mb_of_a_minute_fits_the_budget() {
-        let t = plan(10 * 1024 * 1024, 60.0, 1920, 1080, 60);
+        let t = plan(10 * 1024 * 1024, 60.0, 1920, 1080, 60, SRC_BPS);
         let total_bits = (t.bitrate + AUDIO_BPS) as u64 * 60;
         assert!(total_bits / 8 <= 10 * 1024 * 1024);
     }
@@ -173,31 +178,45 @@ mod tests {
     #[test]
     fn tight_budget_drops_resolution() {
         // 10 MB para un minuto son ~1,2 Mbps: no sostienen 1080p60, pero sí 720p60.
-        let t = plan(10 * 1024 * 1024, 60.0, 1920, 1080, 60);
+        let t = plan(10 * 1024 * 1024, 60.0, 1920, 1080, 60, SRC_BPS);
         assert_eq!(t.max_height, Some(720));
     }
 
     #[test]
     fn hopeless_budget_lands_on_the_bottom_step() {
-        let t = plan(10 * 1024 * 1024, 900.0, 1920, 1080, 60);
+        let t = plan(10 * 1024 * 1024, 900.0, 1920, 1080, 60, SRC_BPS);
         assert_eq!(t.max_height, Some(480));
     }
 
     #[test]
     fn roomy_budget_keeps_resolution() {
-        let t = plan(100 * 1024 * 1024, 20.0, 1920, 1080, 60);
+        let t = plan(100 * 1024 * 1024, 20.0, 1920, 1080, 60, SRC_BPS);
         assert_eq!(t.max_height, None);
     }
 
     #[test]
     fn never_upscales() {
-        let t = plan(10 * 1024 * 1024, 60.0, 854, 480, 30);
+        let t = plan(10 * 1024 * 1024, 60.0, 854, 480, 30, SRC_BPS);
         assert_eq!(t.max_height, None);
     }
 
     #[test]
     fn bitrate_never_drops_below_the_floor() {
-        let t = plan(1024 * 1024, 600.0, 1920, 1080, 60);
+        let t = plan(1024 * 1024, 600.0, 1920, 1080, 60, SRC_BPS);
+        assert_eq!(t.bitrate, MIN_VIDEO_BPS);
+    }
+
+    // Clip corto con preset grande: el presupuesto daría de sobra, pero subir del bitrate de origen
+    // solo engordaría el archivo sin recuperar calidad.
+    #[test]
+    fn bitrate_never_exceeds_the_source() {
+        let t = plan(100 * 1024 * 1024, 5.0, 1920, 1080, 60, 8_000_000);
+        assert_eq!(t.bitrate, 8_000_000);
+    }
+
+    #[test]
+    fn source_cap_still_respects_the_floor() {
+        let t = plan(100 * 1024 * 1024, 5.0, 1920, 1080, 60, 1_000);
         assert_eq!(t.bitrate, MIN_VIDEO_BPS);
     }
 

@@ -110,7 +110,7 @@
           <img class="media" src={poster} alt="" draggable="false" />
         {/if}
 
-        <span class="dur mono">{formatDuration(clip.durationSec)}</span>
+        <span class="dur mono">{formatDuration(shareState.durationSec)}</span>
 
         {#if shareState.preparing}
           <div class="veil busy-veil">

@@ -908,7 +908,9 @@
     } catch {
       // fuera de Tauri (preview en navegador)
     }
-    openShare(clip, { segments, mixer: editorState.mixer }, watermark);
+    // Duración de lo que se comparte: la suma de los bloques activos, no la del clip de origen.
+    const kept = segments.reduce((a, s) => a + (s.end_ms - s.start_ms), 0) / 1000;
+    openShare(clip, { segments, mixer: editorState.mixer }, watermark, kept);
   }
 
   let noticeTimer: ReturnType<typeof setTimeout> | null = null;
