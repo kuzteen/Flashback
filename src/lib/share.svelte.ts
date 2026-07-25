@@ -109,10 +109,20 @@ export function closeShare() {
   readyPaths = new Map();
 }
 
-// Un preset que ya supera el tamaño del clip solo lo empeoraría: recodificar hacia arriba engorda
-// el archivo y pierde calidad, así que se ofrece deshabilitado.
-export function presetDisabled(clip: Clip | null, mb: number): boolean {
-  return !!clip && clip.sizeBytes <= mb * MB;
+// Peso aproximado de lo que se va a compartir. El recodificado conserva el bitrate del origen (hay
+// un techo en él), así que el tamaño escala con la duración que se conserva: un recorte de 5 s de
+// un clip de un minuto pesa una fracción, y ofrecerle el preset de 100 MB no tiene sentido.
+export function sharedBytes(): number {
+  const clip = shareState.clip;
+  if (!clip) return 0;
+  if (clip.durationSec <= 0) return clip.sizeBytes;
+  return clip.sizeBytes * Math.min(1, shareState.durationSec / clip.durationSec);
+}
+
+// Un preset que ya supera el tamaño a compartir solo lo empeoraría: recodificar hacia arriba
+// engorda el archivo y pierde calidad, así que se ofrece deshabilitado.
+export function presetDisabled(mb: number): boolean {
+  return !!shareState.clip && sharedBytes() <= mb * MB;
 }
 
 // Elegir un tamaño lo prepara al momento en vez de esperar al arrastre: cuando el usuario va a

@@ -98,7 +98,7 @@
           {t('share.original')}
         </button>
         {#each SIZE_PRESETS as mb (mb)}
-          {@const off = presetDisabled(clip, mb)}
+          {@const off = presetDisabled(mb)}
           <button
             class="size"
             class:on={shareState.preset === mb}
