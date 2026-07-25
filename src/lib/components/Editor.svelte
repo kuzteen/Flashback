@@ -1702,6 +1702,9 @@
     border-color: transparent;
   }
   .act.share:hover { opacity: 0.9; background: var(--bright); color: var(--bg-0); }
+  /* Nodos rellenos: sobre el fondo blanco del botón, los círculos huecos del icono se leían como
+     tres agujeros sueltos en vez de como un icono. */
+  .act.share :global(svg circle) { fill: currentColor; }
   .act.export {
     padding: 7px 15px;
     gap: 7px;
