@@ -208,7 +208,7 @@
     cursor: pointer;
     transition: color 0.14s ease, background 0.14s ease, border-color 0.14s ease;
   }
-  .size:hover:not(:disabled) {
+  .size:hover:not(:disabled):not(.on) {
     color: var(--text-0);
     border-color: var(--line-strong);
   }
@@ -217,6 +217,9 @@
     background: var(--accent);
     border-color: transparent;
     font-weight: 560;
+  }
+  .size.on:hover {
+    background: var(--accent-deep);
   }
   .size:disabled {
     opacity: 0.38;
