@@ -290,7 +290,7 @@
     display: grid;
     place-items: center;
     width: 100%;
-    padding: 2.5%;
+    padding: 1.25%;
     background: var(--bg-0);
     border: 2px dashed var(--line-strong);
     border-radius: var(--r-md);
