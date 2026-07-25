@@ -240,7 +240,7 @@
   }
   .drop:hover:not(.busy) {
     border-style: solid;
-    border-color: var(--accent);
+    border-color: rgba(160, 167, 182, 0.3);
   }
   .drop:active:not(.busy) {
     cursor: grabbing;
