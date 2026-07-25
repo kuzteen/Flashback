@@ -304,7 +304,7 @@ export function sortSegmentsByPos() {
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
-function serializeSegments(enabledOnly = false) {
+export function serializeSegments(enabledOnly = false) {
   const list = enabledOnly ? editorState.segments.filter((s) => !s.disabled) : editorState.segments;
   return list.map((s) => ({
     start_ms: s.startMs,

@@ -13,6 +13,7 @@
     removeFavorite
   } from '$lib/library.svelte';
   import { openEditor } from '$lib/editor.svelte';
+  import { openShare } from '$lib/share.svelte';
   import { t } from '$lib/i18n.svelte';
 
   let { clip }: { clip: Clip } = $props();
@@ -199,7 +200,16 @@
     </div>
 
     <div class="actions">
-      <button class="act" aria-label={t('card.share')} onclick={(e) => e.stopPropagation()}><Icon name="share" size={19} sw={2} /></button>
+      <button
+        class="act"
+        aria-label={t('card.share')}
+        onclick={(e) => {
+          e.stopPropagation();
+          openShare(clip);
+        }}
+      >
+        <Icon name="share" size={19} sw={2} />
+      </button>
       <button
         class="act"
         aria-label={t('card.more')}

@@ -60,6 +60,9 @@
     <circle cx="12" cy="12" r="1" />
     <circle cx="12" cy="5" r="1" />
     <circle cx="12" cy="19" r="1" />
+  {:else if name === 'close'}
+    <line x1="18" y1="6" x2="6" y2="18" />
+    <line x1="6" y1="6" x2="18" y2="18" />
   {:else if name === 'scissors'}
     <circle cx="6" cy="6" r="2.6" />
     <circle cx="6" cy="18" r="2.6" />

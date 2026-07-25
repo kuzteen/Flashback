@@ -198,6 +198,17 @@ const en: Record<string, string> = {
   'card.openLocation': 'Open location',
   'card.delete': 'Delete',
 
+  // Compartir
+  'share.title': 'Share',
+  'share.close': 'Close',
+  'share.sizeLabel': 'Choose a file size',
+  'share.original': 'Original',
+  'share.alreadySmaller': 'The clip is already smaller than this size',
+  'share.dragTitle': 'Drag and drop',
+  'share.dragHint': 'Drag this clip into any app to share it',
+  'share.preparing': 'Preparing clip…',
+  'share.noBlocks': 'There are no active blocks to share',
+
   // Juegos
   'games.title': 'Detected games',
   'games.now': 'Right now',
@@ -418,6 +429,16 @@ const es: Record<string, string> = {
   'card.rename': 'Renombrar',
   'card.openLocation': 'Abrir ubicación',
   'card.delete': 'Borrar',
+
+  'share.title': 'Compartir',
+  'share.close': 'Cerrar',
+  'share.sizeLabel': 'Elige un tamaño de archivo',
+  'share.original': 'Original',
+  'share.alreadySmaller': 'El clip ya pesa menos que este tamaño',
+  'share.dragTitle': 'Arrastrar y soltar',
+  'share.dragHint': 'Arrastra este clip a cualquier app para compartirlo',
+  'share.preparing': 'Preparando clip…',
+  'share.noBlocks': 'No hay bloques activos para compartir',
 
   'games.title': 'Juegos detectados',
   'games.now': 'Ahora mismo',

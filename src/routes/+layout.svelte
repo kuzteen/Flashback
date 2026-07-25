@@ -14,6 +14,7 @@
   import { replay, setReplaySeconds, BUFFER_OPTIONS } from '$lib/replay.svelte';
   import { playReplaySound } from '$lib/replay-sound.svelte';
   import Editor from '$lib/components/Editor.svelte';
+  import ShareDialog from '$lib/components/ShareDialog.svelte';
   import { editorState, closeEditor } from '$lib/editor.svelte';
   import {
     captureConfig,
@@ -759,6 +760,8 @@
     <Editor />
   {/key}
 {/if}
+
+<ShareDialog />
 
 {#if updater.popupOpen && updater.info}
   <div class="upd-overlay" role="presentation" onclick={closeUpdatePopup}>

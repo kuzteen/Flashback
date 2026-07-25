@@ -16,13 +16,15 @@
     captureFrame,
     navigateClip,
     clipOrder,
+    serializeSegments,
     type Segment,
   } from '$lib/editor.svelte';
+  import { openShare } from '$lib/share.svelte';
   import { formatSize } from '$lib/clips';
   import { t, localeTag } from '$lib/i18n.svelte';
   import { refreshLibrary } from '$lib/library.svelte';
   import { revealItemInDir, openPath } from '@tauri-apps/plugin-opener';
-  import { convertFileSrc } from '@tauri-apps/api/core';
+  import { convertFileSrc, invoke } from '@tauri-apps/api/core';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { fade } from 'svelte/transition';
 
@@ -889,6 +891,26 @@
     }
   }
 
+  // Comparte el montaje actual, no el archivo de origen: si hay cortes activos, el backend los
+  // materializa antes de arrastrar. La marca de agua se consulta al vuelo en vez de duplicar aquí
+  // el estado que ya lleva WatermarkToggle.
+  async function handleShare() {
+    const clip = editorState.clip;
+    if (!clip) return;
+    const segments = serializeSegments(true);
+    if (segments.length === 0) {
+      setNotice(t('share.noBlocks'), 4000);
+      return;
+    }
+    let watermark = false;
+    try {
+      watermark = await invoke<boolean>('get_watermark');
+    } catch {
+      // fuera de Tauri (preview en navegador)
+    }
+    openShare(clip, { segments, mixer: editorState.mixer }, watermark);
+  }
+
   let noticeTimer: ReturnType<typeof setTimeout> | null = null;
   function setNotice(msg: string, ms: number) {
     notice = msg;
@@ -1165,6 +1187,15 @@
           <Icon name="trash" size={16} />
         </button>
         <WatermarkToggle />
+        <button
+          class="act"
+          onclick={handleShare}
+          disabled={editorState.exporting}
+          aria-label={t('card.share')}
+          title={t('card.share')}
+        >
+          <Icon name="share" size={16} />
+        </button>
         <button class="act export" onclick={handleExport} disabled={editorState.exporting}>
           {editorState.exporting ? t('ed.exporting') : t('ed.export')}
           <Icon name="export" size={16} />
