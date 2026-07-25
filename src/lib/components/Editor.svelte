@@ -823,9 +823,10 @@
   }
 
   function onKey(e: KeyboardEvent) {
-    // Con el diálogo de compartir encima, el editor no escucha: es modal, y si no, Escape cerraba
-    // los dos a la vez y espacio/c/f seguían actuando sobre el clip de detrás.
-    if (shareState.clip) return;
+    // Con el diálogo de compartir encima, el editor no escucha: es modal, y si no, espacio/c/f
+    // seguían actuando sobre el clip de detrás. defaultPrevented cubre el caso de Escape, donde el
+    // diálogo ya se cerró en su propio handler y aquí shareState.clip volvería a verse vacío.
+    if (shareState.clip || e.defaultPrevented) return;
     if (blockMenu) {
       if (e.key === 'Escape') e.preventDefault();
       closeBlockMenu();

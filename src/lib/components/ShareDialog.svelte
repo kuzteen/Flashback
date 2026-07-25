@@ -57,7 +57,13 @@
   }
 
   function onKeyDown(e: KeyboardEvent) {
-    if (e.key === 'Escape') closeShare();
+    if (!shareState.clip || e.key !== 'Escape') return;
+    // El editor también escucha Escape en window, y su listener corre después del de este diálogo
+    // (se monta más tarde). Para entonces closeShare ya habría dejado shareState.clip en null y su
+    // guard no vería el modal, cerrando los dos de una tecla. Se corta el evento aquí.
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    closeShare();
   }
 </script>
 
