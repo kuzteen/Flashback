@@ -220,7 +220,8 @@
   }
   .sizes {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(4, 84px);
+    justify-content: center;
     gap: 6px;
     margin-bottom: 18px;
   }
@@ -256,13 +257,15 @@
      y se enciende el acento, igual que una zona de drop activa. */
   /* El borde discontinuo marca la zona de soltado y no se mueve; el fotograma vive un poco por
      dentro para que se lea como algo agarrable dentro de ella, no como el propio recuadro. */
+  /* El padding en porcentaje se resuelve contra el ancho también arriba y abajo, así que un único
+     valor deja la misma separación en píxeles por los cuatro lados. El alto lo marca el fotograma,
+     que es quien conserva el 16:9. */
   .drop {
     position: relative;
     display: grid;
     place-items: center;
     width: 100%;
-    aspect-ratio: 16 / 9;
-    padding: 0;
+    padding: 2.5%;
     background: var(--bg-0);
     border: 2px dashed var(--line-strong);
     border-radius: var(--r-md);
@@ -276,8 +279,8 @@
   }
   .frame {
     position: relative;
-    width: 95%;
-    height: 95%;
+    width: 100%;
+    aspect-ratio: 16 / 9;
     overflow: hidden;
     background: var(--bg-0);
     border: 2px solid transparent;
