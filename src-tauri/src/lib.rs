@@ -5,6 +5,7 @@ mod capture;
 mod config;
 mod detect;
 mod discord;
+mod dragdrop;
 mod editor;
 mod edits;
 mod library;
@@ -278,6 +279,29 @@ async fn export_clip(
     .map_err(|e| format!("Error interno: {e}"))?
 }
 
+// SHDoDragDrop es modal y exige STA con OLE inicializado y la captura del ratón, así que solo
+// funciona en el hilo del bucle de eventos; los comandos de Tauri corren en el runtime async (MTA).
+// Bloquea ese hilo mientras dura el arrastre —igual que el Explorador—, pero la captura, el encoder
+// y el audio viven en sus propios hilos y siguen corriendo sin enterarse.
+#[tauri::command]
+async fn start_file_drag(app: tauri::AppHandle, path: String) -> Result<bool, String> {
+    use tauri::Manager;
+    if !std::path::Path::new(&path).is_file() {
+        return Err("El archivo ya no existe".into());
+    }
+    let hwnd = app
+        .get_webview_window("main")
+        .and_then(|w| w.hwnd().ok())
+        .map(|h| h.0 as isize)
+        .unwrap_or(0);
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(dragdrop::drag(hwnd, &path));
+    })
+    .map_err(|e| e.to_string())?;
+    rx.recv().map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn clip_thumbnail(app: tauri::AppHandle, path: String) -> Result<String, String> {
     use tauri::Manager;
@@ -524,6 +548,7 @@ pub fn run() {
             clip_thumbnail,
             capture_frame,
             export_clip,
+            start_file_drag,
             get_watermark,
             set_watermark,
             get_watermark_corner,
