@@ -133,7 +133,7 @@
 
 <svelte:window onclick={() => (menu.openId = null)} />
 
-<article class="card" class:open bind:this={cardEl} onmouseenter={() => (hovering = true)} onmouseleave={() => { hovering = false; videoReady = false; }} onclick={openFromCard} onkeydown={() => openEditor(clip)} role="presentation">
+<article class="card" class:open bind:this={cardEl} onmouseenter={() => (hovering = true)} onmouseleave={() => { hovering = false; videoReady = false; }} onclick={openFromCard} role="presentation">
   <div class="thumb">
     {#if poster}
       <img class="preview poster" class:hide={hovering} src={poster} alt="" draggable="false" />

@@ -19,7 +19,7 @@
     serializeSegments,
     type Segment,
   } from '$lib/editor.svelte';
-  import { openShare } from '$lib/share.svelte';
+  import { openShare, shareState } from '$lib/share.svelte';
   import { formatSize } from '$lib/clips';
   import { t, localeTag } from '$lib/i18n.svelte';
   import { refreshLibrary } from '$lib/library.svelte';
@@ -823,6 +823,9 @@
   }
 
   function onKey(e: KeyboardEvent) {
+    // Con el diálogo de compartir encima, el editor no escucha: es modal, y si no, Escape cerraba
+    // los dos a la vez y espacio/c/f seguían actuando sobre el clip de detrás.
+    if (shareState.clip) return;
     if (blockMenu) {
       if (e.key === 'Escape') e.preventDefault();
       closeBlockMenu();

@@ -15,6 +15,13 @@
   const clip = $derived(shareState.clip);
 
   let poster = $state<string | null>(null);
+  let cardEl = $state<HTMLElement | null>(null);
+
+  // El modal se lleva el foco al abrirse: si se quedara en el botón de compartir de la tarjeta,
+  // espacio volvería a activarlo por detrás del diálogo.
+  $effect(() => {
+    if (clip) cardEl?.focus();
+  });
 
   // Solo el fotograma: aquí lo que importa es reconocer el clip y arrastrarlo, no reproducirlo.
   // Un <video> en hover además competiría con el gesto de arrastre por el mismo puntero.
@@ -64,7 +71,14 @@
       if (e.target === e.currentTarget) closeShare();
     }}
   >
-    <div class="card" role="dialog" aria-modal="true" tabindex="-1" aria-label={t('share.title')}>
+    <div
+      class="card"
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+      aria-label={t('share.title')}
+      bind:this={cardEl}
+    >
       <header class="head">
         <h2 class="title">{t('share.title')}</h2>
         <button class="close" aria-label={t('share.close')} onclick={closeShare}>
@@ -153,6 +167,10 @@
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
     box-shadow: 0 24px 60px -18px rgba(0, 0, 0, 0.8);
+  }
+  /* El contenedor solo recibe el foco para capturar el teclado, no es un control: sin anillo. */
+  .card:focus {
+    outline: none;
   }
 
   .head {
