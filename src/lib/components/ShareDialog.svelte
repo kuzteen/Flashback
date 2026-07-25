@@ -136,9 +136,7 @@
           ></video>
         {/if}
 
-        <span class="dur mono">
-          <Icon name="scissors" size={12} sw={2} />{formatDuration(clip.durationSec)}
-        </span>
+        <span class="dur mono">{formatDuration(clip.durationSec)}</span>
 
         {#if shareState.preparing}
           <div class="veil">
@@ -300,10 +298,7 @@
     top: 8px;
     right: 8px;
     z-index: 2;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 4px 8px;
+    padding: 4px 9px;
     font-size: 11.5px;
     color: var(--text-0);
     background: rgba(0, 0, 0, 0.62);

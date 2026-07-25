@@ -355,12 +355,14 @@ async fn start_file_drag(app: tauri::AppHandle, path: String) -> Result<bool, St
         .and_then(|w| w.hwnd().ok())
         .map(|h| h.0 as isize)
         .unwrap_or(0);
-    let (tx, rx) = std::sync::mpsc::channel();
+    // Canal asíncrono a propósito: el arrastre dura lo que el usuario tarde en soltar, y esperarlo
+    // con un recv() bloqueante dejaría atascado un worker de tokio (y con él otros comandos).
+    let (tx, rx) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
         let _ = tx.send(dragdrop::drag(hwnd, &path));
     })
     .map_err(|e| e.to_string())?;
-    rx.recv().map_err(|e| e.to_string())?
+    rx.await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
