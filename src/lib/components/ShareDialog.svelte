@@ -126,25 +126,27 @@
           if (e.key === 'Enter' || e.key === ' ') startDrag();
         }}
       >
-        {#if poster}
-          <img class="media" src={poster} alt="" draggable="false" />
-        {/if}
+        <div class="frame">
+          {#if poster}
+            <img class="media" src={poster} alt="" draggable="false" />
+          {/if}
 
-        <span class="dur mono">{formatDuration(shareState.durationSec)}</span>
+          <span class="dur mono">{formatDuration(shareState.durationSec)}</span>
 
-        {#if shareState.preparing}
-          <div class="veil busy-veil">
-            <span class="veil-title">{t('share.preparing')}</span>
-            <div class="track"><div class="fill" style:width={`${Math.max(2, Math.round(shareState.progress * 100))}%`}></div></div>
-            <span class="veil-sub mono">{Math.round(shareState.progress * 100)}%</span>
-            <button class="cancel" onclick={() => selectPreset(null)}>{t('share.cancel')}</button>
-          </div>
-        {:else}
-          <div class="veil hint">
-            <span class="veil-title">{t('share.dragTitle')}</span>
-            <span class="veil-sub">{t('share.dragHint')}</span>
-          </div>
-        {/if}
+          {#if shareState.preparing}
+            <div class="veil busy-veil">
+              <span class="veil-title">{t('share.preparing')}</span>
+              <div class="track"><div class="fill" style:width={`${Math.max(2, Math.round(shareState.progress * 100))}%`}></div></div>
+              <span class="veil-sub mono">{Math.round(shareState.progress * 100)}%</span>
+              <button class="cancel" onclick={() => selectPreset(null)}>{t('share.cancel')}</button>
+            </div>
+          {:else}
+            <div class="veil hint">
+              <span class="veil-title">{t('share.dragTitle')}</span>
+              <span class="veil-sub">{t('share.dragHint')}</span>
+            </div>
+          {/if}
+        </div>
       </div>
 
       {#if shareState.error}
@@ -252,28 +254,39 @@
 
   /* El borde discontinuo es la señal de "esto se arrastra"; al pasar por encima se vuelve sólido
      y se enciende el acento, igual que una zona de drop activa. */
+  /* El borde discontinuo marca la zona de soltado y no se mueve; el fotograma vive un poco por
+     dentro para que se lea como algo agarrable dentro de ella, no como el propio recuadro. */
   .drop {
     position: relative;
-    display: block;
+    display: grid;
+    place-items: center;
     width: 100%;
     aspect-ratio: 16 / 9;
     padding: 0;
-    overflow: hidden;
     background: var(--bg-0);
     border: 2px dashed var(--line-strong);
     border-radius: var(--r-md);
     cursor: grab;
-    transition: border-color 0.14s ease;
-  }
-  .drop:hover:not(.busy) {
-    border-style: solid;
-    border-color: rgba(160, 167, 182, 0.3);
   }
   .drop:active:not(.busy) {
     cursor: grabbing;
   }
   .drop.busy {
     cursor: progress;
+  }
+  .frame {
+    position: relative;
+    width: 95%;
+    height: 95%;
+    overflow: hidden;
+    background: var(--bg-0);
+    border: 2px solid transparent;
+    border-radius: calc(var(--r-md) - 2px);
+    transition: border-color 0.14s ease;
+  }
+  /* El resalte del hover va pegado al fotograma, no al borde discontinuo de fuera. */
+  .drop:hover:not(.busy) .frame {
+    border-color: rgba(160, 167, 182, 0.3);
   }
 
   .media {
@@ -322,6 +335,11 @@
   }
   .drop:hover .veil.hint {
     opacity: 1;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .frame {
+      transition: none;
+    }
   }
   .veil-title {
     font-size: 15px;
