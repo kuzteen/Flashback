@@ -16,6 +16,9 @@ export type ShareEdit = { segments: SavedSegment[]; mixer: MixerState };
 
 const MB = 1024 * 1024;
 
+// Debe coincidir con editor::CANCELLED en el backend.
+const CANCELLED = 'export-cancelled';
+
 export const SIZE_PRESETS = [10, 50, 100] as const;
 
 export const shareState = $state<{
@@ -42,8 +45,31 @@ export const shareState = $state<{
 // alternar entre tamaños no vuelva a esperar por algo que ya se recodificó.
 let readyPaths = new Map<number | null, string>();
 
+// Identifica la petición en vuelo. El backend aborta el recodificado anterior al empezar otro, pero
+// su promesa sigue viva y resuelve después: sin este testigo, una respuesta vieja pisaría el estado
+// de la nueva selección.
+let requestId = 0;
+
+// El listener de progreso vive mientras el diálogo está abierto, no por preparación. Montarlo por
+// petición metía un await antes del invoke, y dos clics seguidos podían llegar al backend en orden
+// inverso: el trabajo viejo arrancaba el último y cancelaba al nuevo.
+let unlistenProgress: (() => void) | null = null;
+let sessionId = 0;
+
 export function openShare(clip: Clip, edit: ShareEdit | null = null, watermark = false) {
+  requestId++;
   readyPaths = new Map();
+  unlistenProgress?.();
+  unlistenProgress = null;
+  // El testigo de sesión descarta el listener de una apertura que ya quedó atrás: sin él, reabrir
+  // el diálogo antes de que resolviera el listen dejaba el anterior vivo para siempre.
+  const session = ++sessionId;
+  listen<number>('share-progress', (e) => {
+    if (shareState.preparing) shareState.progress = e.payload;
+  }).then((un) => {
+    if (sessionId === session && shareState.clip) unlistenProgress = un;
+    else un();
+  });
   shareState.clip = clip;
   shareState.edit = edit;
   shareState.watermark = watermark;
@@ -55,6 +81,11 @@ export function openShare(clip: Clip, edit: ShareEdit | null = null, watermark =
 }
 
 export function closeShare() {
+  requestId++;
+  sessionId++;
+  if (shareState.preparing) invoke('share_cancel').catch(() => {});
+  unlistenProgress?.();
+  unlistenProgress = null;
   shareState.clip = null;
   shareState.edit = null;
   shareState.preset = null;
@@ -70,10 +101,39 @@ export function presetDisabled(clip: Clip | null, mb: number): boolean {
   return !!clip && clip.sizeBytes <= mb * MB;
 }
 
+// Elegir un tamaño lo prepara al momento en vez de esperar al arrastre: cuando el usuario va a
+// arrastrar, el archivo ya está. Se puede cambiar de tamaño o cancelar en cualquier momento; el
+// backend aborta el recodificado anterior al arrancar el nuevo.
 export function selectPreset(mb: number | null) {
-  if (shareState.preparing) return;
+  if (shareState.preset === mb && !shareState.error) return;
   shareState.preset = mb;
   shareState.error = null;
+  if (mb === null || readyPaths.has(mb)) {
+    cancelPrepare();
+    return;
+  }
+  const clip = shareState.clip;
+  if (clip) track(clip, mb).catch(() => {});
+}
+
+// Una sola preparación por preset en vuelo: sin esto, arrastrar mientras se prepara arrancaría un
+// segundo recodificado que abortaría al primero, y el usuario vería el progreso reiniciarse.
+let inFlight: { preset: number | null; promise: Promise<string> } | null = null;
+
+function track(clip: Clip, preset: number | null): Promise<string> {
+  if (inFlight && inFlight.preset === preset) return inFlight.promise;
+  const promise = prepare(clip, preset).finally(() => {
+    if (inFlight?.promise === promise) inFlight = null;
+  });
+  inFlight = { preset, promise };
+  return promise;
+}
+
+export function cancelPrepare() {
+  requestId++;
+  if (shareState.preparing) invoke('share_cancel').catch(() => {});
+  shareState.preparing = false;
+  shareState.progress = 0;
 }
 
 // La edición identidad se construye a partir de la duración del clip: el backend la reconoce y
@@ -87,15 +147,19 @@ function editFor(clip: Clip): ShareEdit {
   );
 }
 
-async function prepare(clip: Clip, preset: number | null): Promise<string> {
+function prepare(clip: Clip, preset: number | null): Promise<string> {
   const cached = readyPaths.get(preset);
-  if (cached) return cached;
+  if (cached) return Promise.resolve(cached);
+  return runPrepare(clip, preset);
+}
 
+// Sin ningún await antes del invoke: así el backend recibe las peticiones en el orden en que el
+// usuario pulsó, y cada begin_job aborta de verdad al anterior.
+async function runPrepare(clip: Clip, preset: number | null): Promise<string> {
+  const mine = ++requestId;
+  const current = () => requestId === mine;
   shareState.preparing = true;
   shareState.progress = 0;
-  const unlisten = await listen<number>('share-progress', (e) => {
-    shareState.progress = e.payload;
-  });
   try {
     const path = await invoke<string>('share_prepare', {
       src: clip.path,
@@ -105,10 +169,15 @@ async function prepare(clip: Clip, preset: number | null): Promise<string> {
     });
     readyPaths.set(preset, path);
     return path;
+  } catch (e) {
+    // Un export abortado no es un fallo: lo pidió el usuario al cambiar de tamaño o cerrar.
+    if (!String(e).includes(CANCELLED)) throw e;
+    return '';
   } finally {
-    unlisten();
-    shareState.preparing = false;
-    shareState.progress = 0;
+    if (current()) {
+      shareState.preparing = false;
+      shareState.progress = 0;
+    }
   }
 }
 
@@ -116,10 +185,12 @@ async function prepare(clip: Clip, preset: number | null): Promise<string> {
 // hasta que el usuario suelta. Devuelve true solo si el destino aceptó el archivo.
 export async function startDrag(): Promise<boolean> {
   const clip = shareState.clip;
-  if (!clip || shareState.preparing || shareState.dragging) return false;
+  if (!clip || shareState.dragging) return false;
   shareState.error = null;
   try {
-    const path = await prepare(clip, shareState.preset);
+    const path = await track(clip, shareState.preset);
+    // Vacío = la preparación se abortó (cambio de tamaño o cierre): no hay nada que arrastrar.
+    if (!path || shareState.clip !== clip) return false;
     shareState.dragging = true;
     return await invoke<boolean>('start_file_drag', { path });
   } catch (e) {

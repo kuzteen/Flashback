@@ -77,12 +77,7 @@
 
       <p class="label">{t('share.sizeLabel')}</p>
       <div class="sizes" role="group" aria-label={t('share.sizeLabel')}>
-        <button
-          class="size"
-          class:on={shareState.preset === null}
-          disabled={shareState.preparing}
-          onclick={() => selectPreset(null)}
-        >
+        <button class="size" class:on={shareState.preset === null} onclick={() => selectPreset(null)}>
           {t('share.original')}
         </button>
         {#each SIZE_PRESETS as mb (mb)}
@@ -90,7 +85,7 @@
           <button
             class="size"
             class:on={shareState.preset === mb}
-            disabled={off || shareState.preparing}
+            disabled={off}
             title={off ? t('share.alreadySmaller') : ''}
             onclick={() => selectPreset(mb)}
           >
@@ -139,10 +134,11 @@
         <span class="dur mono">{formatDuration(clip.durationSec)}</span>
 
         {#if shareState.preparing}
-          <div class="veil">
+          <div class="veil busy-veil">
+            <span class="veil-title">{t('share.preparing')}</span>
             <div class="track"><div class="fill" style:width={`${Math.max(2, Math.round(shareState.progress * 100))}%`}></div></div>
             <span class="veil-sub mono">{Math.round(shareState.progress * 100)}%</span>
-            <span class="veil-title">{t('share.preparing')}</span>
+            <button class="cancel" onclick={() => selectPreset(null)}>{t('share.cancel')}</button>
           </div>
         {:else}
           <div class="veil hint">
@@ -320,6 +316,11 @@
     background: rgba(0, 0, 0, 0.5);
     pointer-events: none;
   }
+  /* El velo normal no intercepta el puntero para no estorbar al arrastre; el de preparación sí,
+     porque contiene el botón de cancelar. */
+  .busy-veil {
+    pointer-events: auto;
+  }
   .veil.hint {
     opacity: 0;
     transition: opacity 0.14s ease;
@@ -348,6 +349,21 @@
     height: 100%;
     background: var(--accent);
     transition: width 0.15s ease;
+  }
+  .cancel {
+    margin-top: 10px;
+    padding: 6px 14px;
+    font-size: 12px;
+    color: var(--text-1);
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    transition: color 0.14s ease, border-color 0.14s ease;
+  }
+  .cancel:hover {
+    color: var(--text-0);
+    border-color: var(--text-2);
   }
 
   .error {

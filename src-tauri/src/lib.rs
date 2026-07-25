@@ -272,7 +272,7 @@ async fn export_clip(
     // Marca de agua: solo si está activada. Se hornea únicamente aquí (export), nunca en captura.
     let watermark = config::get_watermark(&app).then(|| config::get_watermark_corner(&app));
     tokio::task::spawn_blocking(move || {
-        editor::export_clip(src, dst, edit, watermark, None, None, move |p: f32| {
+        editor::export_clip(src, dst, edit, watermark, None, None, None, move |p: f32| {
             let _ = app.emit("export-progress", p);
         })
     })
@@ -330,14 +330,20 @@ async fn share_prepare(
 
     let dst_str = dst.to_string_lossy().into_owned();
     let out = dst_str.clone();
+    let cancel = share::begin_job();
     tokio::task::spawn_blocking(move || {
-        editor::export_clip(src, dst_str, edit, corner, bitrate, max_height, move |p: f32| {
+        editor::export_clip(src, dst_str, edit, corner, bitrate, max_height, Some(cancel), move |p: f32| {
             let _ = app.emit("share-progress", p);
         })
     })
     .await
     .map_err(|e| format!("Error interno: {e}"))??;
     Ok(out)
+}
+
+#[tauri::command]
+fn share_cancel() {
+    share::cancel_current();
 }
 
 // SHDoDragDrop es modal y exige STA con OLE inicializado y la captura del ratón, así que solo
@@ -615,6 +621,7 @@ pub fn run() {
             capture_frame,
             export_clip,
             share_prepare,
+            share_cancel,
             start_file_drag,
             get_watermark,
             set_watermark,

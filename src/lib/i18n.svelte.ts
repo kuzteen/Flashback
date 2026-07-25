@@ -208,6 +208,7 @@ const en: Record<string, string> = {
   'share.dragHint': 'Drag this clip into any app to share it',
   'share.preparing': 'Preparing clip…',
   'share.noBlocks': 'There are no active blocks to share',
+  'share.cancel': 'Cancel',
 
   // Juegos
   'games.title': 'Detected games',
@@ -439,6 +440,7 @@ const es: Record<string, string> = {
   'share.dragHint': 'Arrastra este clip a cualquier app para compartirlo',
   'share.preparing': 'Preparando clip…',
   'share.noBlocks': 'No hay bloques activos para compartir',
+  'share.cancel': 'Cancelar',
 
   'games.title': 'Juegos detectados',
   'games.now': 'Ahora mismo',

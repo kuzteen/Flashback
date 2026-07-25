@@ -1,6 +1,28 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 use crate::editor::ClipEdit;
+
+// Solo puede haber un recodificado de compartir en vuelo: elegir otro tamaño o cerrar el diálogo
+// aborta el anterior en vez de dejarlo quemando el encoder para un resultado que ya nadie quiere.
+static CURRENT: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
+
+pub fn begin_job() -> Arc<AtomicBool> {
+    let flag = Arc::new(AtomicBool::new(false));
+    let mut cur = CURRENT.lock().unwrap();
+    if let Some(prev) = cur.replace(flag.clone()) {
+        prev.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    flag
+}
+
+pub fn cancel_current() {
+    let mut cur = CURRENT.lock().unwrap();
+    if let Some(prev) = cur.take() {
+        prev.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 
 // El export siempre escribe una única pista AAC a este bitrate (ver add_remix_audio_stream y
 // add_pcm_audio_stream), así que el presupuesto de audio es exacto, no una estimación.

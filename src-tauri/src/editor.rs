@@ -123,10 +123,15 @@ pub fn export_clip<F: Fn(f32)>(
     _watermark: Option<String>,
     _bitrate: Option<u32>,
     _max_height: Option<u32>,
+    _cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     _progress: F,
 ) -> Result<(), String> {
     Err("El editor solo está disponible en Windows".into())
 }
+
+// Marca de un export abortado a petición del usuario. Quien lo llama la usa para distinguirlo de un
+// fallo real y no mostrar un error por algo que se pidió expresamente.
+pub const CANCELLED: &str = "export-cancelled";
 
 #[cfg(target_os = "windows")]
 mod win {
@@ -489,12 +494,18 @@ mod win {
         watermark: Option<String>,
         bitrate: Option<u32>,
         max_height: Option<u32>,
+        cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
         progress: F,
     ) -> std::result::Result<(), String> {
         std::thread::spawn(move || {
             unsafe { let _ = CoInitializeEx(None, COINIT_MULTITHREADED); }
             ensure_mf();
-            let r = do_export(&src, &dst, &edit, watermark.as_deref(), bitrate, max_height, &progress);
+            let r = do_export(&src, &dst, &edit, watermark.as_deref(), bitrate, max_height, cancel.as_deref(), &progress);
+            // Un export abortado deja un MP4 a medias sin finalizar: se borra para que nadie lo
+            // encuentre luego y lo tome por un clip válido.
+            if r.as_ref().err().map(|e| e == super::CANCELLED).unwrap_or(false) {
+                let _ = std::fs::remove_file(&dst);
+            }
             unsafe { CoUninitialize(); }
             // El clip editado hereda el origen del original (juego/monitor) embebiéndolo igual que
             // en la captura, para que conserve su etiqueta en la biblioteca.
@@ -602,9 +613,15 @@ mod win {
         watermark: Option<&str>,
         bitrate: Option<u32>,
         max_height: Option<u32>,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
         progress: &dyn Fn(f32),
     ) -> std::result::Result<(), String> {
         let mf = |e: windows::core::Error| format!("{e:?}");
+        let aborted = || {
+            cancel
+                .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+                .unwrap_or(false)
+        };
 
         if edit.segments.is_empty() {
             return Err("No hay segmentos para exportar".into());
@@ -769,6 +786,9 @@ mod win {
             unsafe { v_reader.SetCurrentPosition(&GUID::zeroed(), &pos).map_err(mf)? };
 
             loop {
+                if aborted() {
+                    return Err(super::CANCELLED.into());
+                }
                 let mut flags = 0u32;
                 let mut sample: Option<IMFSample> = None;
                 unsafe {
@@ -799,6 +819,9 @@ mod win {
         }
 
         // --- Audio ---
+        if aborted() {
+            return Err(super::CANCELLED.into());
+        }
         if let Some(a_stream) = remix_stream {
             let (mixed, rate) = remixed.as_ref().unwrap();
             write_remixed_audio(&sink, a_stream, mixed, *rate, edit).map_err(mf)?;
@@ -818,6 +841,9 @@ mod win {
             };
             let mut seg_idx = 0usize;
             loop {
+                if aborted() {
+                    return Err(super::CANCELLED.into());
+                }
                 let mut flags = 0u32;
                 let mut sample: Option<IMFSample> = None;
                 unsafe { src_reader.ReadSample(a_idx, 0, None, Some(&mut flags), None, Some(&mut sample)).map_err(mf)? };
