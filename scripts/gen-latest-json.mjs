@@ -7,7 +7,7 @@ if (!version || !sigPath) {
 }
 
 const signature = readFileSync(sigPath, 'utf8').trim();
-const url = `https://github.com/kuzpire/Flashback/releases/download/v${version}/Flashback_${version}_x64-setup.exe`;
+const url = `https://github.com/kuzteen/Flashback/releases/download/v${version}/Flashback_${version}_x64-setup.exe`;
 
 const manifest = {
   version,

@@ -19,6 +19,6 @@ assert.equal(m.notes, 'Hello notes');
 assert.equal(m.platforms['windows-x86_64'].signature, 'SIGNATURE_CONTENT');
 assert.equal(
   m.platforms['windows-x86_64'].url,
-  'https://github.com/kuzpire/Flashback/releases/download/v1.4.0/Flashback_1.4.0_x64-setup.exe'
+  'https://github.com/kuzteen/Flashback/releases/download/v1.4.0/Flashback_1.4.0_x64-setup.exe'
 );
 console.log('gen-latest-json: ok');
