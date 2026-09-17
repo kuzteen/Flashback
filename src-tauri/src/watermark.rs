@@ -4,7 +4,7 @@
 // mezcla (alpha-over) sobre cada frame RGB32 antes de reencodar.
 
 #[cfg(target_os = "windows")]
-pub use win::Logo;
+pub use win::{GpuLogo, Logo};
 
 #[derive(Clone, Copy)]
 pub enum Corner {
@@ -53,13 +53,14 @@ mod win {
     use windows::core::{Interface, Result};
     use windows::Win32::Foundation::{E_FAIL, HMODULE};
     use windows::Win32::Graphics::Direct2D::Common::{
-        D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
+        D2D1_ALPHA_MODE_IGNORE, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
+        D2D_RECT_F,
     };
     use windows::Win32::Graphics::Direct2D::{
-        D2D1CreateDevice, ID2D1Bitmap1, ID2D1DeviceContext5,
-        D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_CPU_READ, D2D1_BITMAP_OPTIONS_TARGET,
-        D2D1_BITMAP_PROPERTIES1, D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_MAP_OPTIONS_READ,
-        D2D1_MAPPED_RECT,
+        D2D1CreateDevice, ID2D1Bitmap1, ID2D1DeviceContext, ID2D1DeviceContext5,
+        D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_CPU_READ, D2D1_BITMAP_OPTIONS_NONE,
+        D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
+        D2D1_INTERPOLATION_MODE_LINEAR, D2D1_MAP_OPTIONS_READ, D2D1_MAPPED_RECT,
     };
     use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
     use windows::Win32::Graphics::Direct3D11::{
@@ -67,7 +68,7 @@ mod win {
     };
     use windows::Win32::Graphics::Direct2D::Common::{D2D_SIZE_F, D2D_SIZE_U};
     use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
-    use windows::Win32::Graphics::Dxgi::IDXGIDevice;
+    use windows::Win32::Graphics::Dxgi::{IDXGIDevice, IDXGISurface};
     use windows::Win32::Graphics::Imaging::{CLSID_WICImagingFactory, IWICImagingFactory};
     use windows::Win32::System::Com::{CoCreateInstance, IStream, CLSCTX_INPROC_SERVER};
 
@@ -222,6 +223,92 @@ mod win {
                     *d.add(2) = over_u8(self.bgra[s + 2], *d.add(2), inv);
                     *d.add(3) = 255;
                 }
+            }
+        }
+    }
+
+    // Composición en GPU del mismo logo ya rasterizado: se sube una vez a un bitmap de Direct2D y
+    // se pinta sobre la textura del frame. Evita bajar el frame a memoria de sistema —y volver a
+    // subirlo— solo para estampar una esquina.
+    pub struct GpuLogo {
+        ctx: ID2D1DeviceContext,
+        bitmap: ID2D1Bitmap1,
+        width: u32,
+        height: u32,
+        corner: Corner,
+    }
+
+    impl Logo {
+        // El contexto se crea sobre el MISMO device D3D11 con el que Media Foundation decodifica:
+        // si fuera otro, la textura del frame no sería accesible.
+        pub fn to_gpu(&self, device: &ID3D11Device) -> Result<GpuLogo> {
+            let dxgi: IDXGIDevice = device.cast()?;
+            let d2d_device = unsafe { D2D1CreateDevice(&dxgi, None)? };
+            let ctx = unsafe { d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)? };
+            let props = D2D1_BITMAP_PROPERTIES1 {
+                pixelFormat: D2D1_PIXEL_FORMAT {
+                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                },
+                dpiX: 96.0,
+                dpiY: 96.0,
+                bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
+                ..Default::default()
+            };
+            let size = D2D_SIZE_U { width: self.width, height: self.height };
+            let bitmap = unsafe {
+                ctx.CreateBitmap(
+                    size,
+                    Some(self.bgra.as_ptr() as *const _),
+                    self.width * 4,
+                    &props,
+                )?
+            };
+            Ok(GpuLogo { ctx, bitmap, width: self.width, height: self.height, corner: self.corner })
+        }
+    }
+
+    impl GpuLogo {
+        // Dibuja el logo sobre la textura del frame (BGRA). El alfa del bitmap ya viene
+        // premultiplicado y con la opacidad horneada, así que el source-over por defecto de
+        // Direct2D da el mismo resultado que el blend por CPU. Devuelve Err si la textura no
+        // admite ser destino de dibujo; el llamador cae entonces al camino por CPU.
+        pub fn blend(&self, surface: &IDXGISurface, fw: u32, fh: u32) -> Result<()> {
+            let margin = (fh as f32 * MARGIN_FRAC).round() as i64;
+            let (ox, oy) = place(self.corner, fw, fh, self.width, self.height, margin);
+            // El destino es vídeo opaco: con alfa ignorado Direct2D compone contra un fondo sólido
+            // en vez de arrastrar el alfa basura que traiga la textura.
+            let props = D2D1_BITMAP_PROPERTIES1 {
+                pixelFormat: D2D1_PIXEL_FORMAT {
+                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    alphaMode: D2D1_ALPHA_MODE_IGNORE,
+                },
+                dpiX: 96.0,
+                dpiY: 96.0,
+                bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET,
+                ..Default::default()
+            };
+            let dest = D2D_RECT_F {
+                left: ox as f32,
+                top: oy as f32,
+                right: (ox + self.width as i64) as f32,
+                bottom: (oy + self.height as i64) as f32,
+            };
+            unsafe {
+                let target = self.ctx.CreateBitmapFromDxgiSurface(surface, Some(&props))?;
+                self.ctx.SetTarget(&target);
+                self.ctx.BeginDraw();
+                self.ctx.DrawBitmap(
+                    &self.bitmap,
+                    Some(&dest),
+                    1.0,
+                    D2D1_INTERPOLATION_MODE_LINEAR,
+                    None,
+                    None,
+                );
+                let r = self.ctx.EndDraw(None, None);
+                self.ctx.SetTarget(None);
+                r
             }
         }
     }
