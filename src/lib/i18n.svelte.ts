@@ -49,7 +49,6 @@ const en: Record<string, string> = {
   'nav.clips': 'Clips',
   'nav.library': 'Library',
   'nav.games': 'Games',
-  'nav.favorites': 'Favorites',
   'nav.settings': 'Settings',
 
   'win.minimize': 'Minimize',
@@ -174,29 +173,37 @@ const en: Record<string, string> = {
   'clips.noResultsQuery': 'No results for “{query}”.',
   'clips.noResultsFilter': 'No results with this filter.',
 
-  // Favoritos
-  'favs.title': 'Your Favorites',
-  'favs.empty': "You don't have any clips saved as favorites yet.",
-  'favs.emptyHint': "Tap a clip's star to save it here.",
-
   // Filtro de biblioteca
   'filter.label': 'Filter',
   'filter.edited': 'Edited',
-  'filter.count': '{n} filters',
-  'filter.clear': 'Clear filter',
+  'filter.favorites': 'Favorites',
   'filter.all': 'All',
   'filter.games': 'Games',
   'filter.screens': 'Screens',
 
   // Tarjeta de clip
-  'card.favOn': 'Marked as favorite, click to unmark',
-  'card.favOff': 'Mark as favorite',
+  'card.favAdd': 'Save to favorites',
+  'card.favRemove': 'Remove from favorites',
+  'card.select': 'Select clip',
+  'sel.bar': 'Selection actions',
+  'sel.count': '{n} selected',
+  'sel.all': 'Select all',
+  'sel.cancel': 'Cancel',
+  'sel.delete': 'Delete',
   'card.share': 'Share',
   'card.more': 'More options',
   'card.openEditor': 'Open in editor',
   'card.rename': 'Rename',
   'card.openLocation': 'Open location',
   'card.delete': 'Delete',
+
+  // Confirmación
+  'confirm.deleteTitle': 'Confirm deletion',
+  'confirm.deleteOne': 'Delete “{name}”?',
+  'confirm.deleteMany': 'Delete {n} clips?',
+  'confirm.deleteHint': 'They go to the Recycle Bin, so you can restore them from Windows.',
+  'confirm.cancel': 'Cancel',
+  'confirm.delete': 'Delete',
 
   // Compartir
   'share.title': 'Share',
@@ -267,7 +274,6 @@ const en: Record<string, string> = {
   // Tiempo relativo
   'time.now': 'Just now',
   'time.moment': 'A moment ago',
-  'time.today': 'Today',
   'time.yesterday': 'Yesterday',
   'time.minAgo': '{n} min ago',
   'time.hourAgo': '1 hour ago',
@@ -292,7 +298,6 @@ const es: Record<string, string> = {
   'nav.clips': 'Clips',
   'nav.library': 'Biblioteca',
   'nav.games': 'Juegos',
-  'nav.favorites': 'Favoritos',
   'nav.settings': 'Ajustes',
 
   'win.minimize': 'Minimizar',
@@ -411,26 +416,35 @@ const es: Record<string, string> = {
   'clips.noResultsQuery': 'Sin resultados para “{query}”.',
   'clips.noResultsFilter': 'Sin resultados con este filtro.',
 
-  'favs.title': 'Tus Favoritos',
-  'favs.empty': 'Aún no tienes clips guardados como favoritos.',
-  'favs.emptyHint': 'Marca la estrella de un clip para guardarlo aquí.',
-
   'filter.label': 'Filtro',
   'filter.edited': 'Editados',
-  'filter.count': '{n} filtros',
-  'filter.clear': 'Quitar filtro',
+  'filter.favorites': 'Favoritos',
   'filter.all': 'Todos',
   'filter.games': 'Juegos',
   'filter.screens': 'Pantallas',
 
-  'card.favOn': 'Marcado como favorito, click para desmarcar',
-  'card.favOff': 'Marcar como favorito',
+  'card.favAdd': 'Guardar en favoritos',
+  'card.favRemove': 'Quitar de favoritos',
+  'card.select': 'Seleccionar clip',
+  'sel.bar': 'Acciones de selección',
+  'sel.count': '{n} seleccionados',
+  'sel.all': 'Seleccionar todos',
+  'sel.cancel': 'Cancelar',
+  'sel.delete': 'Eliminar',
   'card.share': 'Compartir',
   'card.more': 'Más opciones',
   'card.openEditor': 'Abrir en editor',
   'card.rename': 'Renombrar',
   'card.openLocation': 'Abrir ubicación',
   'card.delete': 'Borrar',
+
+  // Confirmación
+  'confirm.deleteTitle': 'Confirmar eliminación',
+  'confirm.deleteOne': '¿Eliminar “{name}”?',
+  'confirm.deleteMany': '¿Eliminar {n} clips?',
+  'confirm.deleteHint': 'Van a la papelera de reciclaje, así que puedes restaurarlos desde Windows.',
+  'confirm.cancel': 'Cancelar',
+  'confirm.delete': 'Eliminar',
 
   'share.title': 'Compartir',
   'share.close': 'Cerrar',
@@ -497,7 +511,6 @@ const es: Record<string, string> = {
 
   'time.now': 'Ahora mismo',
   'time.moment': 'Hace un momento',
-  'time.today': 'Hoy',
   'time.yesterday': 'Ayer',
   'time.minAgo': 'Hace {n} min',
   'time.hourAgo': 'Hace una hora',

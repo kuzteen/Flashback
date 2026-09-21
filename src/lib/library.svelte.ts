@@ -63,7 +63,7 @@ export function removeFavorite(id: string) {
   persistFavs();
 }
 
-function toClip(r: RawClip): Clip {
+function toClip(r: RawClip, withEdits: Set<string>): Clip {
   return {
     id: r.id,
     title: r.name,
@@ -72,8 +72,9 @@ function toClip(r: RawClip): Clip {
     sizeBytes: r.size_bytes,
     createdAt: new Date(r.modified_ms),
     path: r.path,
+    edited: withEdits.has(r.path),
     // Los clips exportados desde el editor se nombran `<nombre>_edit.mp4`.
-    edited: r.id.endsWith('_edit.mp4'),
+    exported: r.id.endsWith('_edit.mp4'),
     previewSrc: convertFileSrc(r.path)
   };
 }
@@ -95,6 +96,12 @@ function pumpThumbs() {
       job();
     }
   }
+}
+
+// La rejilla virtualizada remonta tarjetas al reciclarlas; leer la caché de forma síncrona
+// evita que una miniatura ya descargada parpadee contra el placeholder al volver a entrar.
+export function cachedThumb(path: string): string | null {
+  return thumbCache.get(path) ?? null;
 }
 
 export function requestThumb(path: string): Promise<string | null> {
@@ -120,8 +127,12 @@ export function requestThumb(path: string): Promise<string | null> {
 
 export async function refreshLibrary() {
   try {
-    const raw = await invoke<RawClip[]>('list_clips');
-    library.clips = raw.map(toClip);
+    const [raw, withEdits] = await Promise.all([
+      invoke<RawClip[]>('list_clips'),
+      invoke<string[]>('clips_with_edits').catch(() => [] as string[])
+    ]);
+    const edited = new Set(withEdits);
+    library.clips = raw.map((r) => toClip(r, edited));
   } catch {
     // fuera de Tauri (preview en navegador): biblioteca vacía
     library.clips = [];

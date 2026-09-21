@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import Icon from './Icon.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { revealItemInDir } from '@tauri-apps/plugin-opener';
@@ -8,30 +9,94 @@
     isFavorite,
     toggleFavorite,
     requestThumb,
+    cachedThumb,
     refreshLibrary,
     renameFavorite,
     removeFavorite
   } from '$lib/library.svelte';
   import { openEditor } from '$lib/editor.svelte';
   import { openShare } from '$lib/share.svelte';
+  import { selected, isSelected, pick } from '$lib/selection.svelte';
+  import { confirmDelete } from '$lib/confirm.svelte';
   import { t } from '$lib/i18n.svelte';
 
   let { clip }: { clip: Clip } = $props();
 
   const open = $derived(menu.openId === clip.id);
   const favorite = $derived(isFavorite(clip.id));
-  const favLabel = $derived(favorite ? t('card.favOn') : t('card.favOff'));
+  const sel = $derived(isSelected(clip.id));
+  const picking = $derived(selected.size > 0);
 
   let cardEl = $state<HTMLElement | null>(null);
-  let poster = $state<string | null>(null);
-  let hovering = $state(false);
+  // untrack: la tarjeta va keyed por clip.id, así que el valor inicial basta y leerlo aquí
+  // no debe crear dependencia.
+  let poster = $state<string | null>(untrack(() => (clip.path ? cachedThumb(clip.path) : null)));
   // El vídeo solo se monta en hover (sin precarga); videoReady marca cuándo ya tiene su
-  // primer frame para fundirlo sobre el negro al que se desvanece el póster.
+  // primer frame para fundirlo sobre el póster, que no se oculta y así nunca pasa por negro.
+  // Al salir se desvanece y se desmonta al acabar el fundido, liberando el decodificador.
+  let videoMounted = $state(false);
   let videoReady = $state(false);
-  // Burst al marcar favorito: un duplicado del icono que escala y se desvanece. burstKey
-  // remonta el elemento para replayar la animación en marcados rápidos sucesivos.
-  let bursting = $state(false);
-  let burstKey = $state(0);
+  let videoEl = $state<HTMLVideoElement | null>(null);
+  let unmountTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // Permanencia mínima antes de montar el <video>. Recorrer la rejilla deprisa (Tab mantenido,
+  // que repite ~30 veces por segundo, o el puntero barriendo) encendía una tarjeta tras otra, y
+  // como el desmontaje espera 250 ms se acumulaban varios decodificadores vivos a la vez.
+  const DWELL_MS = 140;
+  let activateTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function activate() {
+    clearTimeout(unmountTimer);
+    if (videoMounted || activateTimer) return;
+    activateTimer = setTimeout(() => {
+      activateTimer = undefined;
+      videoMounted = true;
+      if (videoEl && videoEl.readyState >= 2) videoReady = true;
+    }, DWELL_MS);
+  }
+
+  function release() {
+    clearTimeout(activateTimer);
+    activateTimer = undefined;
+    if (!videoMounted) return;
+    videoReady = false;
+    clearTimeout(unmountTimer);
+    unmountTimer = setTimeout(() => (videoMounted = false), 250);
+  }
+
+  // El foco se comporta como el puntero, y además retiene: mientras la tarjeta lo tenga, sacar
+  // el ratón no la apaga, y mientras el ratón esté encima, perder el foco tampoco. La suelta el
+  // último de los dos en irse.
+  let hovered = false;
+
+  function onEnter() {
+    hovered = true;
+    activate();
+  }
+
+  function onLeave() {
+    hovered = false;
+    if (cardEl?.contains(document.activeElement)) return;
+    release();
+  }
+
+  function onFocusOut(e: FocusEvent) {
+    const next = e.relatedTarget as Node | null;
+    if (hovered || (next && cardEl?.contains(next))) return;
+    release();
+  }
+
+  function onCardKey(e: KeyboardEvent) {
+    if (e.target !== cardEl || (e.key !== 'Enter' && e.key !== ' ')) return;
+    e.preventDefault();
+    if (picking) pick(clip.id, e.shiftKey);
+    else openEditor(clip);
+  }
+
+  $effect(() => () => {
+    clearTimeout(unmountTimer);
+    clearTimeout(activateTimer);
+  });
 
   // Carátula perezosa: la miniatura (un JPEG ligero cacheado por el backend) se pide solo
   // cuando la tarjeta se acerca al viewport. El <video> no se monta hasta el hover, así que
@@ -39,14 +104,23 @@
   $effect(() => {
     const el = cardEl;
     if (!el || poster || !clip.path) return;
+    // El observador solo se suelta cuando hay miniatura: si la petición falla (el backend puede
+    // rechazarla bajo carga), antes se quedaba en blanco para siempre. Al no desconectar, basta
+    // con que la tarjeta vuelva a entrar en el viewport para reintentarlo, y como el callback
+    // solo salta en los cruces, un fallo no puede encadenar reintentos.
+    let asked = false;
     const io = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting) {
-          io.disconnect();
-          requestThumb(clip.path).then((u) => {
-            if (u) poster = u;
-          });
-        }
+        if (!entries[0].isIntersecting || asked) return;
+        asked = true;
+        requestThumb(clip.path).then((u) => {
+          if (u) {
+            poster = u;
+            io.disconnect();
+          } else {
+            asked = false;
+          }
+        });
       },
       { rootMargin: '300px' }
     );
@@ -56,26 +130,65 @@
 
   function toggleMenu(e: MouseEvent) {
     e.stopPropagation();
+    menuPos = null;
     menu.openId = open ? null : clip.id;
   }
+
+  // El clic derecho abre el mismo menú que los tres puntos, pero en la punta del cursor. Sobre el
+  // campo de renombrar se deja pasar para no perder el copiar/pegar nativo, igual que hace el
+  // guard global del layout.
+  function onContextMenu(e: MouseEvent) {
+    if ((e.target as HTMLElement).closest('input, textarea, [contenteditable="true"]')) return;
+    e.preventDefault();
+    menuPos = { x: e.clientX, y: e.clientY };
+    menu.openId = clip.id;
+  }
+
+  // Flotando se posiciona en coordenadas de viewport (position: fixed), así que no lo recorta el
+  // scroller ni lo desplaza la tarjeta. Se corrige tras medirlo: el alto depende del menú y solo
+  // se conoce una vez montado.
+  const EDGE = 8;
+  let menuPos = $state<{ x: number; y: number } | null>(null);
+  let menuEl = $state<HTMLElement | null>(null);
+
+  $effect(() => {
+    const el = menuEl;
+    const pos = menuPos;
+    if (!el || !pos) return;
+    const r = el.getBoundingClientRect();
+    const x = Math.max(EDGE, Math.min(pos.x, window.innerWidth - r.width - EDGE));
+    // Hacia arriba si no cabe debajo, que es lo que hace el menú nativo de Windows.
+    const y =
+      pos.y + r.height + EDGE > window.innerHeight
+        ? Math.max(EDGE, pos.y - r.height)
+        : pos.y;
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+  });
 
   // Abrir el editor al pulsar la tarjeta, salvo cuando el click nace dentro del menú de
   // acciones: soltar el botón en una opción distinta de donde se pulsó sintetiza un click
   // sobre el contenedor del menú, y sin esta guarda subiría hasta aquí y abriría el editor.
   function openFromCard(e: MouseEvent) {
     if ((e.target as HTMLElement).closest('.actions')) return;
+    // Con una selección en curso, pulsar la tarjeta marca en vez de abrir: si no, es
+    // facilísimo salirse al editor a mitad de seleccionar.
+    if (picking) {
+      pick(clip.id, e.shiftKey);
+      return;
+    }
     openEditor(clip);
+  }
+
+  function pickClick(e: MouseEvent) {
+    e.stopPropagation();
+    pick(clip.id, e.shiftKey);
   }
 
   function favClick(e: MouseEvent) {
     e.stopPropagation();
-    const wasFav = favorite;
+    menu.openId = null;
     toggleFavorite(clip.id);
-    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    if (!wasFav && !reduced) {
-      burstKey++;
-      bursting = true;
-    }
   }
 
   let renaming = $state(false);
@@ -121,8 +234,12 @@
   async function deleteClip(e: MouseEvent) {
     e.stopPropagation();
     menu.openId = null;
+    // Shift salta la confirmación: el borrado va a la papelera, así que el atajo no es
+    // irreversible para quien ya sabe lo que hace.
+    if (!e.shiftKey && !(await confirmDelete(1, clip.title))) return;
     try {
       await invoke('delete_clip', { path: clip.path });
+      selected.delete(clip.id);
       removeFavorite(clip.id);
       await refreshLibrary();
     } catch (err) {
@@ -133,15 +250,31 @@
 
 <svelte:window onclick={() => (menu.openId = null)} />
 
-<article class="card" class:open bind:this={cardEl} onmouseenter={() => (hovering = true)} onmouseleave={() => { hovering = false; videoReady = false; }} onclick={openFromCard} role="presentation">
+<div
+  class="card"
+  class:open
+  class:sel
+  bind:this={cardEl}
+  role="button"
+  tabindex="0"
+  aria-label={clip.title}
+  onmouseenter={onEnter}
+  onmouseleave={onLeave}
+  onfocusin={activate}
+  onfocusout={onFocusOut}
+  onclick={openFromCard}
+  oncontextmenu={onContextMenu}
+  onkeydown={onCardKey}
+>
   <div class="thumb">
     {#if poster}
-      <img class="preview poster" class:hide={hovering} src={poster} alt="" draggable="false" />
+      <img class="preview" src={poster} alt="" draggable="false" />
     {:else}
       <div class="watermark"><Icon name="chevrons" size={150} sw={1.1} /></div>
     {/if}
-    {#if hovering && clip.previewSrc}
+    {#if videoMounted && clip.previewSrc}
       <video
+        bind:this={videoEl}
         class="preview vid"
         class:show={videoReady}
         src={clip.previewSrc}
@@ -156,28 +289,31 @@
     <div class="scrim"></div>
 
     <div class="badge mono">
-      {#if clip.trimmed}<Icon name="scissors" size={12} sw={1.9} />{/if}
-      {#if clip.edited}<Icon name="edit" size={12} sw={1.9} />{/if}
-      {formatDuration(clip.durationSec)}
+      <!-- El recorte es lineal y pesa menos que la estrella y la goma, macizas: va algo mayor. -->
+      {#if favorite}<span class="fav"><Icon name="star-fill" size={12} /></span>{/if}
+      {#if clip.exported}<Icon name="crop" size={13} />{/if}
+      {#if clip.edited}<Icon name="eraser" size={12} />{/if}
+      <span class="dur">{formatDuration(clip.durationSec)}</span>
     </div>
 
   </div>
 
-  <button class="fav" class:on={favorite} aria-label={favLabel} onclick={favClick}>
-    <Icon name={favorite ? 'bookmark-fill' : 'bookmark'} size={16} sw={1.8} />
-    {#if bursting}
-      {#key burstKey}
-        <span class="fav-burst" onanimationend={() => (bursting = false)}>
-          <Icon name="bookmark" size={16} sw={1.8} />
-        </span>
-      {/key}
-    {/if}
-    <span class="fav-tip" role="tooltip">{favLabel}</span>
+  <button
+    class="pick"
+    class:armed={picking}
+    role="checkbox"
+    aria-checked={sel}
+    aria-label={t('card.select')}
+    onclick={pickClick}
+  >
+    <Icon name="check" size={14} sw={2.8} />
   </button>
 
   <div class="meta">
     <div class="info">
       {#if clip.source}<span class="src label">{displaySource(clip.source)}</span>{/if}
+
+      <h3 class="title">{clip.title}</h3>
 
       {#if renaming}
         <input
@@ -192,8 +328,6 @@
           }}
           onblur={commitRename}
         />
-      {:else}
-        <h3 class="title">{clip.title}</h3>
       {/if}
 
       <span class="when mono"><Icon name="clock" size={13} sw={2} />{formatRelative(clip.createdAt)}</span>
@@ -208,7 +342,7 @@
           openShare(clip);
         }}
       >
-        <Icon name="share" size={19} sw={2} />
+        <Icon name="share" size={21} />
       </button>
       <button
         class="act"
@@ -217,12 +351,19 @@
         aria-expanded={open}
         onclick={toggleMenu}
       >
-        <Icon name="more" size={21} sw={2} />
+        <Icon name="more" size={23} />
       </button>
 
       {#if open}
-        <div class="menu" role="menu">
-          <button role="menuitem" onclick={(e) => { e.stopPropagation(); openEditor(clip); }}><Icon name="scissors" size={15} sw={1.9} /> {t('card.openEditor')}</button>
+        <div
+          class="menu"
+          class:floating={!!menuPos}
+          style={menuPos ? `left:${menuPos.x}px;top:${menuPos.y}px` : ''}
+          bind:this={menuEl}
+          role="menu"
+        >
+          <button role="menuitem" onclick={(e) => { e.stopPropagation(); openEditor(clip); }}><Icon name="editor" size={17} /> {t('card.openEditor')}</button>
+          <button role="menuitem" class:on={favorite} onclick={favClick}><Icon name={favorite ? 'star-fill' : 'star'} size={16} /> {favorite ? t('card.favRemove') : t('card.favAdd')}</button>
           <button role="menuitem" onclick={startRename}><Icon name="rename" size={15} sw={1.9} /> {t('card.rename')}</button>
           <button role="menuitem" onclick={openLocation}><Icon name="folder-open" size={15} sw={1.9} /> {t('card.openLocation')}</button>
           <div class="sep"></div>
@@ -231,20 +372,26 @@
       {/if}
     </div>
   </div>
-</article>
+</div>
 
 <style>
   .card {
     position: relative;
-    background: #121212;
+    background: var(--surface);
     border-radius: 4px;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08);
+    transition: box-shadow 0.15s ease;
   }
-  .card:hover {
-    outline: 4px solid rgba(160, 167, 182, 0.3);
-  }
+  /* El borde es una sola sombra sólida por fuera de la card: en hover solo crece su spread, que
+     es pintado puro (sin layout), así nada se mueve y nunca hay dos piezas con tonos distintos. */
+  .card:hover,
   .card.open {
-    z-index: 30;
-    outline: 4px solid rgba(160, 167, 182, 0.3);
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.16);
+  }
+  /* Por encima de la barra de selección (z-index 40): con el clic derecho el menú puede caer
+     justo donde está, y quedar por debajo lo dejaría a medias. */
+  .card.open {
+    z-index: 50;
   }
 
   .thumb {
@@ -276,12 +423,6 @@
     object-fit: cover;
     display: block;
   }
-  .poster {
-    transition: opacity 0.25s ease;
-  }
-  .poster.hide {
-    opacity: 0;
-  }
   .vid {
     opacity: 0;
     transition: opacity 0.25s ease;
@@ -296,8 +437,9 @@
     right: 10px;
     display: flex;
     align-items: center;
-    gap: 5px;
-    padding: 4px 9px;
+    gap: 6px;
+    height: 24px;
+    padding: 0 9px;
     font-size: 12px;
     color: var(--text-0);
     background: rgba(27, 30, 38, 0.6);
@@ -305,76 +447,73 @@
     border: 1px solid var(--line);
     border-radius: 999px;
   }
+  /* La altura la fija la píldora, no el interlineado. text-box recorta la caja del texto a la
+     altura de mayúsculas: los dígitos no tienen descendente, así que sin recortar el hueco que
+     este reserva los descolgaba del centro. Donde no se soporte, el centrado es el de antes. */
+  .badge .dur {
+    line-height: 1;
+    text-box: trim-both cap alphabetic;
+  }
   .badge :global(svg) {
-    color: var(--accent);
+    color: var(--bright);
+    flex: none;
+  }
+  .fav {
+    display: flex;
+  }
+  .fav :global(svg) {
+    color: var(--gold);
   }
 
-  .fav {
+  .pick {
     position: absolute;
     top: 10px;
     left: 10px;
-    width: 32px;
-    height: 32px;
+    width: 26px;
+    height: 26px;
     display: grid;
     place-items: center;
-    border-radius: 999px;
-    color: var(--text-0);
+    border-radius: 7px;
+    color: transparent;
     background: rgba(4, 8, 14, 0.55);
     backdrop-filter: blur(6px);
-    border: 1px solid var(--line);
-    opacity: 0;
-    transition: opacity 0.16s ease, color 0.16s ease;
-  }
-  .card:hover .fav {
-    opacity: 1;
-  }
-  .fav.on {
-    opacity: 1;
-    color: var(--gold);
-  }
-  .fav-burst {
-    position: absolute;
-    inset: 0;
-    display: grid;
-    place-items: center;
-    color: var(--gold);
-    pointer-events: none;
-    animation: fav-burst 0.45s ease-out forwards;
-  }
-  @keyframes fav-burst {
-    from {
-      transform: scale(1);
-      opacity: 0.9;
-    }
-    to {
-      transform: scale(1.5);
-      opacity: 0;
-    }
-  }
-  .fav-tip {
-    position: absolute;
-    top: calc(100% + 7px);
-    /* Centrado sobre el botón, pero con clamp: el borde izquierdo nunca pasa del borde
-       de la card (el botón va pegado a la izquierda). 84px = mitad del ancho del tooltip. */
-    left: max(-8px, calc(50% - 84px));
-    width: 168px;
-    padding: 7px 10px;
-    font-size: 11.5px;
-    line-height: 1.3;
-    text-align: center;
-    color: var(--text-1);
-    background: var(--bg-0);
     border: 1px solid var(--line-strong);
-    border-radius: 8px;
-    box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.7);
     opacity: 0;
-    visibility: hidden;
-    pointer-events: none;
-    transition: opacity 0.14s ease;
+    transition: opacity 0.16s ease, background 0.14s ease, border-color 0.14s ease;
   }
-  .fav:hover .fav-tip {
+  /* Al llegar con Tab no hay puntero que descubra el check, y sin él la tarjeta parece no tener
+     forma de seleccionarse. :focus-visible y no :focus-within: pulsar un botón con el ratón
+     también deja el foco dentro, y entonces el check se quedaba clavado al apartar el ratón.
+     El :has() va en su propia regla porque un navegador que no lo entienda tiraría el bloque
+     entero, y con él el hover. */
+  .card:hover .pick,
+  .card:focus-visible .pick,
+  .pick.armed {
     opacity: 1;
-    visibility: visible;
+  }
+  .card:has(:focus-visible) .pick {
+    opacity: 1;
+  }
+  .card.sel .pick {
+    opacity: 1;
+    color: var(--base);
+    background: var(--bright);
+    border-color: var(--bright);
+  }
+  .card.sel {
+    box-shadow: 0 0 0 2px var(--bright);
+  }
+  /* El foco reutiliza el anillo del hover subido al tono del outline, en vez de dibujar un
+     segundo borde por fuera. Va después de .sel para ganarle: el check relleno ya dice que el
+     clip está marcado. Solo :focus-visible: el anillo es la guía del teclado, y con el ratón
+     (pulsar un botón, abrir el menú con el derecho) no debe aparecer. */
+  .card:focus-visible {
+    box-shadow: 0 0 0 4px var(--accent);
+    outline: none;
+  }
+  .card:has(:focus-visible) {
+    box-shadow: 0 0 0 4px var(--accent);
+    outline: none;
   }
 
   .meta {
@@ -382,22 +521,23 @@
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    padding: 11px 14px 13px;
+    padding: 11px 14px;
   }
-  /* Columna de texto centrada verticalmente: con 1/2/3 elementos (origen, título, fecha) se
-     reparten desde el centro. min-height fija la altura del pie para que sea igual entre tarjetas
-     y los botones de la derecha queden siempre en el mismo sitio aunque cambie el texto. */
+  /* Rejilla de 3 filas con la del título fijada al centro: el origen empuja hacia arriba y la
+     fecha hacia abajo, así el título queda a la misma altura haya o no origen. min-height fija la
+     altura del pie para que los botones de la derecha no se muevan entre tarjetas. */
   .info {
+    position: relative;
     flex: 1;
     min-width: 0;
     min-height: 52px;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: 3px;
+    display: grid;
+    grid-template-rows: 1fr auto 1fr;
   }
   .src {
     display: block;
+    align-self: end;
+    padding-bottom: 6px;
     line-height: 1;
     font-size: 12px;
     color: var(--text-2);
@@ -411,7 +551,16 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* El campo flota sobre el título en vez de sustituirlo: ocupando sitio en la rejilla, su
+     borde y su relleno estiraban la fila y la tarjeta crecía 8 px al renombrar. Las filas 1fr de
+     arriba y abajo son iguales, así que el centro de .info es el centro de la fila del título.
+     Los -6 px laterales compensan el relleno para que el texto no se desplace al aparecer. */
   .title-edit {
+    position: absolute;
+    left: -6px;
+    right: -6px;
+    top: 50%;
+    transform: translateY(-50%);
     min-width: 0;
     font-size: 16px;
     font-weight: 560;
@@ -420,19 +569,20 @@
     background: var(--bg-0);
     border: 1px solid var(--accent);
     border-radius: 5px;
-    padding: 3px 7px;
+    padding: 3px 6px;
     outline: none;
   }
 
   .actions {
     position: relative;
     display: flex;
+    align-self: center;
     gap: 2px;
     flex-shrink: 0;
   }
   .act {
-    width: 35px;
-    height: 35px;
+    width: 38px;
+    height: 38px;
     display: grid;
     place-items: center;
     border-radius: var(--r-sm);
@@ -448,16 +598,21 @@
     position: absolute;
     top: calc(100% + 8px);
     right: 0;
+    left: auto;
     width: 196px;
     display: flex;
     flex-direction: column;
     gap: 1px;
     padding: 5px;
-    background: var(--bg-1);
+    background: var(--surface);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
     box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
     z-index: 40;
+  }
+  .menu.floating {
+    position: fixed;
+    right: auto;
   }
   .menu button {
     display: flex;
@@ -471,9 +626,18 @@
     border-radius: 6px;
     transition: background 0.12s ease, color 0.12s ease;
   }
+  /* Hueco fijo para el icono: los glifos no miden lo mismo y sin esto los textos del menú no
+     quedarían alineados entre sí. */
+  .menu button :global(svg) {
+    flex-shrink: 0;
+    width: 17px;
+  }
   .menu button:hover {
     background: var(--bg-3);
     color: var(--text-0);
+  }
+  .menu button.on :global(svg) {
+    color: var(--gold);
   }
   .menu .danger {
     color: var(--rec);
@@ -488,9 +652,13 @@
     background: var(--line);
   }
 
+  /* height fija a la altura del texto (11px): el reloj es un poco más alto y, sin esto, empujaría
+     la línea hacia abajo y la fecha quedaría más lejos del título que el origen. */
   .when {
     display: flex;
+    align-self: end;
     align-items: center;
+    height: 11px;
     gap: 6px;
     font-size: 11px;
     letter-spacing: 0.06em;

@@ -1,4 +1,5 @@
-import { t, localeTag } from './i18n.svelte';
+import { t } from './i18n.svelte';
+import { isFavorite } from './library.svelte';
 
 export type Clip = {
   id: string;
@@ -8,9 +9,10 @@ export type Clip = {
   sizeBytes: number;
   createdAt: Date;
   path: string;
-  trimmed?: boolean;
+  // edited: tiene cortes guardados en el editor. exported: el archivo es el resultado de
+  // exportar uno de esos montajes. Son cosas distintas y un clip puede ser las dos.
   edited?: boolean;
-  favorite?: boolean;
+  exported?: boolean;
   previewSrc?: string;
   poster?: string;
 };
@@ -50,19 +52,6 @@ export function formatRelative(date: Date): string {
   return t('time.daysAgo', { n: d });
 }
 
-function startOfDay(d: Date): number {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-}
-
-export function dayLabel(date: Date): string {
-  const today = startOfDay(new Date());
-  const day = startOfDay(date);
-  const diff = Math.round((today - day) / 86_400_000);
-  if (diff === 0) return t('time.today');
-  if (diff === 1) return t('time.yesterday');
-  return date.toLocaleDateString(localeTag(), { day: 'numeric', month: 'short', year: 'numeric' });
-}
-
 // Las capturas de pantalla guardan el origen como "Pantalla N"; cualquier otro origen es un
 // juego. Es la misma convención con la que el backend rellena el `source` al capturar.
 export function isScreenSource(source: string): boolean {
@@ -70,7 +59,7 @@ export function isScreenSource(source: string): boolean {
 }
 
 // El `source` de las pantallas se persiste canónico ("Pantalla N", el label del backend), pero se
-// muestra en el idioma activo. Localiza cada tramo (group.source puede unir varios con " · ");
+// muestra en el idioma activo. Localiza cada tramo (un source puede unir varios con " · ");
 // los orígenes de juego pasan tal cual.
 export function displaySource(source: string): string {
   return source
@@ -82,7 +71,10 @@ export function displaySource(source: string): string {
     .join(' · ');
 }
 
-export type LibraryFilter = { kind: 'edited' } | { kind: 'source'; value: string };
+export type LibraryFilter =
+  | { kind: 'edited' }
+  | { kind: 'favorite' }
+  | { kind: 'source'; value: string };
 
 export function sameFilter(a: LibraryFilter, b: LibraryFilter): boolean {
   if (a.kind !== b.kind) return false;
@@ -92,27 +84,17 @@ export function sameFilter(a: LibraryFilter, b: LibraryFilter): boolean {
 // Sin filtros seleccionados se muestran todos; con varios, basta con que el clip cumpla uno (OR).
 export function clipMatchesFilters(clip: Clip, selected: LibraryFilter[]): boolean {
   if (selected.length === 0) return true;
-  return selected.some((f) => (f.kind === 'edited' ? !!clip.edited : clip.source === f.value));
+  return selected.some((f) => {
+    if (f.kind === 'edited') return !!clip.edited || !!clip.exported;
+    if (f.kind === 'favorite') return isFavorite(clip.id);
+    return clip.source === f.value;
+  });
 }
 
-export type ClipGroup = { label: string; source: string; clips: Clip[] };
-
-export function groupClips(list: Clip[], sortAsc = false): ClipGroup[] {
-  const sorted = [...list].sort((a, b) =>
+export function sortClips(list: Clip[], sortAsc = false): Clip[] {
+  return [...list].sort((a, b) =>
     sortAsc
       ? a.createdAt.getTime() - b.createdAt.getTime()
       : b.createdAt.getTime() - a.createdAt.getTime()
   );
-  const groups: ClipGroup[] = [];
-  for (const clip of sorted) {
-    const label = dayLabel(clip.createdAt);
-    const last = groups[groups.length - 1];
-    if (last && last.label === label) {
-      last.clips.push(clip);
-      if (!last.source.includes(clip.source)) last.source = `${last.source} · ${clip.source}`;
-    } else {
-      groups.push({ label, source: clip.source, clips: [clip] });
-    }
-  }
-  return groups;
 }

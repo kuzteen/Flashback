@@ -2,6 +2,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import Icon from '$lib/components/Icon.svelte';
   import { isScreenSource, sameFilter, displaySource, type Clip, type LibraryFilter } from '$lib/clips';
+  import { isFavorite } from '$lib/library.svelte';
   import { t } from '$lib/i18n.svelte';
 
   let { clips, selected = $bindable() }: { clips: Clip[]; selected: LibraryFilter[] } = $props();
@@ -16,17 +17,9 @@
   const screens = $derived(
     [...new Set(clips.filter((c) => isScreenSource(c.source)).map((c) => c.source))].sort()
   );
-  const hasEdited = $derived(clips.some((c) => c.edited));
+  const hasEdited = $derived(clips.some((c) => c.edited || c.exported));
+  const hasFavorites = $derived(clips.some((c) => isFavorite(c.id)));
 
-  const activeLabel = $derived.by(() => {
-    if (selected.length === 0) return t('filter.label');
-    if (selected.length === 1) {
-      const f = selected[0];
-      return f.kind === 'edited' ? t('filter.edited') : displaySource(f.value);
-    }
-    return t('filter.count', { n: selected.length });
-  });
-  const isFiltered = $derived(selected.length > 0);
 
   function isOn(f: LibraryFilter): boolean {
     return selected.some((s) => sameFilter(s, f));
@@ -70,21 +63,10 @@
 </script>
 
 <div class="dd" class:open bind:this={el}>
-  <button class="ctrl" class:active={isFiltered} onclick={() => (open = !open)} aria-haspopup="menu" aria-expanded={open}>
+  <button class="ctrl" onclick={() => (open = !open)} aria-haspopup="menu" aria-expanded={open}>
     <Icon name="filter" size={14} />
-    <span class="lbl">{activeLabel}</span>
-    {#if isFiltered}
-      <span
-        class="clear"
-        role="button"
-        tabindex="0"
-        aria-label={t('filter.clear')}
-        onclick={(e) => { e.stopPropagation(); clearAll(); }}
-        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); clearAll(); } }}
-      >×</span>
-    {:else}
-      <Icon name="chevron-down" size={12} sw={2} />
-    {/if}
+    <span class="lbl">{t('filter.label')}</span>
+    <Icon name="chevron-down" size={12} sw={2} />
   </button>
 
   {#if open}
@@ -95,9 +77,17 @@
         <span class="chk"><Icon name="check" size={13} sw={2.2} /></span>
       </button>
 
+      {#if hasFavorites}
+        <button class="item" class:on={isOn({ kind: 'favorite' })} onclick={() => toggle({ kind: 'favorite' })} role="menuitemcheckbox" aria-checked={isOn({ kind: 'favorite' })}>
+          <span class="lead"><Icon name="star-fill" size={15} /></span>
+          <span class="txt">{t('filter.favorites')}</span>
+          <span class="chk"><Icon name="check" size={13} sw={2.2} /></span>
+        </button>
+      {/if}
+
       {#if hasEdited}
         <button class="item" class:on={isOn({ kind: 'edited' })} onclick={() => toggle({ kind: 'edited' })} role="menuitemcheckbox" aria-checked={isOn({ kind: 'edited' })}>
-          <span class="lead"><Icon name="edit" size={15} /></span>
+          <span class="lead"><Icon name="eraser" size={15} /></span>
           <span class="txt">{t('filter.edited')}</span>
           <span class="chk"><Icon name="check" size={13} sw={2.2} /></span>
         </button>
@@ -144,7 +134,7 @@
     padding: 0 10px 0 12px;
     font-size: 13px;
     color: var(--text-1);
-    background: var(--bg-1);
+    background: var(--surface);
     border: 1px solid var(--line);
     border-radius: var(--r-sm);
     transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
@@ -153,13 +143,14 @@
     color: var(--text-0);
     border-color: var(--line-strong);
   }
-  .ctrl.active {
-    color: var(--on-accent);
-    background: var(--accent);
-    border-color: transparent;
-  }
-  .dd.open .ctrl:not(.active) {
+  .dd.open .ctrl {
     border-color: var(--line-strong);
+  }
+  .ctrl > :global(svg:last-child) {
+    transition: transform 0.2s ease;
+  }
+  .dd.open .ctrl > :global(svg:last-child) {
+    transform: rotate(180deg);
   }
   .lbl {
     max-width: 160px;
@@ -167,24 +158,6 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .clear {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 18px;
-    height: 18px;
-    margin-left: 1px;
-    font-size: 15px;
-    line-height: 1;
-    border-radius: 5px;
-    opacity: 0.8;
-    transition: background 0.13s ease, opacity 0.13s ease;
-  }
-  .clear:hover {
-    opacity: 1;
-    background: rgba(0, 0, 0, 0.18);
-  }
-
   .menu {
     position: absolute;
     top: calc(100% + 6px);
@@ -196,7 +169,7 @@
     flex-direction: column;
     gap: 1px;
     padding: 5px;
-    background: var(--bg-1);
+    background: var(--surface);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-sm);
     box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
@@ -254,7 +227,7 @@
   .chk {
     flex-shrink: 0;
     opacity: 0;
-    color: var(--accent);
+    color: var(--bright);
   }
   .item.on .chk {
     opacity: 1;
