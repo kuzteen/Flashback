@@ -263,9 +263,9 @@ mod win {
             let ctx = d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
             let brush = ctx.CreateSolidColorBrush(
                 &D2D1_COLOR_F {
-                    r: 0x08 as f32 / 255.0,
-                    g: 0x08 as f32 / 255.0,
-                    b: 0x08 as f32 / 255.0,
+                    r: 0x0a as f32 / 255.0,
+                    g: 0x0a as f32 / 255.0,
+                    b: 0x0a as f32 / 255.0,
                     a: 0.98,
                 },
                 None,

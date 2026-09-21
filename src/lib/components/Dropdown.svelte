@@ -115,7 +115,7 @@
     flex-direction: column;
     gap: 1px;
     padding: 5px;
-    background: var(--bg-1);
+    background: var(--surface);
     border: 1px solid var(--line-strong);
     border-radius: 8px;
     box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);

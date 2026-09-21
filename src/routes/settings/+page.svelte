@@ -363,7 +363,7 @@
     transition: transform 0.18s ease, background 0.18s ease;
   }
   .switch.on {
-    background: var(--accent-deep);
+    background: var(--accent);
     border-color: transparent;
   }
   .switch.on .knob {
@@ -474,13 +474,13 @@
     width: 44px;
     height: 34px;
     color: #000;
-    background: var(--accent);
+    background: var(--bright);
     border: 1px solid transparent;
     border-radius: var(--r-sm);
     transition: background 0.15s ease, transform 0.1s ease;
   }
   .play-btn:hover {
-    background: var(--accent-deep);
+    background: var(--text-1);
   }
   .play-btn:active {
     transform: scale(0.96);

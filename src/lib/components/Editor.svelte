@@ -1408,7 +1408,7 @@
     justify-content: space-between;
     padding: 0 14px 0 0;
     border-bottom: 1px solid var(--line);
-    background: #080808;
+    background: var(--base);
     font-size: 12px;
     color: var(--text-3);
   }
@@ -1468,7 +1468,7 @@
     position: relative;
     flex: 1;
     min-height: 0;
-    background: #080808;
+    background: var(--base);
     overflow: hidden;
   }
   /* inset: 0 fija una altura definida (vía offsets) para que el vídeo, con max-height:100%,
@@ -1590,7 +1590,7 @@
     position: relative;
     flex-shrink: 0;
     border-top: 1px solid var(--line);
-    background: #080808;
+    background: var(--base);
     padding: 10px 16px 16px;
     display: flex;
     flex-direction: column;
@@ -1704,20 +1704,20 @@
   .act.share {
     padding: 7px 10px;
     color: var(--bg-0);
-    background: var(--bright);
+    background: var(--accent);
     border-color: transparent;
   }
-  .act.share:hover { opacity: 0.9; background: var(--bright); color: var(--bg-0); }
+  .act.share:hover { opacity: 0.9; background: var(--accent); color: var(--bg-0); }
   .act.export {
     padding: 7px 15px;
     gap: 7px;
     font-size: 12px;
     color: var(--bg-0);
-    background: var(--bright);
+    background: var(--accent);
     border-color: transparent;
     font-weight: 600;
   }
-  .act.export:hover { opacity: 0.9; background: var(--bright); color: var(--bg-0); }
+  .act.export:hover { opacity: 0.9; background: var(--accent); color: var(--bg-0); }
 
   /* ===== timeline ===== */
   /* Lanes y ruler al 100% siempre. El contenido dentro de .zw escala con --zoom. */
@@ -1865,7 +1865,7 @@
     width: 2px;
     height: 18px;
     border-radius: 2px;
-    background: #080808;
+    background: var(--base);
   }
   .grip.start { left: -1px; border-radius: 5px 0 0 5px; }
   .grip.end { right: -1px; border-radius: 0 5px 5px 0; }
@@ -1875,7 +1875,7 @@
     top: -7px;
     bottom: 0;
     width: 2px;
-    background: var(--bright);
+    background: var(--accent);
     z-index: 6;
     pointer-events: none;
     transform: translateX(-1px);
@@ -1888,7 +1888,7 @@
     width: 12px;
     height: 15px;
     border-radius: 3px;
-    background: var(--bright);
+    background: var(--accent);
     pointer-events: auto;
     cursor: grab;
     transition: transform 0.12s ease, opacity 0.12s ease;
@@ -2060,7 +2060,7 @@
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.55);
     pointer-events: none;
   }
-  .thumb-line { width: 2px; height: 10px; border-radius: 2px; background: #080808; }
+  .thumb-line { width: 2px; height: 10px; border-radius: 2px; background: var(--base); }
   .hfader-thumb .thumb-line { width: 10px; height: 2px; }
   /* Burbuja flotante (fixed) posicionada por JS sobre el pulgar; vive a nivel del overlay para que
      el overflow de la timeline no la recorte. translate(-50%,-100%) deja su base sobre el pulgar. */
@@ -2140,7 +2140,7 @@
   .export-fill {
     height: 100%;
     border-radius: 99px;
-    background: var(--bright);
+    background: var(--accent);
     transition: width 0.2s ease;
   }
   .export-pct {
@@ -2156,7 +2156,7 @@
     z-index: 201;
     min-width: 150px;
     padding: 5px;
-    background: var(--bg-2);
+    background: var(--surface);
     border: 1px solid var(--line-strong);
     border-radius: 9px;
     box-shadow: 0 14px 36px -10px rgba(0, 0, 0, 0.7);

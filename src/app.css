@@ -1,9 +1,12 @@
 :root {
+  --base: #0a0a0a;
+  --surface: #121212;
+
   --bg-0: #161616;
   --bg-1: #1c1c1d;
   --bg-2: #232324;
   --bg-3: #2c2c2e;
-  --bg-hover: #343436;
+  --bg-hover: rgba(255, 255, 255, 0.05);
 
   --line: rgba(255, 255, 255, 0.08);
   --line-strong: rgba(255, 255, 255, 0.15);
@@ -13,11 +16,11 @@
   --text-2: #97979c;
   --text-3: #6f6f76;
 
-  --accent: #f0f2f7;
+  --accent: #e8eaee;
   --accent-soft: #ffffff;
-  --accent-deep: #e4e7ee;
-  --accent-glow: rgba(240, 242, 247, 0.16);
-  --on-accent: #15151a;
+  --accent-deep: #d5d8de;
+  --accent-glow: rgba(232, 234, 238, 0.18);
+  --on-accent: #0a0a0a;
 
   --bright: #f0f2f7;
 
@@ -52,7 +55,7 @@ body {
 
 body {
   font-family: var(--font-ui);
-  background: #080808;
+  background: var(--base);
   color: var(--text-0);
   font-size: 15px;
   line-height: 1.45;
@@ -128,5 +131,5 @@ a {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--accent-deep);
+  background: var(--bright);
 }

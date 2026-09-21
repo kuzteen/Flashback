@@ -99,15 +99,15 @@
     background: var(--bg-hover);
     color: var(--text-0);
   }
-  /* Activo: el botón entero es el interruptor, se colorea de blanco (como Exportar). */
+  /* Activo: el botón entero es el interruptor, se colorea con el acento (como Exportar). */
   .wm-toggle.on {
-    background: var(--bright);
+    background: var(--accent);
     color: var(--bg-0);
     border-color: transparent;
     font-weight: 600;
   }
   .wm-toggle.on:hover {
-    background: var(--bright);
+    background: var(--accent);
     color: var(--bg-0);
     opacity: 0.9;
   }
@@ -139,7 +139,7 @@
     grid-template-columns: repeat(2, auto);
     gap: 6px;
     padding: 8px;
-    background: var(--bg-1);
+    background: var(--surface);
     border: 1px solid var(--line);
     border-radius: var(--r-sm);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
@@ -166,7 +166,7 @@
     background: var(--bg-hover);
   }
   .wm-screen.sel {
-    border-color: var(--bright);
+    border-color: var(--accent);
     background: var(--bg-hover);
   }
   .wm-dot {
@@ -177,6 +177,6 @@
     background: var(--text-2);
   }
   .wm-screen.sel .wm-dot {
-    background: var(--bright);
+    background: var(--accent);
   }
 </style>

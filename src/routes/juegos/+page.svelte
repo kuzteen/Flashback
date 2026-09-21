@@ -313,12 +313,12 @@
     transition: transform 0.18s ease, background 0.18s ease;
   }
   .switch.on {
-    background: var(--bright);
+    background: var(--accent);
     border-color: transparent;
   }
   .switch.on .knob {
     transform: translateX(19px);
-    background: var(--bg-1);
+    background: var(--on-accent);
   }
 
   .empty {
