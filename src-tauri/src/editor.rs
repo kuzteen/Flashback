@@ -62,10 +62,55 @@ pub use win::{
 // Edición no destructiva: cortes y mezcla viven en el índice único de app-data (no en un sidecar
 // por clip), indexados por la ruta del MP4. El original nunca se toca. No usa Media Foundation,
 // así que es común a todas las plataformas.
+// Abrir un clip en el editor y cerrarlo persiste el montaje aunque no se haya tocado nada. Un
+// montaje que no recorta, no desactiva nada y no cambia la mezcla no es una edición: se borra la
+// entrada en vez de guardarla, para que la biblioteca no marque como editados clips intactos.
+fn is_noop(edit: &ClipEdit) -> bool {
+    let m = &edit.mixer;
+    if m.sys_muted
+        || m.mic_muted
+        || (m.sys_vol - 1.0).abs() > f32::EPSILON
+        || (m.mic_vol - 1.0).abs() > f32::EPSILON
+    {
+        return false;
+    }
+    match edit.segments.as_slice() {
+        [] => true,
+        // Sin los límites originales (ediciones antiguas) no hay forma de saber si recorta, y se
+        // prefiere marcarlo de más: perder una edición real sería peor.
+        [s] => {
+            !s.disabled.unwrap_or(false)
+                && matches!(
+                    (s.bound_start_ms, s.bound_end_ms),
+                    (Some(bs), Some(be))
+                        if (s.start_ms - bs).abs() < 1.0 && (s.end_ms - be).abs() < 1.0
+                )
+        }
+        _ => false,
+    }
+}
+
 pub fn save_edit(index: String, path: String, edit: ClipEdit) -> Result<(), String> {
+    let idx = std::path::Path::new(&index);
+    if is_noop(&edit) {
+        crate::edits::remove(idx, &path);
+        return Ok(());
+    }
     let val = serde_json::to_value(&edit).map_err(|e| e.to_string())?;
-    crate::edits::save(std::path::Path::new(&index), &path, val);
+    crate::edits::save(idx, &path, val);
     Ok(())
+}
+
+// Rutas con un montaje real guardado. Filtra las entradas vacías que dejaron las versiones que
+// persistían al cerrar el editor sin haber tocado nada.
+pub fn edited_paths(index: &std::path::Path) -> Vec<String> {
+    crate::edits::entries(index)
+        .into_iter()
+        .filter(|(_, v)| {
+            serde_json::from_value::<ClipEdit>(v.clone()).map_or(true, |e| !is_noop(&e))
+        })
+        .map(|(k, _)| k)
+        .collect()
 }
 
 pub fn load_edit(index: String, path: String) -> Result<ClipEdit, String> {

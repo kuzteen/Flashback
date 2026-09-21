@@ -236,6 +236,11 @@ fn load_clip_edit(app: tauri::AppHandle, path: String) -> Result<editor::ClipEdi
 }
 
 #[tauri::command]
+fn clips_with_edits(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    Ok(editor::edited_paths(&edit_index(&app)?))
+}
+
+#[tauri::command]
 fn save_clip_edit(app: tauri::AppHandle, path: String, edit: editor::ClipEdit) -> Result<(), String> {
     editor::save_edit(edit_index(&app)?.to_string_lossy().into_owned(), path, edit)
 }
@@ -638,6 +643,7 @@ pub fn run() {
             prepare_clip_audio,
             load_clip_edit,
             save_clip_edit,
+            clips_with_edits,
             keyframe_times,
             frame_times,
             clip_fps,

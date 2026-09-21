@@ -28,6 +28,15 @@ pub fn load(index: &Path, key: &str) -> Option<Value> {
     read_map(index).remove(key)
 }
 
+pub fn entries(index: &Path) -> Vec<(String, Value)> {
+    let _g = LOCK.lock().unwrap();
+    read_map(index).into_iter().collect()
+}
+
+pub fn remove(index: &Path, key: &str) {
+    remove_many(index, std::slice::from_ref(&key.to_string()));
+}
+
 pub fn save(index: &Path, key: &str, val: Value) {
     let _g = LOCK.lock().unwrap();
     let mut map = read_map(index);
@@ -44,10 +53,16 @@ pub fn rekey(index: &Path, old: &str, new: &str) {
     }
 }
 
-pub fn remove(index: &Path, key: &str) {
+// Un borrado en lote reescribiría el índice una vez por clip; aquí se lee y se escribe una
+// sola vez para todo el lote.
+pub fn remove_many(index: &Path, keys: &[String]) {
     let _g = LOCK.lock().unwrap();
     let mut map = read_map(index);
-    if map.remove(key).is_some() {
+    let mut changed = false;
+    for key in keys {
+        changed |= map.remove(key).is_some();
+    }
+    if changed {
         let _ = write_map(index, &map);
     }
 }
