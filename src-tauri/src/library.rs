@@ -112,16 +112,25 @@ pub fn rename_clip(path: &str, new_name: &str, edit_index: &Path) -> Result<Stri
 // Envía el clip y sus sidecars a la papelera (recuperable). El borrado es la única operación
 // destructiva de la app, así que se usa la papelera del sistema en vez de un borrado directo.
 pub fn delete_clip(path: &str, edit_index: &Path) -> Result<(), String> {
-    let p = Path::new(path);
-    let mut files = vec![p.to_path_buf()];
-    for ext in SIDECARS {
-        let s = p.with_extension(ext);
-        if s.exists() {
-            files.push(s);
+    delete_clips(&[path.to_string()], edit_index)
+}
+
+// El lote va en una sola llamada a la papelera: una única operación del shell y una sola
+// entrada de deshacer para el usuario, en vez de una por clip.
+pub fn delete_clips(paths: &[String], edit_index: &Path) -> Result<(), String> {
+    let mut files = Vec::with_capacity(paths.len());
+    for path in paths {
+        let p = Path::new(path);
+        files.push(p.to_path_buf());
+        for ext in SIDECARS {
+            let s = p.with_extension(ext);
+            if s.exists() {
+                files.push(s);
+            }
         }
     }
     recycle(&files)?;
-    crate::edits::remove(edit_index, path);
+    crate::edits::remove_many(edit_index, paths);
     Ok(())
 }
 

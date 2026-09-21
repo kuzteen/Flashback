@@ -441,6 +441,11 @@ fn delete_clip(app: tauri::AppHandle, path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn delete_clips(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
+    library::delete_clips(&paths, &edit_index(&app)?)
+}
+
+#[tauri::command]
 fn list_clips(app: tauri::AppHandle) -> Vec<library::ClipInfo> {
     library::list_clips(config::library_dirs(&app))
 }
@@ -648,6 +653,7 @@ pub fn run() {
             set_watermark_corner,
             rename_clip,
             delete_clip,
+            delete_clips,
             start_replay,
             stop_replay,
             save_replay,
