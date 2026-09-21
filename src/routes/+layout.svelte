@@ -48,8 +48,7 @@
   initLocale();
 
   const nav = [
-    { href: '/', icon: 'clips-fill', labelKey: 'nav.clips' },
-    { href: '/favoritos', icon: 'bookmark-fill', labelKey: 'nav.favorites' }
+    { href: '/', icon: 'clips-fill', labelKey: 'nav.clips' }
   ];
 
   const isActive = (href: string) =>
@@ -75,6 +74,7 @@
   let micDDOpen = $state(false);
   let settingsOpen = $state(false);
   let openRow = $state<string | null>(null);
+  let gearSpin = $state(false);
 
   const secondsLabel = (s: number) => BUFFER_OPTIONS.find((o) => o.seconds === s)?.label ?? `${s}s`;
 
@@ -149,6 +149,20 @@
 
   const activeMonitor = $derived(monitors.find((m) => m.id === selectedMonitor) ?? null);
   const micName = $derived(audioInputs.find((d) => d.id === micInput)?.name ?? t('cap.noMicsShort'));
+  // El recorrido es scrollWidth - clientWidth para que el final quede al ras del borde
+  // y nunca se salga de vista; la duración escala con la distancia para velocidad constante.
+  function marquee(node: HTMLElement, _text: string) {
+    const measure = () => {
+      const over = node.scrollWidth - node.clientWidth;
+      node.classList.toggle('scroll', over > 1);
+      node.style.setProperty('--marq', `${-over}px`);
+      node.style.setProperty('--marq-dur', `${2.5 + over / 24}s`);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(node);
+    return { update: measure, destroy: () => ro.disconnect() };
+  }
 
   async function loadMonitors() {
     try {
@@ -320,6 +334,11 @@
   let frameKey = '';
 
   const gameDisabled = $derived(!!game && gameSettings.isDisabled(game));
+  const capSource = $derived(
+    selectedMonitor
+      ? (activeMonitor?.label ? displaySource(activeMonitor.label) : t('cap.screen'))
+      : game || t('cap.noGame')
+  );
 
   // Objetivo de captura: una pantalla concreta, o la ventana del juego detectado en
   // modo Aplicación. Si es modo Aplicación y NO hay juego (o está deshabilitado), no hay
@@ -517,6 +536,9 @@
     <a
       class="nav-item settings-tab"
       class:active={isActive('/settings')}
+      class:spin={gearSpin}
+      onmouseenter={() => (gearSpin = true)}
+      onanimationend={() => (gearSpin = false)}
       href="/settings"
       aria-label={t('nav.settings')}
     >
@@ -543,7 +565,11 @@
             </span>
             <span class="cap-text">
               <span class="cap-label">{t('cap.inEditor')}</span>
-              <span class="cap-proc"><span class="marq-main">{editorState.clip.title}</span></span>
+              <span class="cap-proc">
+                <span class="marq" use:marquee={editorState.clip.title}
+                  ><span class="marq-main">{editorState.clip.title}</span></span
+                >
+              </span>
             </span>
           {:else if selectedMonitor}
             <span class="cap-icon">
@@ -552,7 +578,7 @@
           {:else}
             <span class="cap-frame" style:background-image={frame ? `url(${frame})` : 'none'}></span>
             <span class="cap-icon" style="background: transparent; color: {game ? 'var(--bright)' : 'var(--text-2)'}">
-              <Icon name="gamepad" size={20} />
+              <Icon name="console" size={20} />
             </span>
           {/if}
           {#if !editorState.clip}
@@ -567,7 +593,9 @@
                 {/if}
               </span>
               <span class="cap-proc">
-                {selectedMonitor ? (activeMonitor?.label ? displaySource(activeMonitor.label) : t('cap.screen')) : game || t('cap.noGame')}
+                <span class="marq" use:marquee={capSource}
+                  ><span class="marq-main">{capSource}</span></span
+                >
               </span>
             </span>
           {/if}
@@ -576,7 +604,7 @@
         {#if !editorState.clip && pickerOpen}
           <div class="cap-menu" role="menu">
             <button class="cap-opt" class:on={!selectedMonitor} role="menuitem" onclick={(e) => backToApp(e)}>
-              <span class="opt-ico"><Icon name="gamepad" size={21} /></span>
+              <span class="opt-ico"><Icon name="console" size={21} /></span>
               <span class="opt-text">
                 <span class="opt-title">{t('cap.application')}</span>
                 <span class="opt-sub">{game || t('cap.noGame')}</span>
@@ -803,7 +831,7 @@
     align-items: center;
     gap: 6px;
     padding: 0 0 14px;
-    background: #080808;
+    background: var(--base);
   }
   .logo {
     display: grid;
@@ -853,14 +881,31 @@
     width: 3px;
     height: 22px;
     border-radius: 0 3px 3px 0;
-    background: rgba(255, 255, 255, 0.7);
-    box-shadow: 0 0 12px rgba(255, 255, 255, 0.25);
+    background: var(--accent);
   }
   .games-tab {
     margin-top: auto;
   }
   .settings-tab {
     margin-top: 6px;
+  }
+  /* Animación (no transición) disparada por una clase que se quita en animationend: la vuelta
+     siempre se completa aunque el ratón salga antes. */
+  .settings-tab.spin :global(svg) {
+    animation: gear-spin 1.8s cubic-bezier(0.45, 0.45, 0.35, 1);
+  }
+  @keyframes gear-spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .settings-tab.spin :global(svg) {
+      animation-duration: 1ms;
+    }
   }
 
   .main {
@@ -877,8 +922,7 @@
     align-items: center;
     gap: 16px;
     padding: 0 18px;
-    background: #080808;
-    border-bottom: 1px solid var(--line);
+    background: var(--base);
   }
 
   .capture-target {
@@ -908,7 +952,7 @@
     margin: 0 11px 0 -22px;
     border-radius: var(--r-sm);
     color: var(--bright);
-    background: #080808;
+    background: var(--base);
     flex-shrink: 0;
   }
   .capturing.rec .cap-icon {
@@ -939,16 +983,8 @@
     z-index: 0;
     background-size: cover;
     background-position: center;
-    filter: blur(1px);
-    -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 14%, #000 72%, transparent 100%);
+    filter: blur(1px) brightness(0.7);
     mask-image: linear-gradient(to right, transparent 0%, #000 14%, #000 72%, transparent 100%);
-  }
-  .capturing::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    z-index: 1;
-    background: linear-gradient(90deg, #080808 0%, rgba(8, 8, 8, 0.55) 42%, rgba(8, 8, 8, 0) 72%);
   }
   .cap-text {
     position: relative;
@@ -981,20 +1017,29 @@
     color: var(--text-2);
     font-weight: 500;
   }
-  .marq-main {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .marq {
+    flex: 1;
     min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
-  .marq-main.scroll {
+  /* inline-block: las transformaciones no se aplican a elementos inline no reemplazados */
+  .marq-main {
+    display: inline-block;
+  }
+  .marq:global(.scroll) {
     text-overflow: clip;
-    animation: marquee 8s linear infinite;
+  }
+  .marq:global(.scroll) .marq-main {
+    animation: marquee var(--marq-dur, 6s) ease-in-out infinite;
   }
   @keyframes marquee {
-    0%, 10% { transform: translateX(0); }
-    80% { transform: translateX(calc(-100% + 200px)); }
-    90%, 100% { transform: translateX(calc(-100% + 200px)); }
+    0%, 10% { transform: translateX(0); opacity: 1; }
+    40%, 48% { transform: translateX(var(--marq)); opacity: 1; }
+    54% { transform: translateX(var(--marq)); opacity: 0; }
+    55% { transform: translateX(0); opacity: 0; }
+    61%, 100% { transform: translateX(0); opacity: 1; }
   }
 
   .cap-menu {
@@ -1008,7 +1053,7 @@
     flex-direction: column;
     gap: 1px;
     padding: 8px;
-    background: var(--bg-1);
+    background: var(--surface);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
     box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
@@ -1165,7 +1210,7 @@
   }
   .help:hover {
     color: var(--on-accent);
-    background: var(--accent-deep);
+    background: var(--bright);
   }
   .help-tip {
     position: absolute;
@@ -1243,7 +1288,7 @@
     flex-direction: column;
     gap: 1px;
     padding: 5px;
-    background: var(--bg-1);
+    background: var(--surface);
     border: 1px solid var(--line-strong);
     border-radius: 8px;
     box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
@@ -1297,12 +1342,12 @@
     transition: transform 0.18s ease, background 0.18s ease;
   }
   .mic-opt.on .mic-switch {
-    background: var(--bright);
+    background: var(--accent);
     border-color: transparent;
   }
   .mic-opt.on .mic-knob {
     transform: translateX(16px);
-    background: var(--bg-1);
+    background: var(--on-accent);
   }
 
   .quick {
@@ -1425,7 +1470,7 @@
     flex-direction: column;
     gap: 11px;
     padding: 13px;
-    background: var(--bg-1);
+    background: var(--surface);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
     box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
@@ -1506,7 +1551,7 @@
     flex-direction: column;
     gap: 1px;
     padding: 5px;
-    background: var(--bg-1);
+    background: var(--surface);
     border: 1px solid var(--line-strong);
     border-radius: 8px;
     box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
@@ -1598,7 +1643,8 @@
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
-    border-left: 1px solid var(--line);
+    scrollbar-gutter: stable;
+    background: var(--base);
   }
 
   .logo-btn {
@@ -1618,7 +1664,7 @@
     height: 9px;
     border-radius: 999px;
     background: var(--accent);
-    box-shadow: 0 0 0 2px #080808;
+    box-shadow: 0 0 0 2px var(--base);
   }
 
   .upd-overlay {
