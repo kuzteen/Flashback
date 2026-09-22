@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { Clip } from './clips';
 import type { MixerState } from './editor-state.svelte';
+import type { OutputFormat } from './edit-model';
 
 type SavedSegment = {
   start_ms: number;
@@ -12,7 +13,7 @@ type SavedSegment = {
   disabled?: boolean | null;
 };
 
-export type ShareEdit = { segments: SavedSegment[]; mixer: MixerState };
+export type ShareEdit = { segments: SavedSegment[]; mixer: MixerState; format?: OutputFormat };
 
 const MB = 1024 * 1024;
 

@@ -38,7 +38,7 @@
     } catch {
       // fuera de Tauri
     }
-    openShare(clip, { segments: s.segments, mixer: s.mixer }, watermark, s.keptSec);
+    openShare(clip, { segments: s.segments, mixer: s.mixer, format: s.format }, watermark, s.keptSec);
   }
 </script>
 

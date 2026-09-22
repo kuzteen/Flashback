@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import type { Clip } from './clips';
 import { EditHistory } from './edit-history';
 import {
+  DEFAULT_FORMAT,
   fromSaved,
   fullClip,
   initialState,
@@ -10,6 +11,7 @@ import {
   toSaved,
   type EditState,
   type MixerState,
+  type OutputFormat,
   type SavedEdit,
   type SavedSegment,
   type Segment,
@@ -258,7 +260,7 @@ export async function exportClip(): Promise<string | undefined> {
   });
   try {
     const dst = await invoke<string>('edit_dest', { src: clip.path });
-    await invoke('export_clip', { src: clip.path, dst, edit: { segments: s.segments, mixer: s.mixer } });
+    await invoke('export_clip', { src: clip.path, dst, edit: { segments: s.segments, mixer: s.mixer, format: s.format ?? DEFAULT_FORMAT } });
     return dst;
   } finally {
     unlisten();
@@ -268,11 +270,16 @@ export async function exportClip(): Promise<string | undefined> {
 }
 
 // Se comparte el montaje, no el archivo: el backend materializa los cortes antes de arrastrar.
-export function shareEdit(): { segments: SavedSegment[]; mixer: MixerState; keptSec: number } | null {
+export function shareEdit(): {
+  segments: SavedSegment[];
+  mixer: MixerState;
+  format: OutputFormat;
+  keptSec: number;
+} | null {
   const snap = snapshot();
   const s = toSaved(snap, true);
   if (s.segments.length === 0) return null;
-  return { segments: s.segments, mixer: snap.mixer, keptSec: keptMs(snap.segments) / 1000 };
+  return { segments: s.segments, mixer: snap.mixer, format: snap.format, keptSec: keptMs(snap.segments) / 1000 };
 }
 
 export async function captureFrame(timeMs: number): Promise<string | undefined> {

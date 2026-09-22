@@ -12,6 +12,7 @@
   import Transport from './Transport.svelte';
   import Timeline from './Timeline.svelte';
   import OutputBar from './OutputBar.svelte';
+  import FormatPanel from './FormatPanel.svelte';
 
   let root = $state<HTMLDivElement | null>(null);
   let dock = $state<HTMLDivElement | null>(null);
@@ -98,7 +99,10 @@
 
 <div class="ed" bind:this={root} tabindex="-1">
   <EditorHeader onclose={close} />
-  <Viewer />
+  <div class="middle">
+    <Viewer />
+    <FormatPanel />
+  </div>
   <div class="dock" bind:this={dock} style:height={ui.dockH !== null ? `${ui.dockH}px` : null}>
     <div
       class="grip"
@@ -150,6 +154,11 @@
     flex-direction: column;
     background: var(--bg-0);
     outline: none;
+  }
+  .middle {
+    flex: 1;
+    min-height: 0;
+    display: flex;
   }
   .dock {
     position: relative;
