@@ -727,6 +727,7 @@
     color: var(--text-0);
   }
 
+    font-family: var(--font-display);
   .menu {
     position: absolute;
     top: calc(100% + 8px);
@@ -746,6 +747,7 @@
   .menu.floating {
     position: fixed;
     right: auto;
+    font-family: var(--font-display);
   }
   .menu button {
     display: flex;

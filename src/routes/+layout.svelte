@@ -1,5 +1,6 @@
 <script lang="ts">
   import '@fontsource-variable/geist';
+  import '@fontsource-variable/outfit';
   import '../app.css';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';

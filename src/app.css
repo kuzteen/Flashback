@@ -31,6 +31,7 @@
 
   --font-ui: 'Geist Variable', system-ui, -apple-system, sans-serif;
   --font-mono: var(--font-ui);
+  --font-display: 'Outfit Variable', var(--font-ui);
 
   --r-sm: 6px;
   --r-md: 9px;
@@ -51,6 +52,12 @@
 html,
 body {
   height: 100%;
+}
+
+/* Outfit solo en los titulares de página: a tamaños de interfaz se lee peor que Geist, y las
+   duraciones y el timecode dependen de las cifras tabulares de Geist para no bailar. */
+h1 {
+  font-family: var(--font-display);
 }
 
 body {
