@@ -35,7 +35,8 @@
     type QualityKey
   } from '$lib/capture-config.svelte';
   import { gameSettings, loadDisabledGames } from '$lib/games.svelte';
-  import { displaySource } from '$lib/clips';
+  import { displaySource, isScreenSource } from '$lib/clips';
+  import { ensureGameHero, gameHero } from '$lib/artwork.svelte';
   import { t, initLocale } from '$lib/i18n.svelte';
   import {
     updater,
@@ -349,6 +350,17 @@
   );
   const shownDisabled = $derived(!!shown && gameSettings.isDisabled(shown));
 
+  // En el editor la barra muestra el banner del juego del clip abierto, no el del juego que se
+  // está jugando. Las grabaciones de pantalla y los importados no tienen juego y van sin fondo.
+  const editorGame = $derived.by(() => {
+    const src = editorState.clip?.source ?? '';
+    return src && !isScreenSource(src) ? src : '';
+  });
+  const editorFrame = $derived(editorGame ? gameHero(editorGame) : null);
+  $effect(() => {
+    if (editorGame) ensureGameHero(editorGame);
+  });
+
   // Objetivo de captura: una pantalla concreta, o la ventana del juego detectado en
   // modo Aplicación. Si es modo Aplicación y NO hay juego (o está deshabilitado), no hay
   // objetivo (null): el usuario debe elegir una pantalla.
@@ -585,8 +597,13 @@
           aria-expanded={pickerOpen}
         >
           {#if editorState.clip}
-            <span class="cap-icon">
-              <Icon name="scissors" size={20} />
+            {#key editorFrame}
+              {#if editorFrame}
+                <span class="cap-frame" style:background-image={`url(${editorFrame})`}></span>
+              {/if}
+            {/key}
+            <span class="cap-icon" style:background={editorFrame ? 'transparent' : null}>
+              <Icon name="editor" size={20} />
             </span>
             <span class="cap-text">
               <span class="cap-label">{t('cap.inEditor')}</span>
@@ -1040,15 +1057,19 @@
     gap: 1px;
     min-width: 0;
     flex: 1;
-    margin-left: -4px;
+    /* El desvanecido de los bordes es para el título que se desplaza. Va en px y con un relleno
+       igual de ancho: en % dependía del ancho de la caja y se comía el trazo de la primera letra.
+       El margen negativo compensa el relleno para que el texto no se mueva. */
+    padding: 0 6px;
+    margin-left: -10px;
     overflow: hidden;
-    mask-image: linear-gradient(to right, transparent 0%, #000 1%, #000 99%, transparent 100%);
-    -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 1%, #000 99%, transparent 100%);
+    mask-image: linear-gradient(to right, transparent 0, #000 6px, #000 calc(100% - 6px), transparent 100%);
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 6px, #000 calc(100% - 6px), transparent 100%);
   }
   .cap-label {
     font-size: 12px;
     line-height: 1;
-    color: var(--text-2);
+    color: var(--text-1);
   }
   .cap-proc {
     display: flex;
@@ -1062,6 +1083,14 @@
   .capturing.idle .cap-proc {
     color: var(--text-2);
     font-weight: 500;
+  }
+  /* Sobre el arte del juego el texto se perdía en las zonas claras del banner: una sombra corta
+     lo separa de la imagen. Va en todos los estados para que la barra se lea igual con o sin
+     arte detrás. */
+  .cap-text {
+    text-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.85),
+      0 0 12px rgba(0, 0, 0, 0.55);
   }
   .marq {
     flex: 1;

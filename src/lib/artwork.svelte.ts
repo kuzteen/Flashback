@@ -18,6 +18,23 @@ export function ensureGameIcon(name: string) {
     .catch(() => (icons[name] = null));
 }
 
+// Banners con la misma idea: el editor pinta el del juego del clip abierto en la barra superior,
+// y abrir varios clips del mismo juego no debe repetir la petición.
+const heroes = $state<Record<string, string | null>>({});
+const heroAsked = new Set<string>();
+
+export function gameHero(name: string): string | null {
+  return heroes[name] ?? null;
+}
+
+export function ensureGameHero(name: string) {
+  if (heroAsked.has(name)) return;
+  heroAsked.add(name);
+  invoke<string | null>('game_hero', { name, steamAppid: null })
+    .then((url) => (heroes[name] = url ?? null))
+    .catch(() => (heroes[name] = null));
+}
+
 export function initials(name: string): string {
   const parts = name
     .replace(/[^a-zA-Z0-9 ]/g, '')
