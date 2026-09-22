@@ -991,6 +991,13 @@ mod win {
         if let Some(bps) = bitrate {
             meta.bitrate = bps.max(100_000);
         }
+        // Sin preset, el bitrate vertical se escala por píxeles de salida: el recorte amplía una
+        // ventana del origen y copiar el bitrate de 1920x1080 no siempre encaja.
+        let vertical = matches!(edit.format, crate::reframe::OutputFormat::Vertical { .. });
+        if vertical && bitrate.is_none() {
+            let (vw, vh) = crate::reframe::vertical_size(max_height);
+            meta.bitrate = crate::reframe::vertical_bitrate(meta.bitrate, meta.width, meta.height, vw, vh);
+        }
         let clip = probe(src)?;
         let probed = started.elapsed();
 
@@ -1003,6 +1010,7 @@ mod win {
         // cortes caen en keyframe. El audio no condiciona la decisión: recodificarlo cuesta una
         // fracción de lo que cuesta el vídeo, así que cabe dentro del camino sin recodificar.
         let can_pass = watermark.is_none()
+            && !vertical
             && bitrate.is_none()
             && !scaled
             && clip.in_order
@@ -1027,6 +1035,10 @@ mod win {
         }
 
         let gpu = create_gpu();
+        // La captura ya exige D3D11 por hardware, así que no hay camino por CPU para el vertical.
+        if vertical && gpu.is_none() {
+            return Err("El formato vertical necesita una GPU compatible con DirectX 11".into());
+        }
         let r = reencode_export(
             src, dst, edit, &meta, &plan, remix.as_mut(), gpu.as_ref(), watermark, max_height,
             cancel, &mut progress,
@@ -1216,8 +1228,14 @@ mod win {
 
         // Reescalado opcional (presets de tamaño de compartir): lo hace el propio procesador del
         // lector. Si rechaza el tamaño pedido se reintenta con el nativo en vez de fallar.
+        let vertical = match edit.format {
+            crate::reframe::OutputFormat::Vertical { fill } => Some(fill),
+            crate::reframe::OutputFormat::Horizontal => None,
+        };
+        // En vertical el origen se decodifica a tamaño nativo: el recorte amplía una ventana y
+        // reescalar antes solo perdería detalle. El preset se aplica al tamaño de salida.
         let (req_w, req_h) = match max_height {
-            Some(mh) if mh < meta.height => {
+            Some(mh) if mh < meta.height && vertical.is_none() => {
                 let w = (meta.width as u64 * mh as u64 / meta.height.max(1) as u64) as u32;
                 ((w + 1) & !1, (mh + 1) & !1)
             }
@@ -1227,7 +1245,7 @@ mod win {
             &v_reader,
             v_idx,
             gpu.is_some(),
-            watermark.is_some(),
+            watermark.is_some() || vertical.is_some(),
             req_w,
             req_h,
             meta.width,
@@ -1240,11 +1258,24 @@ mod win {
             unsafe { v_in.GetUINT64(&MF_MT_FRAME_SIZE) }.unwrap_or(pack2(meta.width, meta.height));
         let out_w = (out_size >> 32) as u32;
         let out_h = (out_size & 0xFFFF_FFFF) as u32;
+        let reframer = match (vertical, gpu) {
+            (Some(fill), Some(g)) => {
+                let (vw, vh) = crate::reframe::vertical_size(max_height);
+                Some(
+                    crate::reframe::win::Reframer::new(&g.device, &g.manager, out_w, out_h, vw, vh, meta.fps, fill)
+                        .map_err(mf)?,
+                )
+            }
+            _ => None,
+        };
+        // Tamaño de lo que llega al encoder: el vertical si hay Reframer, el decodificado si no.
+        let (enc_w, enc_h) = reframer.as_ref().map_or((out_w, out_h), |r| r.out_size());
+        let gpu_frames = on_gpu || reframer.is_some();
 
         // Marca de agua: se rasteriza una vez al tamaño de salida. Best-effort: si falla, se exporta
         // sin marca (no se rompe el export). El blend por frame va más abajo, antes de WriteSample.
         let logo = watermark.and_then(|c| {
-            match crate::watermark::Logo::rasterize(out_w, out_h, crate::watermark::Corner::parse(c)) {
+            match crate::watermark::Logo::rasterize(enc_w, enc_h, crate::watermark::Corner::parse(c)) {
                 Ok(l) => Some(l),
                 Err(e) => {
                     eprintln!("watermark: rasterización falló, exporto sin marca: {e:?}");
@@ -1253,24 +1284,25 @@ mod win {
             }
         });
         let gpu_logo = match (&logo, gpu) {
-            (Some(l), Some(g)) if on_gpu => l.to_gpu(&g.device).ok(),
+            (Some(l), Some(g)) if gpu_frames => l.to_gpu(&g.device).ok(),
             _ => None,
         };
 
-        let sink = create_sink(dst, gpu.filter(|_| on_gpu).map(|g| &g.manager), false).map_err(mf)?;
+        let sink = create_sink(dst, gpu.filter(|_| gpu_frames).map(|g| &g.manager), false).map_err(mf)?;
 
         let v_out = unsafe { MFCreateMediaType().map_err(mf)? };
         unsafe {
             v_out.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video).map_err(mf)?;
             v_out.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264).map_err(mf)?;
-            v_out.SetUINT64(&MF_MT_FRAME_SIZE, pack2(out_w, out_h)).map_err(mf)?;
+            v_out.SetUINT64(&MF_MT_FRAME_SIZE, pack2(enc_w, enc_h)).map_err(mf)?;
             v_out.SetUINT64(&MF_MT_FRAME_RATE, pack2(meta.fps, 1)).map_err(mf)?;
             v_out.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32).map_err(mf)?;
             v_out.SetUINT32(&MF_MT_AVG_BITRATE, meta.bitrate).map_err(mf)?;
         }
         let v_stream = unsafe { sink.AddStream(&v_out).map_err(mf)? };
         // Entrada del encoder = tipo de salida REAL del decodificador: evita desajustes de geometría.
-        unsafe { sink.SetInputMediaType(v_stream, &v_in, None).map_err(mf)? };
+        let enc_in = reframer.as_ref().map_or(&v_in, |r| r.out_type());
+        unsafe { sink.SetInputMediaType(v_stream, enc_in, None).map_err(mf)? };
 
         let a_reader = open_reader(src).map_err(mf)?;
         // El audio se recodifica siempre por este camino: cuesta una fracción de lo que cuesta el
@@ -1312,8 +1344,12 @@ mod win {
                 // Re-tiempo al hueco eliminado, idéntico al del audio: los tramos se concatenan sin
                 // huecos en la salida (mismo mapeo origen→salida que el audio para mantener el sync).
                 let out_t = (t - start_hns) + kept_before;
+                let sample = match &reframer {
+                    Some(r) => r.process(&sample, seg.crop_x.unwrap_or(0.5)).map_err(mf)?,
+                    None => sample,
+                };
                 if let Some(logo) = &logo {
-                    blend_watermark(&sample, logo, gpu_logo.as_ref(), out_w, out_h);
+                    blend_watermark(&sample, logo, gpu_logo.as_ref(), enc_w, enc_h);
                 }
                 unsafe {
                     sample.SetSampleTime(out_t).map_err(mf)?;

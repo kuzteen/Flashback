@@ -124,3 +124,326 @@ mod tests {
         assert_eq!(e.segments[0].crop_x, None);
     }
 }
+
+#[cfg(target_os = "windows")]
+pub mod win {
+    use super::{crop_rect, fit_rect, Fill, Rect};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use windows::core::{Interface, Result, IUnknown};
+    use windows::Win32::Foundation::E_POINTER;
+    use windows::Win32::Graphics::Direct2D::Common::{
+        D2D1_ALPHA_MODE_IGNORE, D2D1_BORDER_MODE_HARD, D2D1_COLOR_F, D2D1_COMPOSITE_MODE_SOURCE_OVER,
+        D2D1_PIXEL_FORMAT, D2D_RECT_F, D2D_SIZE_U,
+    };
+    use windows::Win32::Graphics::Direct2D::{
+        D2D1CreateDevice, ID2D1Bitmap1, ID2D1DeviceContext, ID2D1Effect, ID2D1SolidColorBrush,
+        CLSID_D2D1GaussianBlur, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_NONE,
+        D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
+        D2D1_GAUSSIANBLUR_OPTIMIZATION_SPEED, D2D1_GAUSSIANBLUR_PROP_BORDER_MODE,
+        D2D1_GAUSSIANBLUR_PROP_OPTIMIZATION, D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION,
+        D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, D2D1_INTERPOLATION_MODE_LINEAR,
+        D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT,
+    };
+    use windows::Win32::Graphics::Direct3D11::{
+        ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET,
+        D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+    };
+    use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
+    use windows::Win32::Graphics::Dxgi::{IDXGIDevice, IDXGISurface};
+    use windows::Win32::Media::MediaFoundation::{
+        IMF2DBuffer, IMFDXGIBuffer, IMFDXGIDeviceManager, IMFMediaType, IMFSample,
+        IMFVideoSampleAllocatorEx, MFCreateAttributes, MFCreateMediaType,
+        MFCreateVideoSampleAllocatorEx, MFMediaType_Video, MFVideoFormat_ARGB32,
+        MFVideoInterlace_Progressive, MF_E_SAMPLEALLOCATOR_EMPTY, MF_MT_ALL_SAMPLES_INDEPENDENT,
+        MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
+        MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_SA_D3D11_BINDFLAGS, MF_SA_D3D11_USAGE,
+    };
+
+    fn d2d(r: Rect) -> D2D_RECT_F {
+        D2D_RECT_F { left: r.x, top: r.y, right: r.x + r.w, bottom: r.y + r.h }
+    }
+
+    fn bgra(options: windows::Win32::Graphics::Direct2D::D2D1_BITMAP_OPTIONS) -> D2D1_BITMAP_PROPERTIES1 {
+        D2D1_BITMAP_PROPERTIES1 {
+            pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_IGNORE },
+            dpiX: 96.0,
+            dpiY: 96.0,
+            bitmapOptions: options,
+            ..Default::default()
+        }
+    }
+
+    // Recorta o encaja cada fotograma decodificado en una textura vertical, todo en la GPU y sobre
+    // el mismo device que el decodificador (la textura del fotograma no es accesible desde otro).
+    // El fotograma se copia antes a una textura propia: el decodificador entrega subtexturas de un
+    // array y Direct2D solo dibuja desde la subtextura 0.
+    pub struct Reframer {
+        ctx: ID2D1DeviceContext,
+        d3d: ID3D11DeviceContext,
+        src_tex: ID3D11Texture2D,
+        src_bmp: ID2D1Bitmap1,
+        bg_bmp: Option<ID2D1Bitmap1>,
+        blur: Option<ID2D1Effect>,
+        dim: ID2D1SolidColorBrush,
+        allocator: IMFVideoSampleAllocatorEx,
+        out_type: IMFMediaType,
+        // Un bitmap destino por textura del asignador: crearlos por fotograma costaba sin motivo.
+        targets: RefCell<HashMap<usize, ID2D1Bitmap1>>,
+        fill: Fill,
+        src_w: u32,
+        src_h: u32,
+        out_w: u32,
+        out_h: u32,
+    }
+
+    impl Reframer {
+        #[allow(clippy::too_many_arguments)]
+        pub fn new(
+            device: &ID3D11Device,
+            manager: &IMFDXGIDeviceManager,
+            src_w: u32,
+            src_h: u32,
+            out_w: u32,
+            out_h: u32,
+            fps: u32,
+            fill: Fill,
+        ) -> Result<Self> {
+            let dxgi: IDXGIDevice = device.cast()?;
+            let d2d_device = unsafe { D2D1CreateDevice(&dxgi, None)? };
+            let ctx = unsafe { d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)? };
+            let d3d = unsafe { device.GetImmediateContext()? };
+
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: src_w,
+                Height: src_h,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0) as u32,
+                CPUAccessFlags: 0,
+                MiscFlags: 0,
+            };
+            let mut t: Option<ID3D11Texture2D> = None;
+            unsafe { device.CreateTexture2D(&desc, None, Some(&mut t))? };
+            let src_tex = t.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
+            let surface: IDXGISurface = src_tex.cast()?;
+            let src_bmp = unsafe { ctx.CreateBitmapFromDxgiSurface(&surface, Some(&bgra(D2D1_BITMAP_OPTIONS_NONE)))? };
+
+            let (bg_bmp, blur) = if fill == Fill::Fit {
+                let bg = unsafe {
+                    ctx.CreateBitmap(
+                        D2D_SIZE_U { width: out_w, height: out_h },
+                        None,
+                        0,
+                        &bgra(D2D1_BITMAP_OPTIONS_TARGET),
+                    )?
+                };
+                let blur = unsafe { ctx.CreateEffect(&CLSID_D2D1GaussianBlur)? };
+                let deviation = out_w as f32 * 0.03;
+                unsafe {
+                    blur.SetValue(
+                        D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION.0 as u32,
+                        D2D1_PROPERTY_TYPE_FLOAT,
+                        &deviation.to_le_bytes(),
+                    )?;
+                    blur.SetValue(
+                        D2D1_GAUSSIANBLUR_PROP_OPTIMIZATION.0 as u32,
+                        D2D1_PROPERTY_TYPE_ENUM,
+                        &(D2D1_GAUSSIANBLUR_OPTIMIZATION_SPEED.0 as u32).to_le_bytes(),
+                    )?;
+                    // HARD: sin él el borde del fondo se aclara hacia transparente.
+                    blur.SetValue(
+                        D2D1_GAUSSIANBLUR_PROP_BORDER_MODE.0 as u32,
+                        D2D1_PROPERTY_TYPE_ENUM,
+                        &(D2D1_BORDER_MODE_HARD.0 as u32).to_le_bytes(),
+                    )?;
+                }
+                (Some(bg), Some(blur))
+            } else {
+                (None, None)
+            };
+            let dim = unsafe {
+                ctx.CreateSolidColorBrush(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.35 }, None)?
+            };
+
+            let out_type = unsafe { MFCreateMediaType()? };
+            unsafe {
+                out_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+                out_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_ARGB32)?;
+                out_type.SetUINT64(&MF_MT_FRAME_SIZE, ((out_w as u64) << 32) | out_h as u64)?;
+                out_type.SetUINT64(&MF_MT_FRAME_RATE, ((fps.max(1) as u64) << 32) | 1)?;
+                out_type.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, (1u64 << 32) | 1)?;
+                out_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
+                out_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
+            }
+
+            // El encoder retiene muestras de forma asíncrona: el asignador recicla una textura solo
+            // cuando la suelta, en vez de reservar una por fotograma o pisar una que aún se lee.
+            let allocator: IMFVideoSampleAllocatorEx = unsafe {
+                let mut raw: *mut std::ffi::c_void = std::ptr::null_mut();
+                MFCreateVideoSampleAllocatorEx(&IMFVideoSampleAllocatorEx::IID, &mut raw)?;
+                if raw.is_null() {
+                    return Err(windows::core::Error::from(E_POINTER));
+                }
+                IMFVideoSampleAllocatorEx::from_raw(raw)
+            };
+            unsafe {
+                allocator.SetDirectXManager(&manager.cast::<IUnknown>()?)?;
+                let mut attrs = None;
+                MFCreateAttributes(&mut attrs, 2)?;
+                let attrs = attrs.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
+                attrs.SetUINT32(
+                    &MF_SA_D3D11_BINDFLAGS,
+                    (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+                )?;
+                attrs.SetUINT32(&MF_SA_D3D11_USAGE, D3D11_USAGE_DEFAULT.0 as u32)?;
+                allocator.InitializeSampleAllocatorEx(4, 16, &attrs, &out_type)?;
+            }
+
+            Ok(Self {
+                ctx,
+                d3d,
+                src_tex,
+                src_bmp,
+                bg_bmp,
+                blur,
+                dim,
+                allocator,
+                out_type,
+                targets: RefCell::new(HashMap::new()),
+                fill,
+                src_w,
+                src_h,
+                out_w,
+                out_h,
+            })
+        }
+
+        pub fn out_type(&self) -> &IMFMediaType {
+            &self.out_type
+        }
+
+        pub fn out_size(&self) -> (u32, u32) {
+            (self.out_w, self.out_h)
+        }
+
+        pub fn process(&self, input: &IMFSample, crop_x: f64) -> Result<IMFSample> {
+            self.load_input(input)?;
+            let out = self.next_sample()?;
+            let target = self.target_for(&out)?;
+            let full = D2D_RECT_F { left: 0.0, top: 0.0, right: self.out_w as f32, bottom: self.out_h as f32 };
+            unsafe {
+                match (self.fill, &self.bg_bmp, &self.blur) {
+                    (Fill::Fit, Some(bg), Some(blur)) => {
+                        // Fondo: el recorte centrado a pantalla completa, desenfocado y velado para
+                        // que el vídeo de delante destaque.
+                        let cover = d2d(crop_rect(self.src_w, self.src_h, 0.5));
+                        self.ctx.SetTarget(bg);
+                        self.ctx.BeginDraw();
+                        self.ctx.DrawBitmap(&self.src_bmp, Some(&full), 1.0, D2D1_INTERPOLATION_MODE_LINEAR, Some(&cover), None);
+                        self.ctx.EndDraw(None, None)?;
+
+                        self.ctx.SetTarget(&target);
+                        self.ctx.BeginDraw();
+                        blur.SetInput(0, bg, true);
+                        let img = blur.GetOutput()?;
+                        self.ctx.DrawImage(&img, None, None, D2D1_INTERPOLATION_MODE_LINEAR, D2D1_COMPOSITE_MODE_SOURCE_OVER);
+                        self.ctx.FillRectangle(&full, &self.dim);
+                        let fg = d2d(fit_rect(self.src_w, self.src_h, self.out_w, self.out_h));
+                        self.ctx.DrawBitmap(&self.src_bmp, Some(&fg), 1.0, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, None, None);
+                        self.ctx.EndDraw(None, None)?;
+                    }
+                    _ => {
+                        let src = d2d(crop_rect(self.src_w, self.src_h, crop_x));
+                        self.ctx.SetTarget(&target);
+                        self.ctx.BeginDraw();
+                        self.ctx.DrawBitmap(&self.src_bmp, Some(&full), 1.0, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, Some(&src), None);
+                        self.ctx.EndDraw(None, None)?;
+                    }
+                }
+                self.ctx.SetTarget(None);
+            }
+            Ok(out)
+        }
+
+        // Copia GPU→GPU del fotograma a la textura de origen. Si el lector lo dio en memoria de
+        // sistema (negociación sin texturas), se sube; nunca se baja nada a la CPU.
+        fn load_input(&self, input: &IMFSample) -> Result<()> {
+            let buf = unsafe { input.GetBufferByIndex(0)? };
+            if let Ok(dxgi) = buf.cast::<IMFDXGIBuffer>() {
+                let mut tex: Option<ID3D11Texture2D> = None;
+                unsafe {
+                    dxgi.GetResource(
+                        &ID3D11Texture2D::IID,
+                        &mut tex as *mut Option<ID3D11Texture2D> as *mut *mut std::ffi::c_void,
+                    )?;
+                }
+                let tex = tex.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
+                let mut desc = D3D11_TEXTURE2D_DESC::default();
+                unsafe { tex.GetDesc(&mut desc) };
+                if desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM {
+                    return Err(windows::core::Error::new(E_POINTER, "formato de fotograma no soportado"));
+                }
+                let sub = unsafe { dxgi.GetSubresourceIndex()? };
+                let region = D3D11_BOX { left: 0, top: 0, front: 0, right: self.src_w, bottom: self.src_h, back: 1 };
+                unsafe { self.d3d.CopySubresourceRegion(&self.src_tex, 0, 0, 0, 0, &tex, sub, Some(&region)) };
+                return Ok(());
+            }
+            let b2: IMF2DBuffer = buf.cast()?;
+            let mut scan0: *mut u8 = std::ptr::null_mut();
+            let mut pitch: i32 = 0;
+            unsafe { b2.Lock2D(&mut scan0, &mut pitch)? };
+            if pitch > 0 && !scan0.is_null() {
+                unsafe {
+                    self.d3d.UpdateSubresource(&self.src_tex, 0, None, scan0 as *const std::ffi::c_void, pitch as u32, 0)
+                };
+            }
+            unsafe { b2.Unlock2D()? };
+            Ok(())
+        }
+
+        // Si todas las texturas siguen en el encoder, se espera a que suelte una; el límite evita
+        // colgar el export si el encoder se atasca.
+        fn next_sample(&self) -> Result<IMFSample> {
+            for _ in 0..2000 {
+                match unsafe { self.allocator.AllocateSample() } {
+                    Ok(s) => return Ok(s),
+                    Err(e) if e.code() == MF_E_SAMPLEALLOCATOR_EMPTY => {
+                        std::thread::sleep(std::time::Duration::from_millis(2))
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            Err(windows::core::Error::from(MF_E_SAMPLEALLOCATOR_EMPTY))
+        }
+
+        fn target_for(&self, sample: &IMFSample) -> Result<ID2D1Bitmap1> {
+            let buf = unsafe { sample.GetBufferByIndex(0)? };
+            let dxgi: IMFDXGIBuffer = buf.cast()?;
+            let mut tex: Option<ID3D11Texture2D> = None;
+            unsafe {
+                dxgi.GetResource(
+                    &ID3D11Texture2D::IID,
+                    &mut tex as *mut Option<ID3D11Texture2D> as *mut *mut std::ffi::c_void,
+                )?;
+            }
+            let tex = tex.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
+            let key = tex.as_raw() as usize;
+            if let Some(b) = self.targets.borrow().get(&key) {
+                return Ok(b.clone());
+            }
+            let surface: IDXGISurface = tex.cast()?;
+            let bmp = unsafe {
+                self.ctx.CreateBitmapFromDxgiSurface(
+                    &surface,
+                    Some(&bgra(D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW)),
+                )?
+            };
+            self.targets.borrow_mut().insert(key, bmp.clone());
+            Ok(bmp)
+        }
+    }
+}
