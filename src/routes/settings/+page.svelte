@@ -211,7 +211,7 @@
       <div class="sound-row">
         <Dropdown value={replaySound.level} options={soundOptions} onchange={setReplaySoundLevel} ariaLabel={t('settings.soundVolume')} />
         <button class="play-btn" aria-label={t('settings.testSound')} onclick={() => playReplaySound()}>
-          <Icon name="play" size={18} />
+          <Icon name="play-fill" size={18} />
         </button>
       </div>
     </div>
@@ -221,7 +221,7 @@
     <span class="label panel-title">{t('settings.section.storage')}</span>
     <div class="setting">
       <div class="info"><h3>{t('settings.clipsFolder')}</h3><p class="mono path">{folder}</p><p>{t('settings.clipsFolder.desc')}</p></div>
-      <button class="btn" onclick={changeFolder} disabled={changingFolder}><Icon name="folder" size={15} /> {t('settings.change')}</button>
+      <button class="btn" onclick={changeFolder} disabled={changingFolder}><Icon name="folder-open" size={16} sw={2} /> {t('settings.change')}</button>
     </div>
     <div class="setting">
       <div class="info"><h3>{t('settings.autoDelete')}</h3><p>{t('settings.autoDelete.desc')}</p></div>

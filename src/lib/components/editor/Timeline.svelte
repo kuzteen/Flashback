@@ -227,7 +227,7 @@
     top: 0;
     bottom: 0;
     z-index: 1;
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--line);
     box-shadow:
       inset 1px 0 0 var(--accent),
       inset -1px 0 0 var(--accent);
@@ -257,9 +257,9 @@
     position: absolute;
     top: 2px;
     left: 50%;
-    width: 13px;
-    height: 13px;
-    border-radius: 3px 3px 7px 7px;
+    width: 10px;
+    height: 18px;
+    border-radius: 3px;
     background: var(--accent);
     transform: translateX(-50%);
     pointer-events: auto;

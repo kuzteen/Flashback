@@ -57,7 +57,8 @@ function blank(): EditorState {
     error: null,
     durationMs: 0,
     frameTimes: [],
-    fps: 30,
+    // 0 = aún no se sabe: la cabecera muestra un guion y el paso de fotograma usa 30.
+    fps: 0,
     sysPeaks: null,
     micPeaks: null,
     mixPeaks: null,

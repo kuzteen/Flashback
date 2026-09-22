@@ -12,9 +12,6 @@
     scrollLeft,
   }: { kind: 'sys' | 'mic'; mpp: number; width: number; viewW: number; scrollLeft: number } = $props();
 
-  const HUE = '#f2f2f2';
-  const DIM = 'rgba(242, 242, 242, 0.16)';
-  const BASE = 'rgba(255, 255, 255, 0.12)';
 
   const mixer = $derived(editorState.edit.mixer);
   const vol = $derived(kind === 'sys' ? mixer.sys_vol : mixer.mic_vol);
@@ -125,11 +122,13 @@
         (s.disabled || muted ? off : on).rect(x, mid - y, 1, y * 2);
       }
     }
-    ctx.fillStyle = BASE;
+    // El lienzo no entiende var(): los colores se leen de los tokens del tema al pintar.
+    const css = getComputedStyle(c);
+    ctx.fillStyle = css.getPropertyValue('--line').trim();
     ctx.fill(base);
-    ctx.fillStyle = DIM;
+    ctx.fillStyle = css.getPropertyValue('--line-strong').trim();
     ctx.fill(off);
-    ctx.fillStyle = HUE;
+    ctx.fillStyle = css.getPropertyValue('--text-0').trim();
     ctx.fill(on);
   }
 
@@ -291,9 +290,9 @@
     position: absolute;
     top: 50%;
     left: calc(var(--v) * 100%);
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
+    width: 16px;
+    height: 10px;
+    border-radius: 3px;
     background: var(--text-0);
     transform: translate(-50%, -50%);
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);

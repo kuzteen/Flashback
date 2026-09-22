@@ -171,7 +171,7 @@
 
 <div class="row">
   <div class="head">
-    <span class="ico"><Icon name="clips" size={16} /></span>
+    <span class="ico"><Icon name="clips-fill" size={16} /></span>
     <span class="name">{t('ed.video')}</span>
   </div>
   <div
@@ -265,8 +265,8 @@
     top: 9px;
     bottom: 9px;
     border-radius: 6px;
-    background: linear-gradient(to bottom, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.1));
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+    background: linear-gradient(to bottom, var(--bg-3), var(--bg-2));
+    box-shadow: inset 0 0 0 1px var(--line-strong);
     transition: left 0.18s ease, box-shadow 0.14s ease, transform 0.14s ease;
   }
   .lane.trimming .block,
@@ -277,11 +277,7 @@
     box-shadow: inset 0 0 0 2px var(--accent);
   }
   .block.disabled {
-    background: repeating-linear-gradient(
-      -45deg,
-      rgba(255, 255, 255, 0.05) 0 6px,
-      rgba(255, 255, 255, 0.02) 6px 12px
-    );
+    background: repeating-linear-gradient(-45deg, var(--bg-hover) 0 6px, transparent 6px 12px);
   }
   .block.lifted {
     z-index: 2;

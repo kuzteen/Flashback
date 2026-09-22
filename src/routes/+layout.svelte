@@ -809,7 +809,7 @@
         <div class="quick">
           <span class="pill combo recpill mono" class:on={recording}>
             <button class="seg rec-seg" onclick={toggleRecording}>
-              <span class="rec-ico"><Icon name={recording ? 'stop' : 'play'} size={15} /></span>
+              <span class="rec-ico"><Icon name={recording ? 'pause' : 'play-fill'} size={15} /></span>
               <span class="rec-label">{recording ? t('cap.stopRec') : t('cap.startRec')}</span>
             </button>
             <span class="sep">|</span>

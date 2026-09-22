@@ -81,35 +81,29 @@
     display: inline-flex;
   }
 
+  /* Mismo botón que Compartir y Exportar (38 px, mismo fondo, borde y radio), solo con el logo.
+     Sin relleno blanco al activarse: el estado lo dice el logo (apagado / blanco) y el borde. */
   .wm-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    /* Mismo alto que el botón Exportar (.act.export): padding vertical 7px + logo 16px + borde 1px. */
-    padding: 7px 10px;
-    font-size: 12px;
-    color: var(--text-1);
-    background: var(--bg-2);
-    border: 1px solid var(--line);
+    width: 38px;
+    height: 38px;
+    display: grid;
+    place-items: center;
+    color: var(--text-3);
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
     border-radius: var(--r-sm);
-    white-space: nowrap;
     transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
   }
   .wm-toggle:hover {
-    background: var(--bg-hover);
-    color: var(--text-0);
+    background: var(--bg-2);
+    color: var(--text-1);
   }
-  /* Activo: el botón entero es el interruptor, se colorea con el acento (como Exportar). */
   .wm-toggle.on {
-    background: var(--accent);
-    color: var(--bg-0);
-    border-color: transparent;
-    font-weight: 600;
+    color: var(--text-0);
+    border-color: var(--text-3);
   }
   .wm-toggle.on:hover {
-    background: var(--accent);
-    color: var(--bg-0);
-    opacity: 0.9;
+    color: var(--text-0);
   }
   /* Logo de Flashback (isotipo mono) como máscara: se recolorea con currentColor, así sigue el
      color del botón (claro inactivo, negro cuando está activo sobre el fondo blanco). */

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getCurrentWindow } from '@tauri-apps/api/window';
+  import Icon from './Icon.svelte';
   import { t } from '$lib/i18n.svelte';
 
   const appWindow = getCurrentWindow();
@@ -20,7 +21,7 @@
 
 <div class="controls">
   <button class="ctl" aria-label={t('win.minimize')} onclick={() => appWindow.minimize()}>
-    <svg viewBox="0 0 10 10" width="10" height="10"><path d="M1 5h8" /></svg>
+    <Icon name="win-min" size={14} />
   </button>
 
   <button
@@ -28,18 +29,11 @@
     aria-label={maximized ? t('win.restore') : t('win.maximize')}
     onclick={() => appWindow.toggleMaximize()}
   >
-    {#if maximized}
-      <svg viewBox="0 0 10 10" width="10" height="10">
-        <rect x="1" y="2.5" width="5.5" height="5.5" />
-        <path d="M3 2.5V1h6v6H7.5" />
-      </svg>
-    {:else}
-      <svg viewBox="0 0 10 10" width="10" height="10"><rect x="1" y="1" width="8" height="8" /></svg>
-    {/if}
+    <Icon name="win-max" size={15} />
   </button>
 
   <button class="ctl close" aria-label={t('win.close')} onclick={() => appWindow.close()}>
-    <svg viewBox="0 0 10 10" width="10" height="10"><path d="M1 1l8 8M9 1l-8 8" /></svg>
+    <Icon name="close-fill" size={12} />
   </button>
 </div>
 
@@ -54,11 +48,6 @@
     place-items: center;
     color: var(--text-2);
     transition: background 0.14s ease, color 0.14s ease;
-  }
-  .ctl svg {
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1;
   }
   .ctl:hover {
     background: var(--bg-2);

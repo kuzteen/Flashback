@@ -2,6 +2,7 @@
   import { untrack } from 'svelte';
   import { editorState, setDuration } from '$lib/editor-state.svelte';
   import { t } from '$lib/i18n.svelte';
+  import { formatTimecode } from '$lib/timeline-math';
   import { playback } from './playback.svelte';
   import { ui } from './ui.svelte';
   import Transport from './Transport.svelte';
@@ -56,13 +57,19 @@
 
   const frac = $derived(playback.kept > 0 ? Math.min(1, playback.outPos / playback.kept) : 0);
   let progEl = $state<HTMLDivElement | null>(null);
-  let progDrag = false;
+  let progDrag = $state(false);
+  // Posición bajo el puntero (0..1) para la burbuja de tiempo: se ve adónde se salta antes de
+  // hacer clic.
+  let hoverFrac = $state<number | null>(null);
+
+  function fracAt(clientX: number): number {
+    if (!progEl) return 0;
+    const r = progEl.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (clientX - r.left) / Math.max(1, r.width)));
+  }
 
   function progAt(clientX: number) {
-    if (!progEl) return;
-    const r = progEl.getBoundingClientRect();
-    const f = Math.max(0, Math.min(1, (clientX - r.left) / Math.max(1, r.width)));
-    playback.seekOutput(f * playback.kept);
+    playback.seekOutput(fracAt(clientX) * playback.kept);
   }
 
   function onProgDown(e: PointerEvent) {
@@ -75,6 +82,7 @@
   }
 
   function onProgMove(e: PointerEvent) {
+    hoverFrac = fracAt(e.clientX);
     if (progDrag) progAt(e.clientX);
   }
 
@@ -115,19 +123,30 @@
 </div>
 
 {#if ui.fs && ui.fsCtrlShow}
-  <div
-    class="fs-prog"
-    bind:this={progEl}
-    role="presentation"
-    onpointerdown={onProgDown}
-    onpointermove={onProgMove}
-    onpointerup={onProgUp}
-    onpointercancel={onProgUp}
-  >
-    <div class="track">
-      <div class="fill" style:width="{frac * 100}%"></div>
-      <div class="knob" style:left="{frac * 100}%"></div>
+  <div class="fs-bar">
+    <span class="fs-time mono">{formatTimecode(playback.outPos)}</span>
+    <div
+      class="fs-prog"
+      class:active={progDrag || hoverFrac !== null}
+      bind:this={progEl}
+      role="presentation"
+      onpointerdown={onProgDown}
+      onpointermove={onProgMove}
+      onpointerup={onProgUp}
+      onpointercancel={onProgUp}
+      onpointerleave={() => (hoverFrac = null)}
+    >
+      <div class="track">
+        <div class="fill" style:width="{frac * 100}%"></div>
+        <div class="knob" style:left="{frac * 100}%"></div>
+      </div>
+      {#if hoverFrac !== null}
+        <span class="hover-time mono" style:left="{hoverFrac * 100}%">
+          {formatTimecode(hoverFrac * playback.kept)}
+        </span>
+      {/if}
     </div>
+    <span class="fs-time end mono">{formatTimecode(playback.kept)}</span>
   </div>
   <Transport floating />
 {/if}
@@ -191,23 +210,46 @@
   .prep.err {
     color: var(--rec);
   }
-  .fs-prog {
+  .fs-bar {
     position: fixed;
     left: 40px;
     right: 40px;
-    bottom: 20px;
+    bottom: 22px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    z-index: 10000;
+  }
+  .fs-time {
+    min-width: 64px;
+    font-size: 12px;
+    color: var(--text-0);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  }
+  .fs-time.end {
+    text-align: right;
+  }
+  /* Fina en reposo y más gruesa al pasar o arrastrar; el punto solo aparece entonces. El área
+     de clic es más alta que la pista para no tener que apuntar a 4 px. */
+  .fs-prog {
+    position: relative;
+    flex: 1;
     height: 22px;
     display: flex;
     align-items: center;
     cursor: pointer;
-    z-index: 10000;
+    touch-action: none;
   }
   .track {
     position: relative;
     width: 100%;
-    height: 6px;
+    height: 4px;
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.25);
+    background: rgba(255, 255, 255, 0.22);
+    transition: height 0.15s ease;
+  }
+  .fs-prog.active .track {
+    height: 7px;
   }
   .fill {
     height: 100%;
@@ -217,11 +259,29 @@
   .knob {
     position: absolute;
     top: 50%;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: var(--accent);
-    transform: translate(-50%, -50%);
+    width: 18px;
+    height: 11px;
+    border-radius: 3px;
+    background: var(--accent-soft);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+    transform: translate(-50%, -50%) scale(0);
+    transition: transform 0.15s ease;
+    pointer-events: none;
+  }
+  .fs-prog.active .knob {
+    transform: translate(-50%, -50%) scale(1);
+  }
+  .hover-time {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    transform: translateX(-50%);
+    padding: 4px 8px;
+    font-size: 11.5px;
+    color: var(--text-0);
+    white-space: nowrap;
+    background: rgba(18, 18, 20, 0.8);
+    border: 1px solid var(--line);
+    border-radius: 6px;
     pointer-events: none;
   }
 </style>

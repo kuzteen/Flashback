@@ -11,7 +11,7 @@
 
 {#snippet controls()}
   <button class="tb" aria-label={t('ed.goStart')} data-tip={t('ed.goStart')} onclick={() => playback.seekOutput(0)}>
-    <Icon name="skip-back" size={19} />
+    <Icon name="skip-back" size={21} />
   </button>
   <button class="tb" aria-label={t('ed.prevFrame')} data-tip={t('ed.prevFrame')} onclick={() => playback.stepFrame(-1)}>
     <Icon name="step-back" size={19} />
@@ -21,13 +21,13 @@
     aria-label={playback.playing ? t('ed.pause') : t('ed.play')}
     onclick={() => playback.toggle()}
   >
-    <Icon name={playback.playing ? 'stop' : 'play'} size={18} />
+    <Icon name={playback.playing ? 'pause' : 'play-fill'} size={22} />
   </button>
   <button class="tb" aria-label={t('ed.nextFrame')} data-tip={t('ed.nextFrame')} onclick={() => playback.stepFrame(1)}>
     <Icon name="step-fwd" size={19} />
   </button>
   <button class="tb" aria-label={t('ed.goEnd')} data-tip={t('ed.goEnd')} onclick={() => playback.seekOutput(playback.kept)}>
-    <Icon name="skip-fwd" size={19} />
+    <Icon name="skip-fwd" size={21} />
   </button>
 {/snippet}
 
@@ -47,11 +47,10 @@
 {/snippet}
 
 {#if floating}
-  <div class="float">
-    {@render controls()}
-    <span class="vsep"></span>
-    {@render extras()}
-  </div>
+  <!-- Dos paneles: la reproducción queda centrada en la pantalla y captura / pantalla completa
+       aparte a la derecha, para que el play no se desplace del centro por los extras. -->
+  <div class="float">{@render controls()}</div>
+  <div class="float side">{@render extras()}</div>
 {:else}
   <div class="transport">
     <span class="time mono">
@@ -73,8 +72,12 @@
     padding: 0 16px;
     border-bottom: 1px solid var(--line);
   }
+  /* Mismo recorte que la duración de las tarjetas: los dígitos no tienen descendente y el hueco
+     que la fuente les reserva los dejaba por encima del centro de la barra. */
   .time {
     font-size: 12.5px;
+    line-height: 1;
+    text-box: trim-both cap alphabetic;
     color: var(--text-2);
   }
   .cur {
@@ -107,43 +110,65 @@
     color: var(--text-0);
     background: var(--bg-hover);
   }
+  /* Sin círculo: el play es el control principal por tamaño y por color (blanco pleno frente al
+     gris de los demás), no por un relleno que pesaba como el botón de exportar. */
   .play {
     width: 40px;
     height: 40px;
-    margin: 0 6px;
+    margin: 0 4px;
     display: grid;
     place-items: center;
-    color: var(--on-accent);
-    background: var(--accent);
-    border-radius: 50%;
+    color: var(--text-0);
+    border-radius: var(--r-sm);
     transition: background 0.14s ease, transform 0.12s ease;
   }
   .play:hover {
-    background: var(--accent-soft);
+    background: var(--bg-hover);
   }
   .play:active {
     transform: scale(0.95);
   }
+  /* Paneles de cristal sobre el vídeo: las dos con el mismo alto para quedar alineados, y un
+     brillo interior de 1 px arriba que les da volumen sin añadir color. */
   .float {
     position: fixed;
     left: 50%;
-    bottom: 58px;
+    bottom: 64px;
     transform: translateX(-50%);
     display: flex;
     align-items: center;
-    gap: 4px;
-    padding: 8px 12px;
-    background: rgba(18, 18, 20, 0.72);
-    backdrop-filter: blur(14px);
-    border: 1px solid rgba(255, 255, 255, 0.09);
-    border-radius: 16px;
-    box-shadow: 0 16px 44px rgba(0, 0, 0, 0.55);
+    gap: 2px;
+    height: 56px;
+    padding: 0 8px;
+    background: rgba(18, 18, 20, 0.62);
+    backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.06),
+      0 18px 48px -12px rgba(0, 0, 0, 0.6);
     z-index: 10000;
   }
-  .vsep {
-    width: 1px;
-    height: 20px;
-    margin: 0 6px;
+  .float.side {
+    left: auto;
+    right: 40px;
+    transform: none;
+  }
+  .float .tb {
+    width: 40px;
+    height: 40px;
+    border-radius: var(--r-sm);
+    color: var(--text-1);
+  }
+  .float .play {
+    width: 46px;
+    height: 46px;
+    margin: 0 4px;
+    border-radius: var(--r-md);
+  }
+  /* Sobre vídeo, el hover de la barra normal (5%) no se ve: aquí va más marcado. */
+  .float .tb:hover,
+  .float .play:hover {
     background: var(--line-strong);
   }
 </style>

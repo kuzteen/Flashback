@@ -5,9 +5,7 @@
   import { editorState, exportClip, shareEdit } from '$lib/editor-state.svelte';
   import { openShare } from '$lib/share.svelte';
   import { refreshLibrary } from '$lib/library.svelte';
-  import { formatTimecode } from '$lib/timeline-math';
   import { t } from '$lib/i18n.svelte';
-  import { playback } from './playback.svelte';
   import { ui } from './ui.svelte';
   import ToolsMenu from './ToolsMenu.svelte';
 
@@ -48,17 +46,13 @@
   <ToolsMenu />
   <div class="right">
     <WatermarkToggle />
-    <span class="dur mono" aria-label={t('ed.finalDuration')} data-tip={t('ed.finalDuration')}>
-      <Icon name="clock" size={14} sw={2} />
-      {formatTimecode(playback.kept)}
-    </span>
     <button class="btn" onclick={onShare} disabled={editorState.exporting}>
       <Icon name="share" size={16} />
       {t('card.share')}
     </button>
-    <button class="btn primary" onclick={onExport} disabled={editorState.exporting}>
+    <button class="btn" onclick={onExport} disabled={editorState.exporting}>
       {editorState.exporting ? t('ed.exporting') : t('ed.export')}
-      <Icon name="export" size={16} />
+      <Icon name="export" size={16} sw={2.2} />
     </button>
   </div>
 </div>
@@ -80,14 +74,6 @@
     align-items: center;
     gap: 10px;
   }
-  .dur {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    margin: 0 6px;
-    font-size: 12.5px;
-    color: var(--text-1);
-  }
   .btn {
     display: inline-flex;
     align-items: center;
@@ -104,15 +90,6 @@
   }
   .btn:hover:not(:disabled) {
     background: var(--bg-2);
-  }
-  .btn.primary {
-    color: var(--on-accent);
-    background: var(--accent);
-    border-color: var(--accent);
-  }
-  .btn.primary:hover:not(:disabled) {
-    background: var(--accent-soft);
-    border-color: var(--accent-soft);
   }
   .btn:disabled {
     opacity: 0.5;

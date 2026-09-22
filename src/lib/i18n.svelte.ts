@@ -327,7 +327,6 @@ const en: Record<string, string> = {
   'ed.tools': 'Tools',
   'ed.video': 'Video',
   'ed.showInFolder': 'Show in folder',
-  'ed.finalDuration': 'Final duration',
   'key.space': 'Space',
   'key.del': 'Del',
 
@@ -625,7 +624,6 @@ const es: Record<string, string> = {
   'ed.tools': 'Herramientas',
   'ed.video': 'Vídeo',
   'ed.showInFolder': 'Mostrar en carpeta',
-  'ed.finalDuration': 'Duración final',
   'key.space': 'Espacio',
   'key.del': 'Supr',
 

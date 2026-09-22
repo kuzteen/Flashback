@@ -29,6 +29,9 @@
 
   --gold: #f4c95d;
 
+  --link: #5b9dff;
+  --link-hover: #8ab6ff;
+
   --font-ui: 'Geist Variable', system-ui, -apple-system, sans-serif;
   --font-mono: var(--font-ui);
   --font-display: 'Outfit Variable', var(--font-ui);

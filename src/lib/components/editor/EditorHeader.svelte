@@ -21,6 +21,9 @@
     }
   });
 
+  // Redondeado: la captura es de framerate variable y el backend da la media, con decimales.
+  const fps = $derived(editorState.fps > 0 ? `${Math.round(editorState.fps)} FPS` : '– FPS');
+
   async function reveal() {
     const p = editorState.clip?.path;
     if (!p) return;
@@ -35,7 +38,7 @@
 <header class="head">
   <div class="nav">
     <button
-      class="ib prev"
+      class="ib"
       aria-label={t('ed.prevClip')}
       data-tip={t('ed.prevClip')}
       data-tip-pos="below"
@@ -43,29 +46,29 @@
       disabled={!hasPrev || editorState.exporting}
       onclick={() => navigateClip(-1)}
     >
-      <Icon name="chevron-down" size={18} sw={2.2} />
+      <Icon name="arrow-left" size={18} />
     </button>
     <button
-      class="ib next"
+      class="ib"
       aria-label={t('ed.nextClip')}
       data-tip={t('ed.nextClip')}
       data-tip-pos="below"
       disabled={!hasNext || editorState.exporting}
       onclick={() => navigateClip(1)}
     >
-      <Icon name="chevron-down" size={18} sw={2.2} />
+      <Icon name="arrow-right" size={18} />
     </button>
   </div>
 
-  <div class="titles">
-    <h2 class="title">{editorState.clip?.title ?? ''}</h2>
-    <div class="meta mono">
-      <span>{date}</span>
-      <span class="dot">•</span>
-      <span>{formatSize(editorState.clip?.sizeBytes ?? 0)}</span>
-      <span class="dot">•</span>
-      <button class="link" onclick={reveal} disabled={!editorState.clip?.path}>{t('ed.showInFolder')}</button>
-    </div>
+  <!-- Sin título: ya lo muestra la barra superior mientras el editor está abierto. -->
+  <div class="meta mono">
+    <span>{date}</span>
+    <span class="dot">•</span>
+    <span>{formatSize(editorState.clip?.sizeBytes ?? 0)}</span>
+    <span class="dot">•</span>
+    <span>{fps}</span>
+    <span class="dot">•</span>
+    <button class="link" onclick={reveal} disabled={!editorState.clip?.path}>{t('ed.showInFolder')}</button>
   </div>
 
   <div class="actions">
@@ -98,7 +101,7 @@
       data-tip-align="end"
       onclick={onclose}
     >
-      <Icon name="close" size={18} sw={2} />
+      <Icon name="close-fill" size={16} />
     </button>
   </div>
 </header>
@@ -109,7 +112,7 @@
     display: flex;
     align-items: center;
     gap: 14px;
-    height: 56px;
+    height: 46px;
     padding: 0 14px 0 10px;
     background: var(--base);
     border-bottom: 1px solid var(--line);
@@ -134,51 +137,35 @@
   .ib:disabled {
     opacity: 0.3;
   }
-  /* El chevron del set apunta hacia abajo; girarlo evita meter dos iconos más. */
-  .prev :global(svg) {
-    transform: rotate(90deg);
-  }
-  .next :global(svg) {
-    transform: rotate(-90deg);
-  }
-  .titles {
+  .meta {
     flex: 1;
     min-width: 0;
     display: flex;
-    flex-direction: column;
-    gap: 3px;
-  }
-  .title {
-    font-family: var(--font-display);
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text-0);
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    letter-spacing: 0.03em;
+    color: var(--text-2);
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .meta {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    font-size: 11px;
-    letter-spacing: 0.04em;
-    color: var(--text-3);
-    white-space: nowrap;
   }
   .dot {
     color: var(--text-3);
   }
+  /* Azul de enlace: es la única acción de la línea y tiene que distinguirse de los datos. */
   .link {
     font: inherit;
     letter-spacing: inherit;
-    color: var(--text-2);
+    color: var(--link);
     padding: 0;
     transition: color 0.14s ease;
   }
   .link:hover:not(:disabled) {
-    color: var(--text-0);
+    color: var(--link-hover);
     text-decoration: underline;
+  }
+  .link:disabled {
+    color: var(--text-3);
   }
   .actions {
     display: flex;

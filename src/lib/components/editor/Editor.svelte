@@ -119,7 +119,7 @@
 
   {#if ui.shot}
     <div class="shot" class:fs={ui.fs}>
-      <span class="check"><Icon name="check" size={15} /></span>
+      <span class="check"><Icon name="camera" size={15} /></span>
       <span>{t('ed.shotSaved')}</span>
       <button onclick={() => ui.openShot()}>{t('ed.shotOpen')}</button>
     </div>
@@ -158,20 +158,36 @@
     display: flex;
     flex-direction: column;
     background: var(--bg-0);
-    border-top: 1px solid var(--line);
   }
   .grip {
     position: absolute;
-    top: -4px;
+    top: -5px;
     left: 0;
     right: 0;
-    height: 8px;
+    height: 10px;
     z-index: 5;
     cursor: ns-resize;
     touch-action: none;
   }
-  .grip:hover {
-    background: linear-gradient(to bottom, transparent 3px, var(--line-strong) 3px, var(--line-strong) 5px, transparent 5px);
+  /* Asa visible centrada, encima del play: sin ella nada decía que el borde se puede arrastrar.
+     La franja de agarre sigue siendo todo el ancho. */
+  .grip::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: 50%;
+    width: 36px;
+    height: 4px;
+    margin-left: -18px;
+    border-radius: 999px;
+    background: var(--line-strong);
+    transition: background 0.14s ease, width 0.14s ease, margin 0.14s ease;
+  }
+  .grip:hover::after,
+  .grip:active::after {
+    width: 48px;
+    margin-left: -24px;
+    background: var(--text-3);
   }
 
   /* Tooltips propios: el title nativo es el de Chromium y desentona con la app. Cualquier
@@ -252,7 +268,7 @@
     padding: 9px 12px;
     font-size: 13px;
     color: var(--text-0);
-    background: rgba(18, 18, 20, 0.82);
+    background: rgba(18, 18, 20, 0.72);
     backdrop-filter: blur(12px);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
