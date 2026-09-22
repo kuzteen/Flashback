@@ -335,13 +335,18 @@
   let game = $state('');
   let frame = $state('');
   let frameKey = '';
+  let framePending = '';
+  // Nombre que se PINTA. `game` es la verdad para la captura y se actualiza al instante; este
+  // espera a que el banner esté listo para que el título y el fondo entren a la vez.
+  let shown = $state('');
 
   const gameDisabled = $derived(!!game && gameSettings.isDisabled(game));
   const capSource = $derived(
     selectedMonitor
       ? (activeMonitor?.label ? displaySource(activeMonitor.label) : t('cap.screen'))
-      : game || t('cap.noGame')
+      : shown || t('cap.noGame')
   );
+  const shownDisabled = $derived(!!shown && gameSettings.isDisabled(shown));
 
   // Objetivo de captura: una pantalla concreta, o la ventana del juego detectado en
   // modo Aplicación. Si es modo Aplicación y NO hay juego (o está deshabilitado), no hay
@@ -353,34 +358,50 @@
       const detected = (await invoke<Detected | null>('detect_game')) ?? null;
       game = detected?.name ?? '';
       if (!detected) {
+        shown = '';
         frame = '';
         frameKey = '';
+        framePending = '';
         return;
       }
       const key = detected.steam_appid ? `steam:${detected.steam_appid}` : `name:${detected.name}`;
-      if (key !== frameKey || !frame) {
-        const url = await invoke<string | null>('game_hero', {
-          name: detected.name,
-          steamAppid: detected.steam_appid
-        });
-        if (url) {
-          frame = url;
-          frameKey = key;
-        }
+      if (key === frameKey) {
+        shown = detected.name;
+        return;
       }
+      // Una sola petición por juego: al evento le sigue el sondeo, y sin esto el segundo
+      // repetiría la descarga mientras la primera sigue en vuelo.
+      if (key === framePending) return;
+      framePending = key;
+      const url = await invoke<string | null>('game_hero', {
+        name: detected.name,
+        steamAppid: detected.steam_appid
+      });
+      // Si mientras se descargaba cambiaste de juego, manda el nuevo.
+      if (framePending !== key) return;
+      // Commit único: el juego sin arte también pasa por aquí, para que su nombre no se quede
+      // esperando un banner que no existe.
+      frame = url ?? '';
+      frameKey = key;
+      shown = detected.name;
     } catch {
       // fuera de Tauri (preview en navegador)
     }
   }
 
+  // El watcher nativo avisa al cambiar de juego, así que el fondo y el nombre aparecen al
+  // instante en vez de esperar al siguiente sondeo. El intervalo se queda de red de seguridad
+  // por si algún cambio no genera evento (y de paso barre procesos mucho menos a menudo).
   $effect(() => {
     refresh();
     loadMonitors();
     loadAudioInputs();
     loadDisabledGames();
-    const id = setInterval(refresh, 2000);
+    const un = listen('game-changed', () => refresh());
+    const id = setInterval(refresh, 10000);
     return () => {
       clearInterval(id);
+      un.then((u) => u());
     };
   });
 
@@ -554,7 +575,7 @@
       <div class="capture-target">
         <button
           class="capturing"
-          class:idle={!selectedMonitor && !game && !editorState.clip}
+          class:idle={!selectedMonitor && !shown && !editorState.clip}
           class:screen={!!selectedMonitor}
           class:rec={recording}
           class:open={pickerOpen}
@@ -579,8 +600,13 @@
               {#if recording}<span class="rec-dot"></span>{:else}<Icon name="monitor" size={20} />{/if}
             </span>
           {:else}
-            <span class="cap-frame" style:background-image={frame ? `url(${frame})` : 'none'}></span>
-            <span class="cap-icon" style="background: transparent; color: {game ? 'var(--bright)' : 'var(--text-2)'}">
+            <!-- key: al cambiar de banner el elemento se recrea y la animación vuelve a correr. -->
+            {#key frame}
+              {#if frame}
+                <span class="cap-frame" style:background-image={`url(${frame})`}></span>
+              {/if}
+            {/key}
+            <span class="cap-icon" style="background: transparent; color: {shown ? 'var(--bright)' : 'var(--text-2)'}">
               <Icon name="console" size={20} />
             </span>
           {/if}
@@ -589,10 +615,10 @@
               <span class="cap-label">
                 {#if selectedMonitor}
                   {recording ? t('cap.recordingScreen') : t('cap.screenReady')}
-                {:else if game && gameDisabled}
+                {:else if shownDisabled}
                   {t('cap.captureDisabled')}
                 {:else}
-                  {game ? t('cap.capturingClips') : t('cap.idle')}
+                  {shown ? t('cap.capturingClips') : t('cap.idle')}
                 {/if}
               </span>
               <span class="cap-proc">
@@ -990,6 +1016,20 @@
     background-position: center;
     filter: blur(1px) brightness(0.7);
     mask-image: linear-gradient(to right, transparent 0%, #000 14%, #000 72%, transparent 100%);
+    animation: frame-in 0.34s ease-out both;
+  }
+  @keyframes frame-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cap-frame {
+      animation: none;
+    }
   }
   .cap-text {
     position: relative;

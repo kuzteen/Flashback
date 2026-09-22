@@ -39,6 +39,9 @@ struct GameEntry {
 type GameMap = HashMap<String, GameEntry>;
 
 static MAP: Mutex<Option<Arc<GameMap>>> = Mutex::new(None);
+// Handle para avisar al frontend cuando cambia el juego. Sin esto la UI tendría que sondear, y
+// el fondo y el icono del juego tardarían en aparecer lo que quedase del intervalo.
+static APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
 // Último juego detectado en primer plano; se mantiene mientras su proceso viva.
 static CURRENT: Mutex<Option<(u32, DetectedGame)>> = Mutex::new(None);
 
@@ -193,7 +196,7 @@ struct IconEntry {
 }
 
 // Option y no String: 18 entradas de la lista traen "id": null (battlenet, sobre todo), y
-// #[serde(default)] solo cubre campos ausentes, no nulos explÃ­citos. Con String, un Ãºnico null
+// #[serde(default)] solo cubre campos ausentes, no nulos explícitos. Con String, un único null
 // tumba el parseo del vector entero y art_for se queda mudo para todos los juegos.
 #[derive(Deserialize)]
 struct Sku {
@@ -207,21 +210,21 @@ struct Sku {
 #[derive(Clone)]
 pub struct ListArt {
     pub icon_url: Option<String>,
-    // AppID de Steam declarado por la propia entrada. Vale mÃ¡s que buscar por nombre: identifica
-    // la ediciÃ³n exacta y abre el arte oficial del CDN de Steam sin necesitar API key.
+    // AppID de Steam declarado por la propia entrada. Vale más que buscar por nombre: identifica
+    // la edición exacta y abre el arte oficial del CDN de Steam sin necesitar API key.
     pub steam_appid: Option<u32>,
-    // SKU de la Microsoft Store: da acceso al arte oficial ancho del catÃ¡logo, sin API key.
+    // SKU de la Microsoft Store: da acceso al arte oficial ancho del catálogo, sin API key.
     pub xbox_sku: Option<String>,
 }
 
 // Icono que Discord renderiza para el juego, buscado por nombre. Se parsea la lista en crudo y
-// no el mapa del detector: ese estÃ¡ indexado por ejecutable y descarta entradas (lanzadores,
-// .exe genÃ©ricos o compartidos entre juegos), asÃ­ que se queda en ~9.700 de las ~30.000 y un
-// juego puede tener icono en Discord sin estar ahÃ­.
+// no el mapa del detector: ese está indexado por ejecutable y descarta entradas (lanzadores,
+// .exe genéricos o compartidos entre juegos), así que se queda en ~9.700 de las ~30.000 y un
+// juego puede tener icono en Discord sin estar ahí.
 //
-// Se parsea en cada fallo de cachÃ© con un struct ligero que ignora los ejecutables, en lugar de
-// mantener un Ã­ndice por nombre en memoria: esto ocurre una vez por juego en toda la vida de la
-// instalaciÃ³n (luego el PNG vive en disco) y va seguido de una descarga, que cuesta mucho mÃ¡s.
+// Se parsea en cada fallo de caché con un struct ligero que ignora los ejecutables, en lugar de
+// mantener un índice por nombre en memoria: esto ocurre una vez por juego en toda la vida de la
+// instalación (luego el PNG vive en disco) y va seguido de una descarga, que cuesta mucho más.
 // Memo por nombre: la lista son 12 MB y parsearla cuesta ~190 ms, y a un mismo juego le piden
 // arte varias superficies (icono, fondo, Rich Presence). Se guarda el resultado, no la lista.
 static ART_MEMO: Mutex<Option<HashMap<String, Option<ListArt>>>> = Mutex::new(None);
@@ -295,9 +298,18 @@ pub fn current_game() -> Option<DetectedGame> {
 // Refresca el juego rastreado con el mapa ya cacheado (si aún no se cargó, no hace nada). Lo usa
 // el watcher para mantener current_game_pid() fresco sin depender del poll de la UI.
 pub fn refresh_current() {
-    let map = MAP.lock().unwrap().as_ref().cloned();
-    if let Some(map) = map {
-        let _ = detect_with(&map);
+    let Some(map) = MAP.lock().unwrap().as_ref().cloned() else {
+        return;
+    };
+    let before = current_game().map(|g| g.name);
+    let after = detect_with(&map).map(|g| g.name);
+    // Solo al cambiar: el watcher pasa por aquí en cada cambio de ventana, también entre dos
+    // ventanas del mismo juego o entre dos programas que no lo son.
+    if before != after {
+        if let Some(app) = APP.get() {
+            use tauri::Emitter;
+            let _ = app.emit("game-changed", after);
+        }
     }
 }
 
@@ -306,7 +318,8 @@ pub fn refresh_current() {
 // procesos mientras el foco no cambia. current_game_pid() queda fresco para cuando se re-arma el
 // replay contra la nueva ventana.
 #[cfg(target_os = "windows")]
-pub fn spawn_watcher() {
+pub fn spawn_watcher(app: tauri::AppHandle) {
+    let _ = APP.set(app);
     std::thread::spawn(|| {
         let mut last_fg = 0u32;
         loop {
@@ -321,7 +334,7 @@ pub fn spawn_watcher() {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn spawn_watcher() {}
+pub fn spawn_watcher(_app: tauri::AppHandle) {}
 
 #[cfg(target_os = "windows")]
 fn detect_with(map: &GameMap) -> Option<DetectedGame> {

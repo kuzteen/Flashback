@@ -648,7 +648,7 @@ pub fn run() {
             // Watcher de juego en primer plano: mantiene fresco el juego rastreado para que el
             // replay pueda cambiar de objetivo al cambiar de juego (no seguir capturando el que
             // se minimizó).
-            detect::spawn_watcher();
+            detect::spawn_watcher(app.handle().clone());
 
             // Bandeja del sistema. Doble clic izquierdo abre la app; clic derecho abre el
             // menú con "Abrir Flashback" y "Cerrar". El replay sigue corriendo aunque la
