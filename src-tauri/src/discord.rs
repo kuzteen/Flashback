@@ -163,9 +163,9 @@ fn presence_fields(art_cache: &mut HashMap<String, String>) -> (String, String, 
     }
 }
 
-// Imagen grande del juego. Prioridad: icono nativo del CDN de Discord (fiable, directo) para los
-// juegos de la lista detectable; si no, el icono de SteamGridDB (cacheado por nombre). Si nada se
-// puede resolver, cae al asset del logo de Flashback.
+// Imagen grande del juego. Prioridad: icono nativo del CDN de Discord (fiable, directo) si la
+// detección ya lo traía; si no, game_art_url lo busca por nombre en la misma lista y luego en
+// SteamGridDB (cacheado por nombre). Si nada se puede resolver, cae al asset del logo.
 fn art_url(cache: &mut HashMap<String, String>, g: &crate::detect::DetectedGame) -> String {
     if let Some(url) = &g.icon_url {
         return url.clone();

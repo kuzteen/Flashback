@@ -181,6 +181,98 @@ async fn ensure_map(app: &tauri::AppHandle) -> Option<Arc<GameMap>> {
     Some(map)
 }
 
+#[derive(Deserialize)]
+struct IconEntry {
+    #[serde(default)]
+    id: String,
+    name: String,
+    #[serde(default)]
+    icon_hash: Option<String>,
+    #[serde(default)]
+    third_party_skus: Vec<Sku>,
+}
+
+// Option y no String: 18 entradas de la lista traen "id": null (battlenet, sobre todo), y
+// #[serde(default)] solo cubre campos ausentes, no nulos explÃ­citos. Con String, un Ãºnico null
+// tumba el parseo del vector entero y art_for se queda mudo para todos los juegos.
+#[derive(Deserialize)]
+struct Sku {
+    #[serde(default)]
+    distributor: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
+}
+
+// Lo que la lista detectable sabe del arte de un juego.
+#[derive(Clone)]
+pub struct ListArt {
+    pub icon_url: Option<String>,
+    // AppID de Steam declarado por la propia entrada. Vale mÃ¡s que buscar por nombre: identifica
+    // la ediciÃ³n exacta y abre el arte oficial del CDN de Steam sin necesitar API key.
+    pub steam_appid: Option<u32>,
+    // SKU de la Microsoft Store: da acceso al arte oficial ancho del catÃ¡logo, sin API key.
+    pub xbox_sku: Option<String>,
+}
+
+// Icono que Discord renderiza para el juego, buscado por nombre. Se parsea la lista en crudo y
+// no el mapa del detector: ese estÃ¡ indexado por ejecutable y descarta entradas (lanzadores,
+// .exe genÃ©ricos o compartidos entre juegos), asÃ­ que se queda en ~9.700 de las ~30.000 y un
+// juego puede tener icono en Discord sin estar ahÃ­.
+//
+// Se parsea en cada fallo de cachÃ© con un struct ligero que ignora los ejecutables, en lugar de
+// mantener un Ã­ndice por nombre en memoria: esto ocurre una vez por juego en toda la vida de la
+// instalaciÃ³n (luego el PNG vive en disco) y va seguido de una descarga, que cuesta mucho mÃ¡s.
+// Memo por nombre: la lista son 12 MB y parsearla cuesta ~190 ms, y a un mismo juego le piden
+// arte varias superficies (icono, fondo, Rich Presence). Se guarda el resultado, no la lista.
+static ART_MEMO: Mutex<Option<HashMap<String, Option<ListArt>>>> = Mutex::new(None);
+
+pub async fn art_for(app: &tauri::AppHandle, name: &str) -> Option<ListArt> {
+    let needle = name.trim().to_lowercase();
+    if let Some(hit) = ART_MEMO
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(&needle))
+    {
+        return hit.clone();
+    }
+    let art = art_lookup(app, &needle).await;
+    ART_MEMO
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashMap::new)
+        .insert(needle, art.clone());
+    art
+}
+
+async fn art_lookup(app: &tauri::AppHandle, needle: &str) -> Option<ListArt> {
+    let bytes = load_or_fetch(app).await?;
+    let list: Vec<IconEntry> = serde_json::from_slice(&bytes).ok()?;
+    let game = list
+        .into_iter()
+        .find(|g| g.name.trim().to_lowercase() == needle)?;
+    let icon_url = match (game.id.is_empty(), &game.icon_hash) {
+        (false, Some(hash)) => Some(format!(
+            "https://cdn.discordapp.com/app-icons/{}/{}.png",
+            game.id, hash
+        )),
+        _ => None,
+    };
+    let sku = |store: &str| {
+        game.third_party_skus
+            .iter()
+            .find(|s| s.distributor.as_deref() == Some(store))
+            .and_then(|s| s.id.clone())
+    };
+    let steam_appid = sku("steam").and_then(|id| id.parse::<u32>().ok());
+    let xbox_sku = sku("xbox");
+    Some(ListArt {
+        icon_url,
+        steam_appid,
+        xbox_sku,
+    })
+}
+
 pub async fn detect_game(app: &tauri::AppHandle) -> Option<DetectedGame> {
     let map = ensure_map(app).await?;
     let game = detect_with(&map)?;
