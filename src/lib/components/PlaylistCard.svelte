@@ -174,11 +174,11 @@
             openPlaylistEdit(playlist.id);
           }}
         >
-          <Icon name="rename" size={15} sw={1.9} /> {t('pl.edit')}
+          <Icon name="rename" size={16} sw={2} /> {t('pl.edit')}
         </button>
         <div class="sep"></div>
         <button role="menuitem" class="danger" onclick={onDelete}>
-          <Icon name="trash" size={15} sw={1.9} /> {t('pl.delete')}
+          <Icon name="trash" size={16} sw={2} /> {t('pl.delete')}
         </button>
       </div>
     {/if}

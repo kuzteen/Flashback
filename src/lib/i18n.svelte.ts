@@ -211,7 +211,7 @@ const en: Record<string, string> = {
   'filter.screens': 'Screens',
 
   // Tarjeta de clip
-  'card.favAdd': 'Save to favorites',
+  'card.favAdd': 'Add to favorites',
   'card.favRemove': 'Remove from favorites',
   'card.select': 'Select clip',
   'sel.bar': 'Selection actions',
@@ -484,7 +484,7 @@ const es: Record<string, string> = {
   'filter.games': 'Juegos',
   'filter.screens': 'Pantallas',
 
-  'card.favAdd': 'Guardar en favoritos',
+  'card.favAdd': 'Añadir a favoritos',
   'card.favRemove': 'Quitar de favoritos',
   'card.select': 'Seleccionar clip',
   'sel.bar': 'Acciones de selección',

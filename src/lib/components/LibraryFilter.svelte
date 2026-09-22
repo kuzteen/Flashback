@@ -72,7 +72,7 @@
   {#if open}
     <div class="menu" role="menu">
       <button class="item" class:on={selected.length === 0} onclick={clearAll} role="menuitemradio" aria-checked={selected.length === 0}>
-        <span class="lead"><Icon name="clips" size={15} /></span>
+        <span class="lead"><Icon name="clips-fill" size={15} /></span>
         <span class="txt">{t('filter.all')}</span>
         <span class="chk"><Icon name="check" size={13} sw={2.2} /></span>
       </button>

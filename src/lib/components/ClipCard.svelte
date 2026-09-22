@@ -448,8 +448,8 @@
           bind:this={menuEl}
           role="menu"
         >
-          <button role="menuitem" onclick={(e) => { e.stopPropagation(); openEditor(clip); }}><Icon name="editor" size={17} /> {t('card.openEditor')}</button>
-          <button role="menuitem" class:on={favorite} onclick={favClick}><Icon name={favorite ? 'star-fill' : 'star'} size={16} /> {favorite ? t('card.favRemove') : t('card.favAdd')}</button>
+          <button role="menuitem" onclick={(e) => { e.stopPropagation(); openEditor(clip); }}><Icon name="editor" size={16} /> {t('card.openEditor')}</button>
+          <button role="menuitem" class:on={favorite} onclick={favClick}><Icon name="star-fill" size={16} /> {favorite ? t('card.favRemove') : t('card.favAdd')}</button>
           <button
             class="sub-item"
             class:on-pl={inPlaylists}
@@ -467,14 +467,14 @@
               plOpen = !plOpen;
             }}
           >
-            <Icon name="folder-plus" size={14} />
+            <Icon name="folder-plus" size={16} />
             {t('pl.addTo')}
             <Icon name="chevron-down" size={13} sw={2.2} />
           </button>
-          <button role="menuitem" onclick={startRename}><Icon name="rename" size={15} sw={1.9} /> {t('card.rename')}</button>
-          <button role="menuitem" onclick={openLocation}><Icon name="folder-open" size={15} sw={1.9} /> {t('card.openLocation')}</button>
+          <button role="menuitem" onclick={startRename}><Icon name="rename" size={16} sw={2} /> {t('card.rename')}</button>
+          <button role="menuitem" onclick={openLocation}><Icon name="folder-open" size={16} sw={2} /> {t('card.openLocation')}</button>
           <div class="sep"></div>
-          <button role="menuitem" class="danger" onclick={deleteClip}><Icon name="trash" size={15} sw={1.9} /> {t('card.delete')}</button>
+          <button role="menuitem" class="danger" onclick={deleteClip}><Icon name="trash" size={16} sw={2} /> {t('card.delete')}</button>
 
           {#if plOpen}
             <div

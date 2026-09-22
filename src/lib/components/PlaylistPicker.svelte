@@ -107,7 +107,7 @@
         creating = true;
       }}
     >
-      <Icon name="folder-plus" size={14} />
+      <Icon name="folder-plus" size={16} />
       {t('pl.new')}
     </button>
   {/if}
@@ -182,8 +182,9 @@
     color: var(--text-3);
   }
   .new :global(svg) {
+  /* 16 px como la casilla de las filas de arriba: así el texto de todas las filas arranca en
+     la misma columna. */
     flex-shrink: 0;
-    width: 17px;
   }
   .new-input {
     width: 100%;
