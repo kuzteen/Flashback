@@ -111,9 +111,6 @@ pub fn rename_clip(path: &str, new_name: &str, edit_index: &Path) -> Result<Stri
 
 // Envía el clip y sus sidecars a la papelera (recuperable). El borrado es la única operación
 // destructiva de la app, así que se usa la papelera del sistema en vez de un borrado directo.
-pub fn delete_clip(path: &str, edit_index: &Path) -> Result<(), String> {
-    delete_clips(&[path.to_string()], edit_index)
-}
 
 // El lote va en una sola llamada a la papelera: una única operación del shell y una sola
 // entrada de deshacer para el usuario, en vez de una por clip.
