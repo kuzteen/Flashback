@@ -46,12 +46,17 @@ pub struct Segment {
     // Solo se persiste para restaurar el montaje; la exportación recibe ya filtrados los activos.
     #[serde(default)]
     pub disabled: Option<bool>,
+    // Centro horizontal del marco 9:16 del formato vertical (0..1). Sin él, centrado.
+    #[serde(default)]
+    pub crop_x: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ClipEdit {
     pub segments: Vec<Segment>,
     pub mixer: MixerState,
+    #[serde(default)]
+    pub format: crate::reframe::OutputFormat,
 }
 
 #[cfg(target_os = "windows")]
@@ -66,6 +71,9 @@ pub use win::{
 // montaje que no recorta, no desactiva nada y no cambia la mezcla no es una edición: se borra la
 // entrada en vez de guardarla, para que la biblioteca no marque como editados clips intactos.
 fn is_noop(edit: &ClipEdit) -> bool {
+    if edit.format != crate::reframe::OutputFormat::Horizontal {
+        return false;
+    }
     let m = &edit.mixer;
     if m.sys_muted
         || m.mic_muted
@@ -132,6 +140,7 @@ pub fn load_edit(index: String, path: String) -> Result<ClipEdit, String> {
     Ok(ClipEdit {
         segments: Vec::new(),
         mixer: MixerState::default(),
+        format: Default::default(),
     })
 }
 
@@ -1904,9 +1913,11 @@ mod win {
                         bound_start_ms: None,
                         bound_end_ms: None,
                         disabled: None,
+                        crop_x: None,
                     })
                     .collect(),
                 mixer: MixerState::default(),
+                format: Default::default(),
             }
         }
 

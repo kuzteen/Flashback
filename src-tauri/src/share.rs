@@ -82,6 +82,9 @@ fn scaled_width(src_w: u32, src_h: u32, height: u32) -> u32 {
 // La edición identidad (un solo tramo que cubre el clip entero, sin silenciar ni bajar faders) no
 // cambia nada del archivo, así que recodificarla solo perdería calidad y tiempo.
 pub fn is_identity(edit: &ClipEdit, duration_s: f64) -> bool {
+    if edit.format != crate::reframe::OutputFormat::Horizontal {
+        return false;
+    }
     if edit.segments.len() != 1 {
         return false;
     }
@@ -161,8 +164,10 @@ mod tests {
                 bound_start_ms: None,
                 bound_end_ms: None,
                 disabled: None,
+                crop_x: None,
             }],
             mixer: Default::default(),
+            format: Default::default(),
         }
     }
 

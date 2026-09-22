@@ -10,6 +10,7 @@ mod editor;
 mod edits;
 mod library;
 mod playlists;
+mod reframe;
 mod share;
 #[cfg(target_os = "windows")]
 mod overlay;
