@@ -222,6 +222,7 @@ const en: Record<string, string> = {
 
   // Tarjeta de clip
   'card.favAdd': 'Add to favorites',
+  'card.imported': 'Imported clip',
   'card.favRemove': 'Remove from favorites',
   'card.select': 'Select clip',
   'sel.bar': 'Selection actions',
@@ -505,6 +506,7 @@ const es: Record<string, string> = {
   'filter.screens': 'Pantallas',
 
   'card.favAdd': 'Añadir a favoritos',
+  'card.imported': 'Clip importado',
   'card.favRemove': 'Quitar de favoritos',
   'card.select': 'Seleccionar clip',
   'sel.bar': 'Acciones de selección',

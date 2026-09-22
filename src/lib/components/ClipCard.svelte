@@ -413,6 +413,13 @@
           {/if}
           {displaySource(clip.source)}
         </span>
+      {:else}
+        <!-- Sin origen es un vídeo que no grabó Flashback: la captura y el export del editor
+             siempre embeben el juego o la pantalla. -->
+        <span class="src label">
+          <Icon name="imported" size={15} />
+          {t('card.imported')}
+        </span>
       {/if}
 
       <h3 class="title">{clip.title}</h3>
@@ -707,13 +714,6 @@
     display: grid;
     grid-template-rows: 1fr auto 1fr;
   }
-  /* El icono va un poco por encima del texto (16 contra 12): a tamaño de texto una carátula no
-     se distingue, y cuatro píxeles bastan para reconocerla sin desequilibrar la fila. */
-  .src {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    align-self: end;
   /* Filas fijas y no colocación automática: un clip importado no tiene origen, y sin esto el
      título y la fecha subían a ocupar su hueco. Así quedan en su sitio y la fila de arriba
      se queda vacía. */
@@ -726,6 +726,13 @@
   .when {
     grid-row: 3;
   }
+  /* El icono va un poco por encima del texto (16 contra 12): a tamaño de texto una carátula no
+     se distingue, y cuatro píxeles bastan para reconocerla sin desequilibrar la fila. */
+  .src {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    align-self: end;
     padding-bottom: 6px;
     line-height: 1;
     font-size: 12px;
