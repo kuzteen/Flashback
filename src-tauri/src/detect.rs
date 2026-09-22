@@ -250,7 +250,14 @@ pub async fn art_for(app: &tauri::AppHandle, name: &str) -> Option<ListArt> {
 
 async fn art_lookup(app: &tauri::AppHandle, needle: &str) -> Option<ListArt> {
     let bytes = load_or_fetch(app).await?;
-    let list: Vec<IconEntry> = serde_json::from_slice(&bytes).ok()?;
+    art_from_list(&bytes, needle)
+}
+
+// Separada del I/O para poder probarla: es la parte que se come un JSON de terceros de 12 MB
+// que se refresca solo cada semana, y un solo campo inesperado tumba el vector entero.
+fn art_from_list(bytes: &[u8], name: &str) -> Option<ListArt> {
+    let needle = name.trim().to_lowercase();
+    let list: Vec<IconEntry> = serde_json::from_slice(bytes).ok()?;
     let game = list
         .into_iter()
         .find(|g| g.name.trim().to_lowercase() == needle)?;
@@ -584,3 +591,74 @@ fn running_processes() -> Vec<(u32, String)> {
     out
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Recorte con la forma real de la lista de Discord. La primera entrada lleva el `"id": null`
+    // que trae de verdad (18 entradas lo tienen, battlenet sobre todo) y va la primera a
+    // propósito: si el parseo se rompe ahí, ningún juego posterior se resuelve.
+    const LIST: &str = r#"[
+      {"id":"1","name":"Battlenet Game","icon_hash":"aaa",
+       "third_party_skus":[{"distributor":"battlenet","id":null}]},
+      {"id":"700136079562375258","name":"VALORANT","icon_hash":"11f8",
+       "third_party_skus":[{"distributor":"xbox","id":"9N1NLJK9SKRN"}]},
+      {"id":"1430601682257051760","name":"Dispatch","icon_hash":"5786",
+       "third_party_skus":[{"distributor":"xbox","id":"9PB2"},{"distributor":"steam","id":"2592160"}]},
+      {"id":"","name":"No Art","icon_hash":null,"third_party_skus":[]}
+    ]"#;
+
+    #[test]
+    fn a_null_sku_id_does_not_sink_the_rest_of_the_list() {
+        let art = art_from_list(LIST.as_bytes(), "VALORANT").expect("VALORANT resolves");
+        assert_eq!(art.xbox_sku.as_deref(), Some("9N1NLJK9SKRN"));
+    }
+
+    #[test]
+    fn reads_the_discord_icon_and_the_store_skus() {
+        let art = art_from_list(LIST.as_bytes(), "Dispatch").expect("Dispatch resolves");
+        assert_eq!(
+            art.icon_url.as_deref(),
+            Some("https://cdn.discordapp.com/app-icons/1430601682257051760/5786.png")
+        );
+        assert_eq!(art.steam_appid, Some(2592160));
+        assert_eq!(art.xbox_sku.as_deref(), Some("9PB2"));
+    }
+
+    // El nombre llega del clip o del detector y no siempre viene igual que en la lista.
+    #[test]
+    fn matches_the_name_ignoring_case_and_padding() {
+        assert!(art_from_list(LIST.as_bytes(), "  vAlOrAnT  ").is_some());
+        assert!(art_from_list(LIST.as_bytes(), "Half-Life 3").is_none());
+    }
+
+    // Una entrada sin icono no debe inventar una URL con el hash vacío: el fondo y el resto de
+    // fuentes tienen que poder tomar el relevo.
+    #[test]
+    fn an_entry_without_icon_resolves_without_url() {
+        let art = art_from_list(LIST.as_bytes(), "No Art").expect("entry resolves");
+        assert!(art.icon_url.is_none());
+        assert!(art.steam_appid.is_none());
+        assert!(art.xbox_sku.is_none());
+    }
+
+    // Los ejecutables compartidos por varios juegos se descartan: un basename solo identifica si
+    // pertenece a uno. Sin esto, cualquier cosa lanzada con game.exe se detectaría como el juego
+    // que llegara primero.
+    #[test]
+    fn build_map_drops_executables_shared_by_several_games() {
+        let list: Vec<Detectable> = serde_json::from_str(
+            r#"[
+              {"id":"1","name":"Alpha","executables":[{"name":"alpha.exe","os":"win32"},
+                                                      {"name":"shared.exe","os":"win32"}]},
+              {"id":"2","name":"Beta","executables":[{"name":"beta.exe","os":"win32"},
+                                                     {"name":"shared.exe","os":"win32"}]}
+            ]"#,
+        )
+        .expect("list parses");
+        let map = build_map(list);
+        assert_eq!(map.get("alpha.exe").map(|e| e.name.as_str()), Some("Alpha"));
+        assert_eq!(map.get("beta.exe").map(|e| e.name.as_str()), Some("Beta"));
+        assert!(map.get("shared.exe").is_none());
+    }
+}
