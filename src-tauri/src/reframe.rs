@@ -8,14 +8,20 @@ pub enum Fill {
     #[default]
     Crop,
     Fit,
+    Custom,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum OutputFormat {
     #[default]
     Horizontal,
-    Vertical { fill: Fill },
+    Vertical {
+        fill: Fill,
+        // Solo cuenta con `Custom`: los otros dos rellenos son sus extremos.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        zoom: Option<f32>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -44,19 +50,36 @@ pub fn vertical_bitrate(src_bps: u32, src_w: u32, src_h: u32, out_w: u32, out_h:
     (src_bps as u64 * out_px / src_px).clamp(4_000_000, 40_000_000) as u32
 }
 
-pub fn crop_rect(src_w: u32, src_h: u32, crop_x: f64) -> Rect {
-    let (sw, sh) = (src_w as f32, src_h as f32);
-    let w = (sh * 9.0 / 16.0).min(sw);
-    let center = crop_x.clamp(0.0, 1.0) as f32 * sw;
-    let x = (center - w / 2.0).clamp(0.0, sw - w);
-    Rect { x, y: 0.0, w, h: sh }
+// Encajado y recorte son los extremos de un mismo control: 0 = el fotograma entero cabe, 1 = llena
+// el lienzo. Personalizado queda entre medias.
+pub fn zoom_of(fill: Fill, zoom: Option<f32>) -> f32 {
+    match fill {
+        Fill::Fit => 0.0,
+        Fill::Crop => 1.0,
+        Fill::Custom => zoom.unwrap_or(0.5).clamp(0.0, 1.0),
+    }
 }
 
-pub fn fit_rect(src_w: u32, src_h: u32, out_w: u32, out_h: u32) -> Rect {
+// Dónde se dibuja el fotograma ENTERO dentro del lienzo de salida; puede salirse, y lo que se sale
+// no se ve. En cada eje, si el fotograma es mayor que el lienzo, la posición desplaza qué parte se
+// ve (0..1 sobre el origen); si es menor, coloca el fotograma dentro del lienzo (0..1 sobre el
+// lienzo). La misma cuenta está en el frontend para que la previsualización sea lo exportado.
+pub fn place(src_w: u32, src_h: u32, out_w: u32, out_h: u32, zoom: f32, cx: f64, cy: f64) -> Rect {
     let (sw, sh, ow, oh) = (src_w as f32, src_h as f32, out_w as f32, out_h as f32);
-    let s = (ow / sw).min(oh / sh);
+    let fit = (ow / sw).min(oh / sh);
+    let fill = (ow / sw).max(oh / sh);
+    let s = fit + (fill - fit) * zoom.clamp(0.0, 1.0);
     let (w, h) = (sw * s, sh * s);
-    Rect { x: (ow - w) / 2.0, y: (oh - h) / 2.0, w, h }
+    Rect { x: axis(w, ow, cx), y: axis(h, oh, cy), w, h }
+}
+
+fn axis(size: f32, canvas: f32, pos: f64) -> f32 {
+    let p = pos.clamp(0.0, 1.0) as f32;
+    if size > canvas {
+        (canvas / 2.0 - p * size).clamp(canvas - size, 0.0)
+    } else {
+        (p * canvas - size / 2.0).clamp(0.0, canvas - size)
+    }
 }
 
 #[cfg(test)]
@@ -83,33 +106,63 @@ mod tests {
         assert_eq!(vertical_bitrate(100_000_000, 1920, 1080, 1080, 1920), 40_000_000);
     }
 
-    #[test]
-    fn the_crop_window_is_full_height_nine_by_sixteen_and_clamped() {
-        assert_eq!(crop_rect(1920, 1080, 0.5), r(656.25, 0.0, 607.5, 1080.0));
-        assert_eq!(crop_rect(1920, 1080, 0.0), r(0.0, 0.0, 607.5, 1080.0));
-        assert_eq!(crop_rect(1920, 1080, 1.0), r(1312.5, 0.0, 607.5, 1080.0));
-        assert_eq!(crop_rect(1920, 1080, 7.0), crop_rect(1920, 1080, 1.0));
+    fn close(a: Rect, b: Rect) {
+        let ok = (a.x - b.x).abs() < 0.01
+            && (a.y - b.y).abs() < 0.01
+            && (a.w - b.w).abs() < 0.01
+            && (a.h - b.h).abs() < 0.01;
+        assert!(ok, "{a:?} != {b:?}");
     }
 
     #[test]
-    fn an_already_vertical_source_is_used_whole() {
-        assert_eq!(crop_rect(1080, 1920, 0.3), r(0.0, 0.0, 1080.0, 1920.0));
+    fn the_fills_map_to_the_ends_of_the_zoom() {
+        assert_eq!(zoom_of(Fill::Fit, Some(0.7)), 0.0);
+        assert_eq!(zoom_of(Fill::Crop, Some(0.7)), 1.0);
+        assert_eq!(zoom_of(Fill::Custom, Some(0.7)), 0.7);
+        assert_eq!(zoom_of(Fill::Custom, None), 0.5);
+        assert_eq!(zoom_of(Fill::Custom, Some(3.0)), 1.0);
     }
 
     #[test]
-    fn fit_scales_the_frame_to_the_width_and_centres_it() {
-        assert_eq!(fit_rect(1920, 1080, 1080, 1920), r(0.0, 656.25, 1080.0, 607.5));
-        assert_eq!(fit_rect(1080, 1920, 1080, 1920), r(0.0, 0.0, 1080.0, 1920.0));
+    fn zoom_zero_fits_the_whole_frame_centred() {
+        close(place(1920, 1080, 1080, 1920, 0.0, 0.5, 0.5), r(0.0, 656.25, 1080.0, 607.5));
+    }
+
+    #[test]
+    fn zoom_one_fills_the_canvas_and_pans_with_the_horizontal_position() {
+        close(place(1920, 1080, 1080, 1920, 1.0, 0.5, 0.5), r(-1166.67, 0.0, 3413.33, 1920.0));
+        close(place(1920, 1080, 1080, 1920, 1.0, 0.0, 0.5), r(0.0, 0.0, 3413.33, 1920.0));
+        close(place(1920, 1080, 1080, 1920, 1.0, 1.0, 0.5), r(-2333.33, 0.0, 3413.33, 1920.0));
+    }
+
+    #[test]
+    fn a_middle_zoom_crops_the_sides_and_leaves_bands_above_and_below() {
+        close(place(1920, 1080, 1080, 1920, 0.5, 0.5, 0.5), r(-583.33, 328.13, 2246.67, 1263.75));
+    }
+
+    #[test]
+    fn the_vertical_position_moves_a_band_inside_the_canvas() {
+        close(place(1920, 1080, 1080, 1920, 0.0, 0.5, 0.0), r(0.0, 0.0, 1080.0, 607.5));
+        close(place(1920, 1080, 1080, 1920, 0.0, 0.5, 1.0), r(0.0, 1312.5, 1080.0, 607.5));
+    }
+
+    #[test]
+    fn an_already_vertical_source_fills_the_canvas_at_any_zoom() {
+        close(place(1080, 1920, 1080, 1920, 0.0, 0.3, 0.8), r(0.0, 0.0, 1080.0, 1920.0));
+        close(place(1080, 1920, 1080, 1920, 1.0, 0.3, 0.8), r(0.0, 0.0, 1080.0, 1920.0));
     }
 
     #[test]
     fn formats_read_and_write_the_frontend_shape() {
         let v: OutputFormat = serde_json::from_str(r#"{"kind":"vertical","fill":"fit"}"#).unwrap();
-        assert_eq!(v, OutputFormat::Vertical { fill: Fill::Fit });
+        assert_eq!(v, OutputFormat::Vertical { fill: Fill::Fit, zoom: None });
+        let c: OutputFormat =
+            serde_json::from_str(r#"{"kind":"vertical","fill":"custom","zoom":0.4}"#).unwrap();
+        assert_eq!(c, OutputFormat::Vertical { fill: Fill::Custom, zoom: Some(0.4) });
         let h: OutputFormat = serde_json::from_str(r#"{"kind":"horizontal"}"#).unwrap();
         assert_eq!(h, OutputFormat::Horizontal);
         assert_eq!(
-            serde_json::to_string(&OutputFormat::Vertical { fill: Fill::Crop }).unwrap(),
+            serde_json::to_string(&OutputFormat::Vertical { fill: Fill::Crop, zoom: None }).unwrap(),
             r#"{"kind":"vertical","fill":"crop"}"#
         );
     }
@@ -127,7 +180,7 @@ mod tests {
 
 #[cfg(target_os = "windows")]
 pub mod win {
-    use super::{crop_rect, fit_rect, Fill, Rect};
+    use super::{place, Rect};
     use std::cell::RefCell;
     use std::collections::HashMap;
     use windows::core::{Interface, Result, IUnknown};
@@ -183,14 +236,14 @@ pub mod win {
         d3d: ID3D11DeviceContext,
         src_tex: ID3D11Texture2D,
         src_bmp: ID2D1Bitmap1,
-        bg_bmp: Option<ID2D1Bitmap1>,
-        blur: Option<ID2D1Effect>,
+        bg_bmp: ID2D1Bitmap1,
+        blur: ID2D1Effect,
         dim: ID2D1SolidColorBrush,
         allocator: IMFVideoSampleAllocatorEx,
         out_type: IMFMediaType,
         // Un bitmap destino por textura del asignador: crearlos por fotograma costaba sin motivo.
         targets: RefCell<HashMap<usize, ID2D1Bitmap1>>,
-        fill: Fill,
+        zoom: f32,
         src_w: u32,
         src_h: u32,
         out_w: u32,
@@ -207,7 +260,7 @@ pub mod win {
             out_w: u32,
             out_h: u32,
             fps: u32,
-            fill: Fill,
+            zoom: f32,
         ) -> Result<Self> {
             let dxgi: IDXGIDevice = device.cast()?;
             let d2d_device = unsafe { D2D1CreateDevice(&dxgi, None)? };
@@ -232,39 +285,36 @@ pub mod win {
             let surface: IDXGISurface = src_tex.cast()?;
             let src_bmp = unsafe { ctx.CreateBitmapFromDxgiSurface(&surface, Some(&bgra(D2D1_BITMAP_OPTIONS_NONE)))? };
 
-            let (bg_bmp, blur) = if fill == Fill::Fit {
-                let bg = unsafe {
-                    ctx.CreateBitmap(
-                        D2D_SIZE_U { width: out_w, height: out_h },
-                        None,
-                        0,
-                        &bgra(D2D1_BITMAP_OPTIONS_TARGET),
-                    )?
-                };
-                let blur = unsafe { ctx.CreateEffect(&CLSID_D2D1GaussianBlur)? };
-                let deviation = out_w as f32 * 0.03;
-                unsafe {
-                    blur.SetValue(
-                        D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION.0 as u32,
-                        D2D1_PROPERTY_TYPE_FLOAT,
-                        &deviation.to_le_bytes(),
-                    )?;
-                    blur.SetValue(
-                        D2D1_GAUSSIANBLUR_PROP_OPTIMIZATION.0 as u32,
-                        D2D1_PROPERTY_TYPE_ENUM,
-                        &(D2D1_GAUSSIANBLUR_OPTIMIZATION_SPEED.0 as u32).to_le_bytes(),
-                    )?;
-                    // HARD: sin él el borde del fondo se aclara hacia transparente.
-                    blur.SetValue(
-                        D2D1_GAUSSIANBLUR_PROP_BORDER_MODE.0 as u32,
-                        D2D1_PROPERTY_TYPE_ENUM,
-                        &(D2D1_BORDER_MODE_HARD.0 as u32).to_le_bytes(),
-                    )?;
-                }
-                (Some(bg), Some(blur))
-            } else {
-                (None, None)
+            // Fondo desenfocado siempre preparado: con zoom intermedio o encajado se ve arriba y
+            // abajo, y solo sobra cuando el fotograma cubre el lienzo entero.
+            let bg_bmp = unsafe {
+                ctx.CreateBitmap(
+                    D2D_SIZE_U { width: out_w, height: out_h },
+                    None,
+                    0,
+                    &bgra(D2D1_BITMAP_OPTIONS_TARGET),
+                )?
             };
+            let blur = unsafe { ctx.CreateEffect(&CLSID_D2D1GaussianBlur)? };
+            let deviation = out_w as f32 * 0.03;
+            unsafe {
+                blur.SetValue(
+                    D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION.0 as u32,
+                    D2D1_PROPERTY_TYPE_FLOAT,
+                    &deviation.to_le_bytes(),
+                )?;
+                blur.SetValue(
+                    D2D1_GAUSSIANBLUR_PROP_OPTIMIZATION.0 as u32,
+                    D2D1_PROPERTY_TYPE_ENUM,
+                    &(D2D1_GAUSSIANBLUR_OPTIMIZATION_SPEED.0 as u32).to_le_bytes(),
+                )?;
+                // HARD: sin él el borde del fondo se aclara hacia transparente.
+                blur.SetValue(
+                    D2D1_GAUSSIANBLUR_PROP_BORDER_MODE.0 as u32,
+                    D2D1_PROPERTY_TYPE_ENUM,
+                    &(D2D1_BORDER_MODE_HARD.0 as u32).to_le_bytes(),
+                )?;
+            }
             let dim = unsafe {
                 ctx.CreateSolidColorBrush(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.35 }, None)?
             };
@@ -314,7 +364,7 @@ pub mod win {
                 allocator,
                 out_type,
                 targets: RefCell::new(HashMap::new()),
-                fill,
+                zoom,
                 src_w,
                 src_h,
                 out_w,
@@ -330,40 +380,35 @@ pub mod win {
             (self.out_w, self.out_h)
         }
 
-        pub fn process(&self, input: &IMFSample, crop_x: f64) -> Result<IMFSample> {
+        pub fn process(&self, input: &IMFSample, crop_x: f64, crop_y: f64) -> Result<IMFSample> {
             self.load_input(input)?;
             let out = self.next_sample()?;
             let target = self.target_for(&out)?;
-            let full = D2D_RECT_F { left: 0.0, top: 0.0, right: self.out_w as f32, bottom: self.out_h as f32 };
+            let (ow, oh) = (self.out_w as f32, self.out_h as f32);
+            let full = D2D_RECT_F { left: 0.0, top: 0.0, right: ow, bottom: oh };
+            let fg = place(self.src_w, self.src_h, self.out_w, self.out_h, self.zoom, crop_x, crop_y);
+            let covers = fg.x <= 0.0 && fg.y <= 0.0 && fg.x + fg.w >= ow && fg.y + fg.h >= oh;
             unsafe {
-                match (self.fill, &self.bg_bmp, &self.blur) {
-                    (Fill::Fit, Some(bg), Some(blur)) => {
-                        // Fondo: el recorte centrado a pantalla completa, desenfocado y velado para
-                        // que el vídeo de delante destaque.
-                        let cover = d2d(crop_rect(self.src_w, self.src_h, 0.5));
-                        self.ctx.SetTarget(bg);
-                        self.ctx.BeginDraw();
-                        self.ctx.DrawBitmap(&self.src_bmp, Some(&full), 1.0, D2D1_INTERPOLATION_MODE_LINEAR, Some(&cover), None);
-                        self.ctx.EndDraw(None, None)?;
-
-                        self.ctx.SetTarget(&target);
-                        self.ctx.BeginDraw();
-                        blur.SetInput(0, bg, true);
-                        let img = blur.GetOutput()?;
-                        self.ctx.DrawImage(&img, None, None, D2D1_INTERPOLATION_MODE_LINEAR, D2D1_COMPOSITE_MODE_SOURCE_OVER);
-                        self.ctx.FillRectangle(&full, &self.dim);
-                        let fg = d2d(fit_rect(self.src_w, self.src_h, self.out_w, self.out_h));
-                        self.ctx.DrawBitmap(&self.src_bmp, Some(&fg), 1.0, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, None, None);
-                        self.ctx.EndDraw(None, None)?;
-                    }
-                    _ => {
-                        let src = d2d(crop_rect(self.src_w, self.src_h, crop_x));
-                        self.ctx.SetTarget(&target);
-                        self.ctx.BeginDraw();
-                        self.ctx.DrawBitmap(&self.src_bmp, Some(&full), 1.0, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, Some(&src), None);
-                        self.ctx.EndDraw(None, None)?;
-                    }
+                if !covers {
+                    // Fondo: el fotograma llenando el lienzo, desenfocado y velado para que el de
+                    // delante destaque.
+                    let cover = d2d(place(self.src_w, self.src_h, self.out_w, self.out_h, 1.0, 0.5, 0.5));
+                    self.ctx.SetTarget(&self.bg_bmp);
+                    self.ctx.BeginDraw();
+                    self.ctx.DrawBitmap(&self.src_bmp, Some(&cover), 1.0, D2D1_INTERPOLATION_MODE_LINEAR, None, None);
+                    self.ctx.EndDraw(None, None)?;
                 }
+                self.ctx.SetTarget(&target);
+                self.ctx.BeginDraw();
+                if !covers {
+                    self.blur.SetInput(0, &self.bg_bmp, true);
+                    let img = self.blur.GetOutput()?;
+                    self.ctx.DrawImage(&img, None, None, D2D1_INTERPOLATION_MODE_LINEAR, D2D1_COMPOSITE_MODE_SOURCE_OVER);
+                    self.ctx.FillRectangle(&full, &self.dim);
+                }
+                // El fotograma entero en su sitio: lo que cae fuera del lienzo lo recorta el destino.
+                self.ctx.DrawBitmap(&self.src_bmp, Some(&d2d(fg)), 1.0, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, None, None);
+                self.ctx.EndDraw(None, None)?;
                 self.ctx.SetTarget(None);
             }
             Ok(out)

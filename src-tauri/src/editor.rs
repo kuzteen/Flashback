@@ -49,6 +49,9 @@ pub struct Segment {
     // Centro horizontal del marco 9:16 del formato vertical (0..1). Sin él, centrado.
     #[serde(default)]
     pub crop_x: Option<f64>,
+    // Centro vertical, igual que crop_x: desplaza qué parte se ve o coloca la franja en el lienzo.
+    #[serde(default)]
+    pub crop_y: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1229,7 +1232,7 @@ mod win {
         // Reescalado opcional (presets de tamaño de compartir): lo hace el propio procesador del
         // lector. Si rechaza el tamaño pedido se reintenta con el nativo en vez de fallar.
         let vertical = match edit.format {
-            crate::reframe::OutputFormat::Vertical { fill } => Some(fill),
+            crate::reframe::OutputFormat::Vertical { fill, zoom } => Some(crate::reframe::zoom_of(fill, zoom)),
             crate::reframe::OutputFormat::Horizontal => None,
         };
         // En vertical el origen se decodifica a tamaño nativo: el recorte amplía una ventana y
@@ -1259,10 +1262,10 @@ mod win {
         let out_w = (out_size >> 32) as u32;
         let out_h = (out_size & 0xFFFF_FFFF) as u32;
         let reframer = match (vertical, gpu) {
-            (Some(fill), Some(g)) => {
+            (Some(zoom), Some(g)) => {
                 let (vw, vh) = crate::reframe::vertical_size(max_height);
                 Some(
-                    crate::reframe::win::Reframer::new(&g.device, &g.manager, out_w, out_h, vw, vh, meta.fps, fill)
+                    crate::reframe::win::Reframer::new(&g.device, &g.manager, out_w, out_h, vw, vh, meta.fps, zoom)
                         .map_err(mf)?,
                 )
             }
@@ -1345,7 +1348,9 @@ mod win {
                 // huecos en la salida (mismo mapeo origen→salida que el audio para mantener el sync).
                 let out_t = (t - start_hns) + kept_before;
                 let sample = match &reframer {
-                    Some(r) => r.process(&sample, seg.crop_x.unwrap_or(0.5)).map_err(mf)?,
+                    Some(r) => r
+                        .process(&sample, seg.crop_x.unwrap_or(0.5), seg.crop_y.unwrap_or(0.5))
+                        .map_err(mf)?,
                     None => sample,
                 };
                 if let Some(logo) = &logo {
@@ -1950,6 +1955,7 @@ mod win {
                         bound_end_ms: None,
                         disabled: None,
                         crop_x: None,
+                        crop_y: None,
                     })
                     .collect(),
                 mixer: MixerState::default(),

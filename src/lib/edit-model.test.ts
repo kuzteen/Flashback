@@ -8,7 +8,7 @@ import {
   snap,
   snapTargets,
   trimToPos,
-  setCrop,
+  setFraming,
   sortByPos,
   toggleDisabled,
   trim,
@@ -32,6 +32,7 @@ const seg = (startMs: number, endMs: number, posMs: number, extra: Partial<Segme
   boundEndMs: endMs,
   disabled: false,
   cropX: 0.5,
+  cropY: 0.5,
   ...extra,
 });
 
@@ -84,6 +85,24 @@ describe('fromSaved', () => {
     ]);
   });
 
+  it('una edición sin crop_y lo deja centrado', () => {
+    const s = fromSaved({ segments: [{ start_ms: 0, end_ms: 1000, crop_x: 0.2 }] }, 1000);
+    expect(s.segments[0].cropY).toBe(0.5);
+  });
+
+  it('lee el formato personalizado con su zoom y lo limita a [0, 1]', () => {
+    const c = fromSaved(
+      { segments: [{ start_ms: 0, end_ms: 1000 }], format: { kind: 'vertical', fill: 'custom', zoom: 0.4 } },
+      1000,
+    );
+    expect(c.format).toEqual({ kind: 'vertical', fill: 'custom', zoom: 0.4 });
+    const big = fromSaved(
+      { segments: [{ start_ms: 0, end_ms: 1000 }], format: { kind: 'vertical', fill: 'custom', zoom: 9 } },
+      1000,
+    );
+    expect(big.format).toEqual({ kind: 'vertical', fill: 'custom', zoom: 1 });
+  });
+
   it('limita crop_x a [0, 1]', () => {
     const s = fromSaved({ segments: [{ start_ms: 0, end_ms: 1000, crop_x: 2 }] }, 1000);
     expect(s.segments[0].cropX).toBe(1);
@@ -107,7 +126,7 @@ describe('fromSaved', () => {
 describe('toSaved', () => {
   it('serializa todo y vuelve a leerse igual', () => {
     const state = {
-      segments: [seg(0, 1000, 0, { cropX: 0.3 }), seg(2000, 3000, 1500, { disabled: true })],
+      segments: [seg(0, 1000, 0, { cropX: 0.3, cropY: 0.7 }), seg(2000, 3000, 1500, { disabled: true })],
       mixer: DEFAULT_MIXER,
       format: { kind: 'vertical', fill: 'crop' } as const,
     };
@@ -203,7 +222,7 @@ describe('trim', () => {
   });
 });
 
-describe('removeAt / toggleDisabled / setCrop / sortByPos', () => {
+describe('removeAt / toggleDisabled / setFraming / sortByPos', () => {
   const two = [seg(0, 1000, 0), seg(1000, 2000, 1000)];
 
   it('quita un bloque pero nunca el último', () => {
@@ -217,9 +236,10 @@ describe('removeAt / toggleDisabled / setCrop / sortByPos', () => {
   });
 
   it('limita el encuadre a [0, 1]', () => {
-    expect(setCrop(two, 0, 1.4)[0].cropX).toBe(1);
-    expect(setCrop(two, 0, -1)[0].cropX).toBe(0);
-    expect(setCrop(two, 0, 0.25)[0].cropX).toBe(0.25);
+    const a = setFraming(two, 0, 1.4, -1)[0];
+    expect([a.cropX, a.cropY]).toEqual([1, 0]);
+    const b = setFraming(two, 0, 0.25, 0.8)[0];
+    expect([b.cropX, b.cropY]).toEqual([0.25, 0.8]);
   });
 
   it('ordena por posición en la timeline', () => {

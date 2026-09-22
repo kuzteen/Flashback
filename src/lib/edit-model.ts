@@ -15,8 +15,10 @@ export type Segment = {
   boundStartMs: number;
   boundEndMs: number;
   disabled: boolean;
-  // Centro horizontal del marco 9:16 en el formato vertical con recorte, de 0 a 1.
+  // Encuadre en el formato vertical, de 0 a 1 en cada eje: si el fotograma es mayor que el lienzo
+  // desplaza qué parte se ve; si es menor, coloca el fotograma dentro del lienzo.
   cropX: number;
+  cropY: number;
 };
 
 export type MixerState = {
@@ -28,7 +30,10 @@ export type MixerState = {
 
 export const DEFAULT_MIXER: MixerState = { sys_vol: 1, sys_muted: false, mic_vol: 1, mic_muted: false };
 
-export type OutputFormat = { kind: 'horizontal' } | { kind: 'vertical'; fill: 'crop' | 'fit' };
+// Encajado y recorte son los extremos del zoom (0 y 1); personalizado usa `zoom` entre medias.
+export type OutputFormat =
+  | { kind: 'horizontal' }
+  | { kind: 'vertical'; fill: 'crop' | 'fit' | 'custom'; zoom?: number };
 
 export const DEFAULT_FORMAT: OutputFormat = { kind: 'horizontal' };
 
@@ -42,6 +47,7 @@ export type SavedSegment = {
   bound_end_ms?: number | null;
   disabled?: boolean | null;
   crop_x?: number | null;
+  crop_y?: number | null;
 };
 
 export type SavedEdit = {
@@ -58,7 +64,7 @@ export function segLen(s: Segment): number {
 
 export function fullClip(durationMs: number): Segment[] {
   return [
-    { startMs: 0, endMs: durationMs, posMs: 0, boundStartMs: 0, boundEndMs: durationMs, disabled: false, cropX: 0.5 },
+    { startMs: 0, endMs: durationMs, posMs: 0, boundStartMs: 0, boundEndMs: durationMs, disabled: false, cropX: 0.5, cropY: 0.5 },
   ];
 }
 
@@ -67,7 +73,9 @@ export function initialState(durationMs: number): EditState {
 }
 
 function readFormat(f: OutputFormat | null | undefined): OutputFormat {
-  if (f?.kind === 'vertical' && (f.fill === 'crop' || f.fill === 'fit')) return { kind: 'vertical', fill: f.fill };
+  if (f?.kind !== 'vertical') return { kind: 'horizontal' };
+  if (f.fill === 'crop' || f.fill === 'fit') return { kind: 'vertical', fill: f.fill };
+  if (f.fill === 'custom') return { kind: 'vertical', fill: 'custom', zoom: clamp01(f.zoom ?? 0.5) };
   return { kind: 'horizontal' };
 }
 
@@ -91,6 +99,7 @@ export function fromSaved(saved: SavedEdit | null | undefined, durationMs: numbe
       boundEndMs: s.bound_end_ms ?? s.end_ms,
       disabled: s.disabled ?? false,
       cropX: clamp01(s.crop_x ?? 0.5),
+      cropY: clamp01(s.crop_y ?? 0.5),
     };
   });
   segments.sort((a, b) => a.posMs - b.posMs);
@@ -108,6 +117,7 @@ export function toSaved(state: EditState, enabledOnly = false): SavedEdit {
       bound_end_ms: s.boundEndMs,
       disabled: s.disabled,
       crop_x: s.cropX,
+      crop_y: s.cropY,
     })),
     mixer: { ...state.mixer },
     format: state.format,
@@ -187,8 +197,8 @@ export function toggleDisabled(segs: Segment[], index: number): Segment[] {
   return segs.map((s, i) => (i === index ? { ...s, disabled: !s.disabled } : s));
 }
 
-export function setCrop(segs: Segment[], index: number, cropX: number): Segment[] {
-  return segs.map((s, i) => (i === index ? { ...s, cropX: clamp01(cropX) } : s));
+export function setFraming(segs: Segment[], index: number, cropX: number, cropY: number): Segment[] {
+  return segs.map((s, i) => (i === index ? { ...s, cropX: clamp01(cropX), cropY: clamp01(cropY) } : s));
 }
 
 // La salida se reproduce y exporta en orden de lista: ordenar por posición hace que coincida con

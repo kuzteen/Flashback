@@ -25,6 +25,7 @@ const seg = (startMs: number, endMs: number, posMs: number, extra: Partial<Segme
   boundEndMs: endMs,
   disabled: false,
   cropX: 0.5,
+  cropY: 0.5,
   ...extra,
 });
 

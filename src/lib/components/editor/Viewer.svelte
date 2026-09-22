@@ -1,7 +1,8 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { beginGesture, commit, editorState, endGesture, preview, setDuration } from '$lib/editor-state.svelte';
-  import { outToSeg, setCrop } from '$lib/edit-model';
+  import { outToSeg, setFraming } from '$lib/edit-model';
+  import { place, zoomOf } from '$lib/frame-math';
   import { t } from '$lib/i18n.svelte';
   import { formatTimecode } from '$lib/timeline-math';
   import { playback } from './playback.svelte';
@@ -53,6 +54,8 @@
   });
 
   function onLoaded() {
+    srcW = video?.videoWidth ?? 0;
+    srcH = video?.videoHeight ?? 0;
     setDuration((video?.duration || 0) * 1000);
     playback.onReady();
   }
@@ -94,70 +97,111 @@
     playback.resumeAfterGesture();
   }
 
+  // Lienzo virtual del formato vertical, en las mismas unidades que el export (1080x1920): el
+  // visor escala esas cuentas al tamaño en pantalla con porcentajes.
+  const OW = 1080;
+  const OH = 1920;
+  const SNAP_PX = 6;
+
   const format = $derived(editorState.edit.format);
-  const fill = $derived(format.kind === 'vertical' ? format.fill : null);
+  // En pantalla completa se ve el vídeo tal cual: el lienzo vertical es una herramienta de encuadre.
+  const vert = $derived(format.kind === 'vertical' && !ui.fs);
+  const zoom = $derived(zoomOf(format));
 
-  // Caja real del vídeo dentro del escenario: el marco de recorte se dibuja encima de ella.
-  let vbox = $state({ x: 0, y: 0, w: 0, h: 0 });
-
-  function measure() {
-    if (!video) return;
-    vbox = { x: video.offsetLeft, y: video.offsetTop, w: video.offsetWidth, h: video.offsetHeight };
-  }
-
-  $effect(() => {
-    const v = video;
-    if (!v) return;
-    const ro = new ResizeObserver(measure);
-    ro.observe(v);
-    measure();
-    return () => ro.disconnect();
-  });
+  let srcW = $state(0);
+  let srcH = $state(0);
 
   // El encuadre que se ve y se arrastra es el del bloque bajo el cabezal.
   const segIdx = $derived(outToSeg(editorState.edit.segments, playback.outPos).index);
-  const cropX = $derived(editorState.edit.segments[segIdx]?.cropX ?? 0.5);
-  const frameW = $derived(Math.min(vbox.w, (vbox.h * 9) / 16));
-  // Misma cuenta que reframe::crop_rect: centrado en crop_x y limitado a los bordes.
-  const frameLeft = $derived(Math.max(0, Math.min(vbox.w - frameW, cropX * vbox.w - frameW / 2)));
+  const seg = $derived(editorState.edit.segments[segIdx]);
+  const fg = $derived(
+    srcW > 0 ? place(srcW, srcH, OW, OH, zoom, seg?.cropX ?? 0.5, seg?.cropY ?? 0.5) : { x: 0, y: 0, w: OW, h: OH },
+  );
+  // Si el fotograma cubre el lienzo, el fondo desenfocado no se ve y no hace falta pintarlo.
+  const covers = $derived(fg.x <= 0 && fg.y <= 0 && fg.x + fg.w >= OW && fg.y + fg.h >= OH);
 
-  let cropDrag: { index: number; startX: number; startCenter: number } | null = null;
+  let frameEl = $state<HTMLDivElement | null>(null);
+  let guideX = $state(false);
+  let guideY = $state(false);
+  let drag: { sx: number; sy: number; px: number; py: number; index: number; moved: boolean } | null = null;
 
-  function clampCenter(c: number): number {
-    const half = vbox.w > 0 ? frameW / 2 / vbox.w : 0.5;
-    return Math.max(half, Math.min(1 - half, c));
+  // Posición (0..1) que produjo un borde ya colocado; se parte de ella y no del valor guardado
+  // para que, si el fotograma estaba contra un borde, arrastrar hacia dentro responda al instante.
+  function axisPos(start: number, size: number, canvas: number): number {
+    return size > canvas ? (canvas / 2 - start) / size : (start + size / 2) / canvas;
   }
 
-  function onCropDown(e: PointerEvent) {
-    if (e.button !== 0 || vbox.w <= 0) return;
+  // Recorrido útil de la posición en un eje: fuera de él place() ya no movería nada.
+  function axisRange(size: number, canvas: number): [number, number] {
+    const half = size > canvas ? canvas / (2 * size) : size / (2 * canvas);
+    return [half, 1 - half];
+  }
+
+  // Mueve un eje d unidades del lienzo. Mayor que el lienzo: arrastrar a la derecha enseña lo de
+  // la izquierda. Menor: el fotograma sigue al puntero. A menos de SNAP_PX del centro se pega a
+  // él, como las guías de Photoshop.
+  function moveAxis(p0: number, d: number, size: number, canvas: number, k: number) {
+    const [lo, hi] = axisRange(size, canvas);
+    if (hi - lo < 1e-6) return { p: 0.5, snapped: false };
+    const raw = size > canvas ? p0 - d / size : p0 + d / canvas;
+    let p = Math.max(lo, Math.min(hi, raw));
+    const span = size > canvas ? size : canvas;
+    const snapped = Math.abs(p - 0.5) * span * k < SNAP_PX;
+    if (snapped) p = 0.5;
+    return { p, snapped };
+  }
+
+  function onFrameDown(e: PointerEvent) {
+    if (e.button !== 0 || !frameEl) return;
+    e.preventDefault();
+    frameEl.setPointerCapture(e.pointerId);
+    drag = {
+      sx: e.clientX,
+      sy: e.clientY,
+      px: axisPos(fg.x, fg.w, OW),
+      py: axisPos(fg.y, fg.h, OH),
+      index: segIdx,
+      moved: false,
+    };
+  }
+
+  function onFrameMove(e: PointerEvent) {
+    if (!drag || !frameEl) return;
+    const dx = e.clientX - drag.sx;
+    const dy = e.clientY - drag.sy;
+    if (!drag.moved) {
+      if (Math.hypot(dx, dy) < 3) return;
+      drag.moved = true;
+      beginGesture();
+    }
+    const k = frameEl.clientWidth / OW;
+    const nx = moveAxis(drag.px, dx / k, fg.w, OW, k);
+    const ny = moveAxis(drag.py, dy / k, fg.h, OH, k);
+    guideX = nx.snapped;
+    guideY = ny.snapped;
+    preview({ ...editorState.edit, segments: setFraming(editorState.edit.segments, drag.index, nx.p, ny.p) });
+  }
+
+  // Un clic sin arrastrar sigue siendo reproducir / pausar, como sobre el vídeo en horizontal.
+  function onFrameUp() {
+    const d = drag;
+    drag = null;
+    guideX = guideY = false;
+    if (!d) return;
+    if (d.moved) endGesture();
+    else playback.toggle();
+  }
+
+  function onFrameKey(e: KeyboardEvent) {
+    const sx = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0;
+    const sy = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0;
+    if (!sx && !sy) return;
     e.preventDefault();
     e.stopPropagation();
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    beginGesture();
-    // Se parte del centro efectivo y no de crop_x: si el marco está contra un borde, arrastrar
-    // hacia dentro responde al instante en vez de recorrer primero una zona muerta.
-    cropDrag = { index: segIdx, startX: e.clientX, startCenter: (frameLeft + frameW / 2) / vbox.w };
-  }
-
-  function onCropMove(e: PointerEvent) {
-    if (!cropDrag || vbox.w <= 0) return;
-    const next = clampCenter(cropDrag.startCenter + (e.clientX - cropDrag.startX) / vbox.w);
-    preview({ ...editorState.edit, segments: setCrop(editorState.edit.segments, cropDrag.index, next) });
-  }
-
-  function onCropUp() {
-    if (!cropDrag) return;
-    cropDrag = null;
-    endGesture();
-  }
-
-  function onCropKey(e: KeyboardEvent) {
-    const step = e.key === 'ArrowLeft' ? -0.02 : e.key === 'ArrowRight' ? 0.02 : 0;
-    if (!step) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const center = (frameLeft + frameW / 2) / Math.max(1, vbox.w);
-    commit({ ...editorState.edit, segments: setCrop(editorState.edit.segments, segIdx, clampCenter(center + step)) });
+    const step = 20;
+    const nx = moveAxis(axisPos(fg.x, fg.w, OW), sx * step, fg.w, OW, 0);
+    const ny = moveAxis(axisPos(fg.y, fg.h, OH), sy * step, fg.h, OH, 0);
+    commit({ ...editorState.edit, segments: setFraming(editorState.edit.segments, segIdx, nx.p, ny.p) });
   }
 
   // Encajado: el fondo es un lienzo diminuto al que se copia el fotograma, escalado y desenfocado
@@ -175,15 +219,28 @@
   }
 
   $effect(() => {
-    if (fill === 'fit' && bgCanvas) drawBg();
+    if (vert && !covers && bgCanvas) drawBg();
   });
 </script>
 
 <div class="stage">
   {#if editorState.videoSrc}
     <div class="fit">
-      <div class="frame" class:vfit={fill === 'fit'}>
-        {#if fill === 'fit'}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+      <div
+        class="frame"
+        class:vert
+        bind:this={frameEl}
+        role={vert ? 'group' : undefined}
+        aria-label={vert ? t('ed.framing') : undefined}
+        tabindex={vert ? 0 : undefined}
+        onpointerdown={vert ? onFrameDown : undefined}
+        onpointermove={vert ? onFrameMove : undefined}
+        onpointerup={vert ? onFrameUp : undefined}
+        onpointercancel={vert ? onFrameUp : undefined}
+        onkeydown={vert ? onFrameKey : undefined}
+      >
+        {#if vert && !covers}
           <canvas bind:this={bgCanvas} class="bg" width="54" height="96"></canvas>
         {/if}
         <video
@@ -192,31 +249,17 @@
           playsinline
           class:fs={ui.fs}
           class:nocursor={ui.fs && !ui.fsCtrlShow}
+          style:left={vert ? `${(fg.x / OW) * 100}%` : null}
+          style:top={vert ? `${(fg.y / OH) * 100}%` : null}
+          style:width={vert ? `${(fg.w / OW) * 100}%` : null}
+          style:height={vert ? `${(fg.h / OH) * 100}%` : null}
           onloadedmetadata={onLoaded}
           onended={() => playback.pause()}
-          onclick={() => playback.toggle()}
+          onclick={vert ? undefined : () => playback.toggle()}
         ><track kind="captions" /></video>
+        {#if vert && guideX}<span class="guide gx"></span>{/if}
+        {#if vert && guideY}<span class="guide gy"></span>{/if}
       </div>
-      {#if fill === 'crop' && vbox.w > 0 && !ui.fs}
-        <div class="crop-view" style:left="{vbox.x}px" style:top="{vbox.y}px" style:width="{vbox.w}px" style:height="{vbox.h}px">
-          <div
-            class="crop-frame"
-            style:left="{frameLeft}px"
-            style:width="{frameW}px"
-            role="slider"
-            tabindex="0"
-            aria-label={t('ed.cropFrame')}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={Math.round(cropX * 100)}
-            onpointerdown={onCropDown}
-            onpointermove={onCropMove}
-            onpointerup={onCropUp}
-            onpointercancel={onCropUp}
-            onkeydown={onCropKey}
-          ></div>
-        </div>
-      {/if}
     </div>
   {/if}
   {#if editorState.system}
@@ -395,12 +438,12 @@
     border-radius: 6px;
     pointer-events: none;
   }
-  /* En horizontal y en recorte el envoltorio no existe para el layout y el vídeo se coloca como
-     siempre; en encajado pasa a ser el lienzo 9:16 que simula el resultado. */
+  /* En horizontal el envoltorio no existe para el layout y el vídeo se coloca como siempre; en
+     vertical pasa a ser el lienzo 9:16 y el vídeo se sitúa dentro con las cuentas del export. */
   .frame {
     display: contents;
   }
-  .frame.vfit {
+  .frame.vert {
     position: relative;
     display: block;
     height: 100%;
@@ -410,17 +453,24 @@
     border-radius: var(--r-md);
     background: #000;
     box-shadow: 0 24px 60px -28px rgba(0, 0, 0, 0.9);
+    cursor: grab;
+    touch-action: none;
+    outline: none;
   }
-  .frame.vfit video:not(.fs) {
+  .frame.vert:active {
+    cursor: grabbing;
+  }
+  .frame.vert:focus-visible {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+  .frame.vert video {
     position: absolute;
-    left: 0;
-    top: 50%;
-    width: 100%;
     max-width: none;
     max-height: none;
-    transform: translateY(-50%);
+    object-fit: fill;
     border-radius: 0;
     box-shadow: none;
+    pointer-events: none;
   }
   .bg {
     position: absolute;
@@ -430,29 +480,25 @@
     filter: blur(14px) brightness(0.65);
     transform: scale(1.15);
   }
-  .crop-view {
+  /* Guías de centro: aparecen solo mientras el vídeo está pegado al centro de ese eje. */
+  .guide {
     position: absolute;
-    overflow: hidden;
-    border-radius: var(--r-md);
+    z-index: 2;
+    background: var(--gold);
     pointer-events: none;
   }
-  /* La sombra enorme atenúa todo lo que queda fuera del marco sin otro elemento. */
-  .crop-frame {
-    position: absolute;
+  .gx {
     top: 0;
     bottom: 0;
-    border: 2px solid var(--accent);
-    border-radius: 4px;
-    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6);
-    cursor: grab;
-    pointer-events: auto;
-    touch-action: none;
-    outline: none;
+    left: 50%;
+    width: 1px;
+    margin-left: -0.5px;
   }
-  .crop-frame:active {
-    cursor: grabbing;
-  }
-  .crop-frame:focus-visible {
-    border-color: var(--accent-soft);
+  .gy {
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 1px;
+    margin-top: -0.5px;
   }
 </style>

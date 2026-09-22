@@ -1,6 +1,6 @@
 <script lang="ts">
   import Icon from '../Icon.svelte';
-  import { commit, editorState } from '$lib/editor-state.svelte';
+  import { beginGesture, commit, editorState, endGesture, preview } from '$lib/editor-state.svelte';
   import type { OutputFormat } from '$lib/edit-model';
   import { t } from '$lib/i18n.svelte';
   import { ui } from './ui.svelte';
@@ -11,6 +11,28 @@
   function set(next: OutputFormat) {
     if (JSON.stringify(next) === JSON.stringify(format)) return;
     commit({ ...editorState.edit, format: next });
+  }
+
+  const customZoom = $derived(format.kind === 'vertical' && format.fill === 'custom' ? (format.zoom ?? 0.5) : 0.5);
+
+  // Arrastrar el deslizador es un gesto (un paso al soltar); con el teclado cada paso es uno.
+  let sliding = false;
+
+  function setZoom(z: number) {
+    const next: OutputFormat = { kind: 'vertical', fill: 'custom', zoom: z };
+    if (sliding) preview({ ...editorState.edit, format: next });
+    else commit({ ...editorState.edit, format: next });
+  }
+
+  function startSlide() {
+    sliding = true;
+    beginGesture();
+  }
+
+  function endSlide() {
+    if (!sliding) return;
+    sliding = false;
+    endGesture();
   }
 </script>
 
@@ -31,24 +53,28 @@
   {#if ui.formatOpen}
     <div class="body">
       <h3 class="title">{t('ed.format')}</h3>
-      <button class="opt" class:on={format.kind === 'horizontal'} onclick={() => set({ kind: 'horizontal' })}>
-        <span class="shape h"></span>
-        <span class="txt">
-          <span class="name">{t('ed.fmtHorizontal')}</span>
-          <span class="hint">{t('ed.fmtHorizontalHint')}</span>
-        </span>
-      </button>
-      <button
-        class="opt"
-        class:on={format.kind === 'vertical'}
-        onclick={() => set({ kind: 'vertical', fill: format.kind === 'vertical' ? format.fill : 'crop' })}
-      >
-        <span class="shape v"></span>
-        <span class="txt">
-          <span class="name">{t('ed.fmtVertical')}</span>
-          <span class="hint">{t('ed.fmtVerticalHint')}</span>
-        </span>
-      </button>
+      <div class="tiles" role="radiogroup" aria-label={t('ed.format')}>
+        <button
+          class="tile"
+          role="radio"
+          aria-checked={format.kind === 'horizontal'}
+          class:on={format.kind === 'horizontal'}
+          onclick={() => set({ kind: 'horizontal' })}
+        >
+          <span class="box"><span class="shape h"></span></span>
+          <span class="name">{t('ed.fmtOriginal')}</span>
+        </button>
+        <button
+          class="tile"
+          role="radio"
+          aria-checked={format.kind === 'vertical'}
+          class:on={format.kind === 'vertical'}
+          onclick={() => set({ kind: 'vertical', fill: format.kind === 'vertical' ? format.fill : 'crop' })}
+        >
+          <span class="box"><span class="shape v"></span></span>
+          <span class="name">9:16</span>
+        </button>
+      </div>
 
       {#if format.kind === 'vertical'}
         <div class="seg" role="radiogroup" aria-label={t('ed.fill')}>
@@ -68,30 +94,59 @@
           >
             {t('ed.fillFit')}
           </button>
+          <button
+            role="radio"
+            aria-checked={format.fill === 'custom'}
+            class:on={format.fill === 'custom'}
+            onclick={() => set({ kind: 'vertical', fill: 'custom', zoom: customZoom })}
+          >
+            {t('ed.fillCustom')}
+          </button>
         </div>
-        <p class="note">{format.fill === 'crop' ? t('ed.cropHint') : t('ed.fitHint')}</p>
+        {#if format.fill === 'custom'}
+          <label class="zoom">
+            <span class="zl">{t('ed.zoom')}</span>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              value={Math.round(customZoom * 100)}
+              onpointerdown={startSlide}
+              onpointerup={endSlide}
+              onpointercancel={endSlide}
+              oninput={(e) => setZoom(Number(e.currentTarget.value) / 100)}
+            />
+            <span class="zv mono">{Math.round(customZoom * 100)}%</span>
+          </label>
+        {/if}
+        <p class="note">{t('ed.frameHint')}</p>
       {/if}
     </div>
   {/if}
 </aside>
 
 <style>
+  /* Plegado no ocupa sitio: solo el botón, flotando sobre la esquina del visor. Abierto pasa a
+     ser una columna que empuja el vídeo a la izquierda. */
   .panel {
-    flex: none;
-    width: 52px;
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 5;
     display: flex;
     flex-direction: column;
     align-items: stretch;
     gap: 14px;
-    padding: 10px 8px;
-    background: var(--bg-0);
-    border-left: 1px solid var(--line);
-    transition: width 0.18s ease;
-    overflow: hidden;
   }
   .panel.open {
+    position: static;
+    flex: none;
     width: 260px;
     padding: 10px 14px 14px;
+    background: var(--bg-0);
+    border-left: 1px solid var(--line);
+    overflow: hidden;
   }
   .toggle {
     align-self: flex-end;
@@ -109,6 +164,16 @@
     color: var(--text-0);
     background: var(--bg-hover);
   }
+  /* Sobre el vídeo necesita su propio fondo para verse en escenas claras. */
+  .panel:not(.open) .toggle {
+    color: var(--text-1);
+    background: rgba(18, 18, 20, 0.72);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--line);
+  }
+  .panel:not(.open) .toggle:hover {
+    color: var(--text-0);
+  }
   .body {
     display: flex;
     flex-direction: column;
@@ -123,59 +188,59 @@
     text-transform: uppercase;
     color: var(--text-2);
   }
-  .opt {
+  /* Dos casillas lado a lado: la silueta de la proporción se entiende antes que cualquier texto. */
+  .tiles {
     display: flex;
-    align-items: center;
     gap: 12px;
-    padding: 10px;
-    text-align: left;
+  }
+  .tile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 7px;
+  }
+  .box {
+    width: 64px;
+    height: 64px;
+    display: grid;
+    place-items: center;
     background: var(--surface);
-    border: 1px solid var(--line);
+    border: 2px solid var(--line);
     border-radius: var(--r-md);
     transition: border-color 0.14s ease, background 0.14s ease;
   }
-  .opt:hover {
+  .tile:hover .box {
     background: var(--bg-2);
   }
-  .opt.on {
-    border-color: var(--text-3);
+  .tile.on .box {
+    border-color: var(--accent);
     background: var(--bg-2);
   }
-  /* Miniatura de la proporción: se entiende antes que el texto. */
   .shape {
-    flex: none;
-    border: 2px solid var(--text-3);
+    border: 2px solid var(--text-2);
     border-radius: 3px;
   }
-  .opt.on .shape {
+  .tile.on .shape {
     border-color: var(--text-0);
   }
   .shape.h {
-    width: 28px;
-    height: 16px;
+    width: 30px;
+    height: 18px;
   }
   .shape.v {
-    width: 14px;
-    height: 24px;
-    margin: 0 7px;
-  }
-  .txt {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
+    width: 18px;
+    height: 30px;
   }
   .name {
-    font-size: 13px;
-    color: var(--text-0);
+    font-size: 12.5px;
+    color: var(--text-2);
   }
-  .hint {
-    font-size: 11.5px;
-    color: var(--text-3);
+  .tile.on .name {
+    color: var(--text-0);
   }
   .seg {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(3, 1fr);
     gap: 2px;
     padding: 3px;
     margin-top: 4px;
@@ -196,6 +261,51 @@
   .seg button.on {
     color: var(--text-0);
     background: var(--bg-3);
+  }
+  .zoom {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 10px;
+    margin-top: 2px;
+  }
+  .zl {
+    font-size: 12px;
+    color: var(--text-2);
+  }
+  .zv {
+    min-width: 34px;
+    font-size: 11.5px;
+    text-align: right;
+    color: var(--text-1);
+  }
+  /* Mismo aspecto que los faders de volumen: pista fina y tirador rectangular. */
+  .zoom input {
+    width: 100%;
+    height: 14px;
+    appearance: none;
+    background: transparent;
+    cursor: pointer;
+  }
+  .zoom input::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 999px;
+    background: var(--bg-3);
+  }
+  .zoom input::-webkit-slider-thumb {
+    appearance: none;
+    width: 16px;
+    height: 10px;
+    margin-top: -3px;
+    border-radius: 3px;
+    background: var(--text-0);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  }
+  .zoom input:focus-visible {
+    outline: none;
+  }
+  .zoom input:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 3px var(--accent-glow);
   }
   .note {
     font-size: 12px;

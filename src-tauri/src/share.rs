@@ -165,6 +165,7 @@ mod tests {
                 bound_end_ms: None,
                 disabled: None,
                 crop_x: None,
+                crop_y: None,
             }],
             mixer: Default::default(),
             format: Default::default(),
