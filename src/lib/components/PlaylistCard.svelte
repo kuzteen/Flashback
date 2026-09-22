@@ -138,7 +138,7 @@
     <h3 class="name">{playlist.name}</h3>
     <span class="sub mono">
       {t(clips.length === 1 ? 'pl.oneClip' : 'pl.nClips', { n: clips.length })}
-      {#if total > 0}<span class="dot">·</span>{formatDuration(total)}{/if}
+      {#if total > 0}<span class="dot">•</span>{formatDuration(total)}{/if}
     </span>
   </div>
 

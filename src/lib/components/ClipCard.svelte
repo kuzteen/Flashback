@@ -20,10 +20,17 @@
   import { openShare } from '$lib/share.svelte';
   import { selected, isSelected, pick } from '$lib/selection.svelte';
   import { confirmDelete } from '$lib/confirm.svelte';
-  import { playlistsWith } from '$lib/playlists.svelte';
+  import { playlistsWith, rekeyPlaylistClip } from '$lib/playlists.svelte';
   import { t } from '$lib/i18n.svelte';
 
-  let { clip }: { clip: Clip } = $props();
+  // fresh solo lo enciende la vista de playlist: en la biblioteca no hay "añadido" que marcar.
+  // compact es la vista en lista de las playlists: la misma tarjeta con otro layout, así que el
+  // menú, renombrar, seleccionar y la vista previa no se duplican en otro componente.
+  let {
+    clip,
+    fresh = false,
+    compact = false
+  }: { clip: Clip; fresh?: boolean; compact?: boolean } = $props();
 
   const open = $derived(menu.openId === clip.id);
   // Margen mínimo contra los bordes de la ventana, para el menú y su submenú.
@@ -287,7 +294,9 @@
       const newPath = await invoke<string>('rename_clip', { path: clip.path, newName: name });
       const newId = newPath.split(/[\\/]/).pop() ?? clip.id;
       renameFavorite(clip.id, newId);
+      const oldPath = clip.path;
       await refreshLibrary();
+      rekeyPlaylistClip(oldPath, newPath);
     } catch (err) {
       console.error('rename_clip', err);
     }
@@ -331,6 +340,7 @@
   class="card"
   class:open
   class:sel
+  class:compact
   bind:this={cardEl}
   role="button"
   tabindex="0"
@@ -373,6 +383,12 @@
       <span class="dur">{formatDuration(clip.durationSec)}</span>
     </div>
 
+    {#if fresh && !compact}
+      <span class="fresh mono">
+        <Icon name="bolt" size={12} />
+        {t('pl.recentlyAdded')}
+      </span>
+    {/if}
   </div>
 
   <button
@@ -416,7 +432,13 @@
         />
       {/if}
 
-      <span class="when mono"><Icon name="clock" size={13} sw={2} />{formatRelative(clip.createdAt)}</span>
+      <span class="when mono">
+        <Icon name="clock" size={13} sw={2} />{formatRelative(clip.createdAt)}
+        {#if fresh && compact}
+          <span class="dot">•</span>
+          <span class="fresh-inline"><Icon name="bolt" size={12} />{t('pl.recentlyAdded')}</span>
+        {/if}
+      </span>
     </div>
 
     <div class="actions">
@@ -601,6 +623,35 @@
     opacity: 0;
     transition: opacity 0.16s ease, background 0.14s ease, border-color 0.14s ease;
   }
+  /* Esquina libre: arriba están el check y la duración, y bajo la izquierda cae el bloque de
+     origen y título, que ya carga ese lado. A la derecha reparte el peso de la tarjeta. */
+  .fresh {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 9px 0 7px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    color: var(--text-0);
+    background: rgba(27, 30, 38, 0.6);
+    backdrop-filter: blur(6px);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    pointer-events: none;
+  }
+  /* El acento va en el rayo y no en el relleno: es una etiqueta de estado, y con el fondo
+     macizo pesaba como el botón primario, que en la app significa acción. */
+  .fresh :global(svg) {
+    flex: none;
+    color: var(--accent);
+  }
   /* Al llegar con Tab no hay puntero que descubra el check, y sin él la tarjeta parece no tener
      forma de seleccionarse. :focus-visible y no :focus-within: pulsar un botón con el ratón
      también deja el foco dentro, y entonces el check se quedaba clavado al apartar el ratón.
@@ -676,6 +727,7 @@
     display: block;
   }
   .title {
+    font-family: var(--font-display);
     font-size: 16px;
     font-weight: 560;
     line-height: 1.2;
@@ -695,6 +747,7 @@
     top: 50%;
     transform: translateY(-50%);
     min-width: 0;
+    font-family: var(--font-display);
     font-size: 16px;
     font-weight: 560;
     line-height: 1.2;
@@ -727,7 +780,6 @@
     color: var(--text-0);
   }
 
-    font-family: var(--font-display);
   .menu {
     position: absolute;
     top: calc(100% + 8px);
@@ -747,7 +799,6 @@
   .menu.floating {
     position: fixed;
     right: auto;
-    font-family: var(--font-display);
   }
   .menu button {
     display: flex;
@@ -835,5 +886,85 @@
   }
   .when :global(svg) {
     flex-shrink: 0;
+  }
+
+  /* Vista compacta: fila del alto de una tarjeta de playlist, con la miniatura en 16:9 a la
+     izquierda. Todo lo demás es la misma tarjeta, solo recolocada. */
+  .card.compact {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 6px 8px 8px;
+  }
+  .compact .thumb {
+    flex: none;
+    width: 112px;
+    aspect-ratio: 16 / 9;
+    border-radius: 3px;
+  }
+  .compact .watermark,
+  .compact .scrim {
+    display: none;
+  }
+  .compact .badge {
+    top: auto;
+    right: 4px;
+    bottom: 4px;
+    height: 18px;
+    gap: 4px;
+    padding: 0 6px;
+    font-size: 10.5px;
+    backdrop-filter: none;
+    background: rgba(0, 0, 0, 0.7);
+  }
+  .compact .pick {
+    top: 12px;
+    left: 12px;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+  }
+  .compact .meta {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+  }
+  .compact .info {
+    min-height: 56px;
+  }
+  .compact .src {
+    padding-bottom: 5px;
+    font-size: 11.5px;
+  }
+  .compact .src-ico {
+    width: 14px;
+    height: 14px;
+  }
+  .compact .title,
+  .compact .title-edit {
+    font-size: 14.5px;
+  }
+  .compact .when {
+    font-size: 10.5px;
+  }
+  .compact .act {
+    width: 34px;
+    height: 34px;
+  }
+  /* La píldora de "recién añadido" no cabe sobre una miniatura tan pequeña: pasa a la línea
+     de la fecha, detrás del separador. */
+  .when .dot {
+    margin: 0 1px;
+    color: var(--text-3);
+  }
+  .fresh-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--text-1);
+  }
+  .fresh-inline :global(svg) {
+    flex: none;
+    color: var(--accent);
   }
 </style>

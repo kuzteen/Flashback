@@ -470,8 +470,12 @@ fn list_playlists(app: tauri::AppHandle) -> Result<Vec<playlists::Playlist>, Str
 }
 
 #[tauri::command]
-fn create_playlist(app: tauri::AppHandle, name: String) -> Result<playlists::Playlist, String> {
-    playlists::create(&playlist_index(&app)?, &name)
+fn create_playlist(
+    app: tauri::AppHandle,
+    name: String,
+    description: String,
+) -> Result<playlists::Playlist, String> {
+    playlists::create(&playlist_index(&app)?, &name, &description)
 }
 
 #[tauri::command]
@@ -494,13 +498,28 @@ fn playlist_covers_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, Str
 }
 
 #[tauri::command]
-fn set_playlist_cover(app: tauri::AppHandle, id: String, bytes: Vec<u8>) -> Result<String, String> {
-    playlists::set_cover(&playlist_index(&app)?, &playlist_covers_dir(&app)?, &id, &bytes)
+// El PNG llega como cuerpo binario de la petición y el id en una cabecera: como argumento
+// Vec<u8> viajaba serializado en JSON como un array de números, uno por byte.
+fn set_playlist_cover(app: tauri::AppHandle, request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("La portada tiene que llegar como bytes".into());
+    };
+    let id = request
+        .headers()
+        .get("x-playlist-id")
+        .and_then(|v| v.to_str().ok())
+        .ok_or("Falta el id de la playlist")?;
+    playlists::set_cover(&playlist_index(&app)?, &playlist_covers_dir(&app)?, id, bytes)
 }
 
 #[tauri::command]
 fn clear_playlist_cover(app: tauri::AppHandle, id: String) -> Result<(), String> {
     playlists::clear_cover(&playlist_index(&app)?, &id)
+}
+
+#[tauri::command]
+fn reorder_playlists(app: tauri::AppHandle, ids: Vec<String>) -> Result<(), String> {
+    playlists::reorder(&playlist_index(&app)?, &ids)
 }
 
 #[tauri::command]
@@ -519,8 +538,22 @@ fn playlist_remove_clips(app: tauri::AppHandle, id: String, paths: Vec<String>) 
 }
 
 #[tauri::command]
+fn playlist_restore_clips(
+    app: tauri::AppHandle,
+    id: String,
+    entries: Vec<(usize, playlists::ClipRef)>,
+) -> Result<(), String> {
+    playlists::restore_clips(&playlist_index(&app)?, &id, entries)
+}
+
+#[tauri::command]
 fn playlist_set_clips(app: tauri::AppHandle, id: String, paths: Vec<String>) -> Result<(), String> {
     playlists::set_clips(&playlist_index(&app)?, &id, paths)
+}
+
+#[tauri::command]
+fn playlist_mark_seen(app: tauri::AppHandle, id: String, path: String) -> Result<(), String> {
+    playlists::mark_seen(&playlist_index(&app)?, &id, &path)
 }
 
 #[tauri::command]
@@ -742,6 +775,9 @@ pub fn run() {
             playlist_add_clips,
             playlist_remove_clips,
             playlist_set_clips,
+            playlist_restore_clips,
+            playlist_mark_seen,
+            reorder_playlists,
             start_replay,
             stop_replay,
             save_replay,

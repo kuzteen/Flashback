@@ -3,12 +3,35 @@
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import Icon from '$lib/components/Icon.svelte';
+  import SortableGrid from '$lib/components/SortableGrid.svelte';
   import ClipCard from '$lib/components/ClipCard.svelte';
-  import { formatDuration } from '$lib/clips';
+  import ClipToolbar from '$lib/components/ClipToolbar.svelte';
+  import {
+    formatDuration,
+    sortClips,
+    clipMatchesFilters,
+    displaySource,
+    type Clip,
+    type LibraryFilter as Filter
+  } from '$lib/clips';
   import { library, refreshLibrary } from '$lib/library.svelte';
-  import { playlists, refreshPlaylists, findPlaylist, playlistClips, removeFromPlaylist } from '$lib/playlists.svelte';
+  import {
+    playlists,
+    refreshPlaylists,
+    findPlaylist,
+    playlistClips,
+    removeFromPlaylist,
+    restoreToPlaylist,
+    type RemovedClip,
+    isFreshInPlaylist,
+    markPlaylistClipSeen,
+    openPlaylistEdit,
+    reorderPlaylist,
+    playlistView,
+    setPlaylistView
+  } from '$lib/playlists.svelte';
   import { clipOrder, editorState } from '$lib/editor.svelte';
-  import { selected, clearSelection, pruneSelection } from '$lib/selection.svelte';
+  import { selected, clearSelection, selectAll, pruneSelection } from '$lib/selection.svelte';
   import { shareState } from '$lib/share.svelte';
   import { confirmState } from '$lib/confirm.svelte';
   import { t } from '$lib/i18n.svelte';
@@ -29,6 +52,87 @@
   const clips = $derived(playlist ? playlistClips(playlist) : []);
   const total = $derived(clips.reduce((n, c) => n + c.durationSec, 0));
 
+  // Por ruta, que es la clave con la que la playlist guarda fecha y marca de visto.
+  const refs = $derived(new Map((playlist?.clips ?? []).map((c, i) => [c.path, { ...c, i }])));
+
+  let query = $state('');
+  let filters = $state<Filter[]>([]);
+  // El orden propio va primero y por defecto: es el único que el usuario decide, y el único en
+  // el que arrastrar tiene sentido.
+  type SortMode = 'custom' | 'added' | 'newest' | 'oldest';
+  let sortMode = $state<SortMode>('custom');
+  let toolbar = $state<ClipToolbar<SortMode> | null>(null);
+  const sorts: { value: SortMode; label: string }[] = [
+    { value: 'custom', label: 'pl.sortCustom' },
+    { value: 'added', label: 'pl.sortAdded' },
+    { value: 'newest', label: 'clips.newest' },
+    { value: 'oldest', label: 'clips.oldest' }
+  ];
+
+  const filtered = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    return clips.filter((c) => {
+      const matchesQuery =
+        !q ||
+        c.title.toLowerCase().includes(q) ||
+        c.source.toLowerCase().includes(q) ||
+        displaySource(c.source).toLowerCase().includes(q);
+      return matchesQuery && clipMatchesFilters(c, filters);
+    });
+  });
+
+  // Los clips sin fecha (añadidos antes de que se guardara) desempatan por su posición en el
+  // índice, que es el único rastro que queda del orden en que entraron.
+  function byAdded(list: Clip[]): Clip[] {
+    return [...list].sort((a, b) => {
+      const ra = refs.get(a.path);
+      const rb = refs.get(b.path);
+      const ta = ra?.addedAt?.getTime() ?? 0;
+      const tb = rb?.addedAt?.getTime() ?? 0;
+      if (ta !== tb) return tb - ta;
+      return (rb?.i ?? 0) - (ra?.i ?? 0);
+    });
+  }
+
+  const sorted = $derived(
+    sortMode === 'newest'
+      ? sortClips(filtered, false)
+      : sortMode === 'oldest'
+        ? sortClips(filtered, true)
+        : sortMode === 'added'
+          ? byAdded(filtered)
+          : filtered
+  );
+
+  // Solo se arrastra sobre la lista completa en su orden propio: con un filtro o un orden
+  // derivado, "soltar entre A y B" no tiene una posición única en la playlist real.
+  const canReorder = $derived(
+    sortMode === 'custom' && !query.trim() && filters.length === 0 && sorted.length > 1
+  );
+
+  // Los clips que la biblioteca no encuentra (unidad desconectada, carpeta quitada) no se ven
+  // pero siguen en la playlist: van al final para que vuelvan si reaparecen.
+  function reorder(from: number, to: number) {
+    if (!playlist) return;
+    const list = sorted.map((c) => c.path);
+    const [moved] = list.splice(from, 1);
+    list.splice(to > from ? to - 1 : to, 0, moved);
+    const shown = new Set(list);
+    const hidden = playlist.clips.map((c) => c.path).filter((p) => !shown.has(p));
+    reorderPlaylist(playlist.id, [...list, ...hidden]);
+  }
+
+  // Abrir el clip lo da por visto y apaga su pill. Depende solo de la ruta abierta: leer la
+  // playlist sin untrack reentraría en el efecto con cada escritura del índice.
+  $effect(() => {
+    const path = editorState.clip?.path;
+    if (!path) return;
+    untrack(() => {
+      const p = playlist;
+      if (p && p.clips.some((c) => c.path === path)) markPlaylistClipSeen(p.id, path);
+    });
+  });
+
   $effect(() => {
     refreshPlaylists();
     if (!library.loaded) refreshLibrary();
@@ -42,8 +146,9 @@
     return () => clearSelection();
   });
 
+  // El editor navega anterior/siguiente por este mismo orden.
   $effect(() => {
-    clipOrder.list = clips;
+    clipOrder.list = sorted;
   });
 
   $effect(() => {
@@ -51,10 +156,91 @@
     untrack(() => pruneSelection(list));
   });
 
+  // Por pertenencia, no por tamaño: con un filtro activo la selección puede ser mayor que lo
+  // visible sin contener un solo clip de la lista.
+  const allSelected = $derived(sorted.length > 0 && sorted.every((c) => selected.has(c.id)));
+
+  function toggleAll() {
+    if (allSelected) clearSelection();
+    else selectAll();
+  }
+
+  // Quitar de la playlist no pregunta antes: se puede deshacer durante unos segundos. La barra
+  // ocupa el sitio de la de selección, que desaparece justo al quitar.
+  // La cuenta atrás se ve: cada punta del icono es un tramo, y al borrarse la última la barra
+  // se va. 8 tramos de 625 ms son los 5 s del deshacer.
+  const SPOKES = 8;
+  const SPOKE_MS = 625;
+  let undo = $state<{ id: string; removed: RemovedClip[] } | null>(null);
+  let spokesLeft = $state(SPOKES);
+  let undoTimer: ReturnType<typeof setInterval> | undefined;
+
+  function armUndo() {
+    clearInterval(undoTimer);
+    undoTimer = setInterval(() => {
+      spokesLeft -= 1;
+      if (spokesLeft <= 0) {
+        clearInterval(undoTimer);
+        undo = null;
+      }
+    }, SPOKE_MS);
+  }
+
+  function startUndo(next: { id: string; removed: RemovedClip[] }) {
+    undo = next;
+    spokesLeft = SPOKES;
+    armUndo();
+  }
+
+  async function undoRemove() {
+    const u = undo;
+    if (!u) return;
+    clearInterval(undoTimer);
+    undo = null;
+    await restoreToPlaylist(u.id, u.removed);
+  }
+
+  $effect(() => {
+    id;
+    untrack(() => (undo = null));
+    return () => clearInterval(undoTimer);
+  });
+
+  // En el sentido de las agujas del reloj desde arriba. Se borran a partir de la segunda y la
+  // de arriba es la última en irse, como la manecilla que marca el final.
+  const SPOKE_PATHS = [
+    'M 68 30.75A 3.85 3.85 0 0 1 64.15 34.61L 63.89 34.61A 3.85 3.85 0 0 1 60.04 30.77L 60 10.57A 3.85 3.85 0 0 1 63.85 6.71L 64.11 6.71A 3.85 3.85 0 0 1 67.96 10.55L 68 30.75Z',
+    'M 101.42 32.31A 3.79 3.79 0 0 1 96.06 32.44L 95.74 32.14A 3.79 3.79 0 0 1 95.61 26.78L 98.8 23.43A 3.79 3.79 0 0 1 104.16 23.3L 104.48 23.6A 3.79 3.79 0 0 1 104.61 28.96L 101.42 32.31Z',
+    'M 121.25 64.2A 3.76 3.76 0 0 1 117.49 67.96L 108.29 67.96A 3.76 3.76 0 0 1 104.53 64.2L 104.53 63.8A 3.76 3.76 0 0 1 108.29 60.04L 117.49 60.04A 3.76 3.76 0 0 1 121.25 63.8L 121.25 64.2Z',
+    'M 104.5 98.96A 3.84 3.84 0 0 1 104.48 104.39L 104.28 104.58A 3.84 3.84 0 0 1 98.85 104.55L 89.44 95.04A 3.84 3.84 0 0 1 89.46 89.61L 89.66 89.42A 3.84 3.84 0 0 1 95.09 89.45L 104.5 98.96Z',
+    'M 67.96 117.45A 3.84 3.84 0 0 1 64.12 121.28L 63.84 121.28A 3.84 3.84 0 0 1 60 117.43L 60.04 99.49A 3.84 3.84 0 0 1 63.88 95.66L 64.16 95.66A 3.84 3.84 0 0 1 68 99.51L 67.96 117.45Z',
+    'M 43.28 84.85A 3.94 3.94 0 0 1 43.28 90.43L 29.2 104.51A 3.94 3.94 0 0 1 23.62 104.51L 23.5 104.39A 3.94 3.94 0 0 1 23.5 98.81L 37.58 84.73A 3.94 3.94 0 0 1 43.16 84.73L 43.28 84.85Z',
+    'M 34.61 64.14A 3.86 3.86 0 0 1 30.74 68L 10.56 67.96A 3.86 3.86 0 0 1 6.71 64.1L 6.71 63.86A 3.86 3.86 0 0 1 10.58 60L 30.76 60.04A 3.86 3.86 0 0 1 34.61 63.9L 34.61 64.14Z',
+    'M 43.09 43.21A 3.87 3.87 0 0 1 37.61 43.21L 23.51 29.11A 3.87 3.87 0 0 1 23.51 23.63L 23.65 23.49A 3.87 3.87 0 0 1 29.13 23.49L 43.23 37.59A 3.87 3.87 0 0 1 43.23 43.07L 43.09 43.21Z'
+  ];
+
   function onKey(e: KeyboardEvent) {
     if (editorState.clip || shareState.clip || confirmState.req) return;
     const el = e.target as HTMLElement | null;
-    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+    const typing =
+      !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      toolbar?.focusSearch();
+      return;
+    }
+    if (typing) return;
+    const ctrl = e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey;
+    if (ctrl && e.key.toLowerCase() === 'z' && undo) {
+      e.preventDefault();
+      undoRemove();
+      return;
+    }
+    if (ctrl && e.key.toLowerCase() === 'a') {
+      e.preventDefault();
+      selectAll();
+      return;
+    }
     if (selected.size === 0) return;
     if (e.key === 'Escape') {
       e.preventDefault();
@@ -67,9 +253,11 @@
 
   async function removeSelected() {
     if (!playlist || selected.size === 0) return;
+    const pid = playlist.id;
     const paths = clips.filter((c) => selected.has(c.id)).map((c) => c.path);
-    await removeFromPlaylist(playlist.id, paths);
+    const removed = await removeFromPlaylist(pid, paths);
     clearSelection();
+    if (removed.length > 0) startUndo({ id: pid, removed });
   }
 </script>
 
@@ -81,24 +269,57 @@
       <Icon name="chevron-down" size={18} sw={2.2} />
     </button>
     {#if playlist}
-      <div class="cover">
+      <button
+        class="cover"
+        aria-label={t('pl.edit')}
+        onclick={() => openPlaylistEdit(playlist.id)}
+      >
         {#if playlist.coverSrc}
           <img src={playlist.coverSrc} alt="" draggable="false" />
         {:else}
-          <Icon name="heart-fill" size={24} />
+          <Icon name="heart-fill" size={44} />
         {/if}
-      </div>
+        <span class="cover-hint"><Icon name="rename" size={24} sw={1.9} /></span>
+      </button>
     {/if}
     <div class="titles">
       <h1>{playlist?.name ?? t('pl.missing')}</h1>
       {#if playlist}
+        {#if playlist.description}<p class="desc">{playlist.description}</p>{/if}
         <span class="sub mono">
           {t(clips.length === 1 ? 'pl.oneClip' : 'pl.nClips', { n: clips.length })}
-          {#if total > 0}<span class="dot">·</span>{formatDuration(total)}{/if}
+          {#if total > 0}<span class="dot">•</span>{formatDuration(total)}{/if}
         </span>
-        {#if playlist.description}<p class="desc">{playlist.description}</p>{/if}
       {/if}
     </div>
+
+    {#if playlist && clips.length > 0}
+      <div class="right">
+        <ClipToolbar {clips} bind:query bind:filters bind:sort={sortMode} {sorts} bind:this={toolbar} />
+        <div class="view" role="radiogroup" aria-label={t('pl.view')}>
+          <button
+            role="radio"
+            aria-checked={playlistView.mode === 'cards'}
+            aria-label={t('pl.viewCards')}
+            class:on={playlistView.mode === 'cards'}
+            onclick={() => setPlaylistView('cards')}
+          >
+            <Icon name="view-cards" size={16} />
+            <span class="tip" aria-hidden="true">{t('pl.viewCards')}</span>
+          </button>
+          <button
+            role="radio"
+            aria-checked={playlistView.mode === 'list'}
+            aria-label={t('pl.viewList')}
+            class:on={playlistView.mode === 'list'}
+            onclick={() => setPlaylistView('list')}
+          >
+            <Icon name="view-list" size={16} />
+            <span class="tip" aria-hidden="true">{t('pl.viewList')}</span>
+          </button>
+        </div>
+      </div>
+    {/if}
   </header>
 
   {#if playlists.loaded && !playlist}
@@ -112,12 +333,25 @@
       <p>{t('pl.emptyClips')}</p>
       <span class="hint mono">{t('pl.emptyClipsHint')}</span>
     </div>
-  {:else}
-    <div class="grid">
-      {#each clips as clip (clip.id)}
-        <ClipCard {clip} />
-      {/each}
+  {:else if sorted.length === 0}
+    <div class="empty">
+      <Icon name="chevrons" size={56} sw={1.2} />
+      <p>{query ? t('clips.noResultsQuery', { query }) : t('clips.noResultsFilter')}</p>
     </div>
+  {:else}
+    <!-- Remontar al cambiar de vista: la virtualización mide el alto de fila al montar, y con
+         la rejilla viva se quedaría con el de la vista anterior. -->
+    {#key playlistView.mode}
+      <SortableGrid items={sorted} key={(c) => c.id} onreorder={canReorder ? reorder : undefined}>
+        {#snippet children(clip)}
+          <ClipCard
+            {clip}
+            compact={playlistView.mode === 'list'}
+            fresh={isFreshInPlaylist(refs.get(clip.path))}
+          />
+        {/snippet}
+      </SortableGrid>
+    {/key}
   {/if}
 </div>
 
@@ -129,12 +363,43 @@
     in:selbarPop={{ duration: 220 }}
     out:selbarPop={{ duration: 140 }}
   >
+    <button
+      class="selall"
+      class:all={allSelected}
+      role="checkbox"
+      aria-checked={allSelected ? 'true' : 'mixed'}
+      aria-label={t('sel.all')}
+      onclick={toggleAll}
+    >
+      <Icon name={allSelected ? 'check' : 'minus'} size={14} sw={2.8} />
+    </button>
     <span class="selcount mono">{t('sel.count', { n: String(selected.size) })}</span>
     <button class="selbtn" onclick={clearSelection}>{t('sel.cancel')}</button>
     <button class="selbtn danger" onclick={removeSelected}>
       <Icon name="minus" size={15} sw={2.6} />
       {t('pl.removeFrom')}
     </button>
+  </div>
+{/if}
+
+{#if undo && selected.size === 0}
+  <div
+    class="selbar undo"
+    role="status"
+    in:selbarPop={{ duration: 220 }}
+    out:selbarPop={{ duration: 140 }}
+  >
+    <svg class="countdown" viewBox="0 0 128 128" width="16" height="16" aria-hidden="true">
+      {#each SPOKE_PATHS as d, k (k)}
+        <path {d} class:gone={(k + SPOKES - 1) % SPOKES < SPOKES - spokesLeft} />
+      {/each}
+    </svg>
+    <span class="selcount mono">
+      {undo.removed.length === 1
+        ? t('pl.removedOne')
+        : t('pl.removedN', { n: String(undo.removed.length) })}
+    </span>
+    <button class="selbtn" onclick={undoRemove}>{t('pl.undo')}</button>
   </div>
 {/if}
 
@@ -145,8 +410,70 @@
   .head {
     display: flex;
     align-items: center;
-    gap: 14px;
-    margin-bottom: 26px;
+    gap: 16px;
+    margin-bottom: 28px;
+    flex-wrap: wrap;
+  }
+  .right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .view {
+    display: flex;
+    height: 36px;
+    padding: 3px;
+    gap: 2px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+  }
+  .view button {
+    width: 30px;
+    display: grid;
+    place-items: center;
+    color: var(--text-3);
+    border-radius: 4px;
+    transition: color 0.14s ease, background 0.14s ease;
+  }
+  .view button:hover {
+    color: var(--text-0);
+  }
+  .view button.on {
+    color: var(--text-0);
+    background: var(--bg-3);
+  }
+  /* Tooltip propio en vez de title: el nativo es el de Chromium y desentona con la app. Sale
+     debajo y alineado a la derecha porque los botones van pegados al borde de la ventana, y
+     con un pequeño retraso al aparecer para no encenderse al cruzar la barra con el ratón. */
+  .view button {
+    position: relative;
+  }
+  .tip {
+    position: absolute;
+    top: calc(100% + 9px);
+    right: -4px;
+    width: max-content;
+    padding: 7px 11px;
+    font-size: 12.5px;
+    line-height: 1.35;
+    color: var(--text-1);
+    background: var(--bg-0);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.7);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.12s ease, visibility 0.12s;
+    z-index: 60;
+  }
+  .view button:hover .tip,
+  .view button:focus-visible .tip {
+    opacity: 1;
+    visibility: visible;
+    transition-delay: 0.35s;
   }
   .back {
     width: 36px;
@@ -168,14 +495,18 @@
   .back :global(svg) {
     transform: rotate(90deg);
   }
+  /* 110 px y no más: las portadas se rasterizan a 256 px (COVER_PX), y con el escalado de
+     Windows a 1.5x una portada mayor pediría más píxeles de los que tiene el PNG. */
   .cover {
+    position: relative;
     flex: none;
-    width: 52px;
-    height: 52px;
+    width: 110px;
+    height: 110px;
+    padding: 0;
     display: grid;
     place-items: center;
     overflow: hidden;
-    border-radius: 9px;
+    border-radius: 12px;
     color: var(--text-3);
     background: var(--bg-2);
   }
@@ -185,23 +516,45 @@
     object-fit: cover;
     display: block;
   }
+  /* Solo al pasar por encima: la portada es lo primero que se mira de la playlist y un icono
+     permanente encima competiría con ella. */
+  .cover-hint {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: var(--text-0);
+    background: rgba(0, 0, 0, 0.55);
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+  .cover:hover .cover-hint,
+  .cover:focus-visible .cover-hint {
+    opacity: 1;
+  }
   .titles {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 6px;
     min-width: 0;
   }
+  /* Dos líneas como mucho: el límite del campo son 100 caracteres, pero las playlists
+     guardadas con el límite anterior traen descripciones más largas. */
   .desc {
-    margin-top: 4px;
-    max-width: 62ch;
-    font-size: 13px;
+    max-width: 70ch;
+    font-size: 13.5px;
     line-height: 1.45;
     color: var(--text-2);
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
   }
   h1 {
-    font-size: 22px;
-    font-weight: 650;
-    letter-spacing: -0.01em;
+    font-size: 30px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -215,17 +568,6 @@
   .dot {
     margin: 0 6px;
     color: var(--text-3);
-  }
-
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 20px;
-  }
-  @media (min-width: 1500px) {
-    .grid {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
   }
 
   .empty {
@@ -254,11 +596,30 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 9px 10px 9px 14px;
+    padding: 9px 10px 9px 11px;
     border-radius: 12px;
     background: var(--bg-0);
     border: 1px solid var(--line-strong);
     box-shadow: 0 18px 44px -14px rgba(0, 0, 0, 0.75);
+  }
+  .selall {
+    width: 22px;
+    height: 22px;
+    display: grid;
+    place-items: center;
+    border-radius: 6px;
+    color: var(--text-2);
+    border: 1px solid var(--line-strong);
+    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+  }
+  .selall:hover {
+    color: var(--text-0);
+    border-color: var(--text-3);
+  }
+  .selall.all {
+    color: var(--base);
+    background: var(--bright);
+    border-color: var(--bright);
   }
   .selcount {
     font-size: 12.5px;
@@ -278,6 +639,25 @@
   .selbtn:hover {
     background: var(--bg-3);
     color: var(--text-0);
+  }
+  .undo {
+    padding-left: 14px;
+  }
+  .countdown {
+    flex: none;
+    fill: var(--text-1);
+    stroke: var(--text-1);
+  }
+  /* Las puntas miden 8 unidades de ancho sobre 128; el trazo de 8 las lleva a 16, que a 16 px
+     son 2 px justos centrados en el píxel 8. Las rectas caen así en píxeles enteros: a medio
+     píxel se repintaban con otro suavizado a cada fundido de las vecinas y parpadeaban. */
+  .countdown path {
+    stroke-width: 8;
+    stroke-linejoin: round;
+    transition: opacity 0.25s ease;
+  }
+  .countdown path.gone {
+    opacity: 0;
   }
   .selbtn.danger {
     color: var(--rec);

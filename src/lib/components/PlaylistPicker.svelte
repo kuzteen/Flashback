@@ -5,7 +5,8 @@
     refreshPlaylists,
     createPlaylist,
     addToPlaylist,
-    removeFromPlaylist
+    removeFromPlaylist,
+    orderedPlaylists
   } from '$lib/playlists.svelte';
   import { t } from '$lib/i18n.svelte';
 
@@ -20,7 +21,7 @@
   });
 
   const sorted = $derived(
-    [...playlists.list].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+    orderedPlaylists(playlists.list)
   );
 
   // Con varios clips marcados la fila solo se da por "dentro" cuando están todos: si no,
@@ -28,7 +29,7 @@
   function membership(id: string): 'in' | 'partial' | 'out' {
     const pl = playlists.list.find((p) => p.id === id);
     if (!pl) return 'out';
-    const n = paths.filter((x) => pl.clips.includes(x)).length;
+    const n = paths.filter((x) => pl.clips.some((c) => c.path === x)).length;
     if (n === 0) return 'out';
     return n === paths.length ? 'in' : 'partial';
   }
@@ -181,9 +182,9 @@
     font-size: 12.5px;
     color: var(--text-3);
   }
-  .new :global(svg) {
   /* 16 px como la casilla de las filas de arriba: así el texto de todas las filas arranca en
      la misma columna. */
+  .new :global(svg) {
     flex-shrink: 0;
   }
   .new-input {

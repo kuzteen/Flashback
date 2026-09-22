@@ -2,8 +2,16 @@
   import { goto } from '$app/navigation';
   import Icon from '$lib/components/Icon.svelte';
   import PlaylistCard from '$lib/components/PlaylistCard.svelte';
+  import SortableGrid from '$lib/components/SortableGrid.svelte';
   import { library, refreshLibrary } from '$lib/library.svelte';
-  import { playlists, refreshPlaylists, openPlaylistCreate, type Playlist } from '$lib/playlists.svelte';
+  import {
+    playlists,
+    refreshPlaylists,
+    openPlaylistCreate,
+    orderedPlaylists,
+    reorderPlaylists,
+    type Playlist
+  } from '$lib/playlists.svelte';
   import { t } from '$lib/i18n.svelte';
 
   $effect(() => {
@@ -11,7 +19,16 @@
     if (!library.loaded) refreshLibrary();
   });
 
-  const sorted = $derived([...playlists.list].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()));
+  const sorted = $derived(orderedPlaylists(playlists.list));
+
+  // Al primer arrastre todas reciben posición, así que el orden por fecha deja de aplicar a
+  // las que ya había y solo sigue poniendo arriba las que se creen después.
+  function reorder(from: number, to: number) {
+    const ids = sorted.map((p) => p.id);
+    const [moved] = ids.splice(from, 1);
+    ids.splice(to > from ? to - 1 : to, 0, moved);
+    reorderPlaylists(ids);
+  }
 
   function openPlaylist(p: Playlist) {
     goto(`/playlists/${p.id}`);
@@ -34,11 +51,9 @@
       <span class="hint mono">{t('pl.emptyNoneHint')}</span>
     </div>
   {:else}
-    <div class="grid">
-      {#each sorted as p (p.id)}
-        <PlaylistCard playlist={p} onopen={openPlaylist} />
-      {/each}
-    </div>
+    <SortableGrid items={sorted} key={(p) => p.id} onreorder={sorted.length > 1 ? reorder : undefined}>
+      {#snippet children(p)}<PlaylistCard playlist={p} onopen={openPlaylist} />{/snippet}
+    </SortableGrid>
   {/if}
 </div>
 
@@ -75,19 +90,6 @@
     color: var(--text-0);
     border-color: var(--line-strong);
   }
-
-  /* Misma rejilla que la biblioteca: las playlists miden lo mismo de ancho que los clips. */
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 20px;
-  }
-  @media (min-width: 1500px) {
-    .grid {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
-  }
-
 
   .empty {
     display: flex;
