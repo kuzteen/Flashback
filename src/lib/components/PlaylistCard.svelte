@@ -21,9 +21,27 @@
       if (!c.source) continue;
       counts.set(c.source, (counts.get(c.source) ?? 0) + 1);
     }
-    return [...counts.entries()]
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .map(([source, n]) => ({ source, n, screen: isScreenSource(source) }));
+    const slots: { source: string; n: number; screen: boolean }[] = [];
+    // Set y no lista: un clip puede traer ya varias pantallas en su source, y sin aplanarlas
+    // el tooltip repetiría el mismo monitor.
+    const screens = new Set<string>();
+    let screenClips = 0;
+    for (const [source, n] of counts) {
+      if (isScreenSource(source)) {
+        for (const part of source.split(' · ')) screens.add(part.trim());
+        screenClips += n;
+      } else {
+        slots.push({ source, n, screen: false });
+      }
+    }
+    // Todas las pantallas dibujan el mismo icono, así que un hueco por monitor no diría nada
+    // nuevo: van en uno solo. El source compuesto es el formato que displaySource ya entiende,
+    // de modo que el tooltip las nombra todas y localizadas sin tratarlas aparte.
+    if (screens.size > 0) {
+      const names = [...screens].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      slots.push({ source: names.join(' · '), n: screenClips, screen: true });
+    }
+    return slots.sort((a, b) => b.n - a.n || a.source.localeCompare(b.source));
   });
 
   // La fila nunca pasa de 4 huecos. Si no caben todos, el cuarto se atenúa y lleva el número
@@ -328,6 +346,9 @@
   .ico.dim :global(svg) {
     opacity: 0.55;
   }
+  /* El recorte de caja va aquí por lo mismo que en la duración de la tarjeta de clip: ni el
+     "+" ni los dígitos tienen descendente, y el hueco que la fuente le reserva descolgaba el
+     texto del centro del hueco. Donde no se soporte, queda el centrado de antes. */
   .more {
     position: absolute;
     inset: 0;
@@ -335,6 +356,8 @@
     place-items: center;
     font-size: 12px;
     font-weight: 600;
+    line-height: 1;
+    text-box: trim-both cap alphabetic;
     color: var(--text-0);
     text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
   }
