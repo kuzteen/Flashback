@@ -110,13 +110,16 @@ pub(super) fn monitor_info(hmon: HMONITOR, index: usize, screen_dc: HDC) -> Opti
         return None;
     }
     let rc = info.monitorInfo.rcMonitor;
+    let id = device_name(&info);
+    let number = screen_number(&id).unwrap_or(index as u32 + 1);
     Some(MonitorInfo {
-        id: device_name(&info),
-        label: format!("Pantalla {}", index + 1),
+        id,
+        label: format!("Pantalla {number}"),
         width: (rc.right - rc.left).max(0) as u32,
         height: (rc.bottom - rc.top).max(0) as u32,
         primary: info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0,
         thumb: snapshot(screen_dc, rc),
+        origin: (rc.left, rc.top),
     })
 }
 
@@ -217,6 +220,13 @@ fn resolve_monitor(id: &str) -> Option<HMONITOR> {
     })
 }
 
+// El número sale del identificador de dispositivo (\\.\DISPLAY2 → 2) y no del orden de
+// enumeración: es el mismo que Windows enseña al pulsar "Identificar", y EnumDisplayMonitors
+// no promete ningún orden, así que numerar por él cambiaba de monitor sin tocar nada.
+pub(super) fn screen_number(id: &str) -> Option<u32> {
+    id.rsplit_once("DISPLAY")?.1.parse().ok()
+}
+
 fn device_name(info: &MONITORINFOEXW) -> String {
     let len = info
         .szDevice
@@ -224,4 +234,25 @@ fn device_name(info: &MONITORINFOEXW) -> String {
         .position(|&c| c == 0)
         .unwrap_or(info.szDevice.len());
     String::from_utf16_lossy(&info.szDevice[..len])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::screen_number;
+
+    #[test]
+    fn the_number_comes_from_the_device_name() {
+        assert_eq!(screen_number(r"\.\DISPLAY1"), Some(1));
+        assert_eq!(screen_number(r"\.\DISPLAY2"), Some(2));
+        assert_eq!(screen_number(r"\.\DISPLAY12"), Some(12));
+    }
+
+    // Sin número utilizable, quien llama vuelve al orden de enumeración: mejor eso que
+    // etiquetar dos monitores con el mismo número.
+    #[test]
+    fn an_unexpected_device_name_has_no_number() {
+        assert_eq!(screen_number(r"\.\DISPLAYX"), None);
+        assert_eq!(screen_number("monitor"), None);
+        assert_eq!(screen_number(""), None);
+    }
 }

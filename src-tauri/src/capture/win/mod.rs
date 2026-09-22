@@ -62,7 +62,9 @@ use crate::audio;
 mod encoder;
 use encoder::{build_converter, build_encoder};
 mod monitors;
-use monitors::{enum_monitors, monitor_info, resolve_game_window, resolve_target_item};
+use monitors::{
+    enum_monitors, monitor_info, resolve_game_window, resolve_target_item, screen_number,
+};
 mod livemux;
 use livemux::{mux_replay, LiveMux};
 
@@ -133,7 +135,7 @@ pub fn list_monitors() -> Vec<MonitorInfo> {
     // Un único DC del escritorio virtual sirve para fotografiar todas las
     // pantallas (cada una vive en su trozo de coordenadas del rcMonitor).
     let screen_dc = unsafe { GetDC(None) };
-    let monitors = enum_monitors()
+    let mut monitors: Vec<MonitorInfo> = enum_monitors()
         .into_iter()
         .enumerate()
         .filter_map(|(i, hmon)| monitor_info(hmon, i, screen_dc))
@@ -141,6 +143,10 @@ pub fn list_monitors() -> Vec<MonitorInfo> {
     if !screen_dc.is_invalid() {
         unsafe { ReleaseDC(None, screen_dc) };
     }
+    // De izquierda a derecha, como están puestos en el escritorio: el selector es una fila de
+    // monitores y se lee como el mapa de Configuración de Windows. Ni el orden de
+    // EnumDisplayMonitors ni cuál sea el principal tienen que ver con dónde está cada uno.
+    monitors.sort_by_key(|m| (m.origin.0, m.origin.1, screen_number(&m.id).unwrap_or(u32::MAX)));
     monitors
 }
 

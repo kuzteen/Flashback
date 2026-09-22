@@ -19,6 +19,10 @@ pub struct MonitorInfo {
     pub height: u32,
     pub primary: bool,
     pub thumb: Option<String>,
+    // Esquina del monitor en el escritorio virtual. Solo sirve para listarlos en el mismo
+    // orden en que están puestos, así que no viaja al frontend.
+    #[serde(skip)]
+    pub origin: (i32, i32),
 }
 
 #[derive(Serialize, Clone, Default)]
