@@ -49,8 +49,9 @@ El editor sigue a pantalla completa. De arriba abajo:
 4. **Timeline** en el panel inferior redimensionable: regla, pista de vídeo y las **dos pistas de
    audio siempre desplegadas**, cada una con cabecera alineada (nombre, silencio, volumen) y su
    forma de onda. Zoom con Ctrl+rueda.
-5. **Barra de salida** al pie: botón de herramientas a la izquierda; marca de agua, duración
-   final, **Compartir** y **Exportar** (primario) a la derecha.
+5. **Barra de salida** al pie: botón de herramientas a la izquierda; marca de agua, **Compartir**
+   y **Exportar** a la derecha, los tres con el mismo estilo. La duración final se lee en la barra
+   de reproducción.
 
 ## 2. Modelo de edición
 
@@ -129,34 +130,29 @@ agua. La captura y el replay no se tocan.
 - **Horizontal**: sin cambios (passthrough cuando solo hay cortes en keyframe).
 - **Vertical**: siempre recodifica. Salida **1080×1920**.
 
-### Recorte
+### Composición (recorte y encajado)
 
-Ventana 9:16 de altura completa del origen (608×1080 en un 1080p), centrada en `crop_x` del
-bloque y limitada a los bordes, escalada a 1080×1920 en **una pasada del procesador de vídeo de
-D3D11**. El export ya avanza bloque a bloque, así que el rectángulo de origen solo cambia al
-empezar cada bloque. Nota: desde 1080p el recorte se amplía ≈1,8× y pierde nitidez; desde 1440p
-queda casi nativo.
+Una etapa `Reframer` (`src-tauri/src/reframe.rs`) dibuja con **Direct2D sobre el device D3D11 del
+decodificador**, igual que la marca de agua y el cartel de juego minimizado. El fotograma se copia
+GPU→GPU a una textura propia (el decodificador entrega subtexturas de un array y Direct2D solo dibuja
+desde la 0) y se dibuja sobre una textura 1080×1920 de un `IMFVideoSampleAllocatorEx`, que recicla
+texturas cuando el encoder las suelta.
 
-### Encajado con fondo desenfocado
-
-- Fondo: el fotograma se reduce a una miniatura (≈54×96) y se amplía a 1080×1920; el filtrado
-  del escalado produce el desenfoque. Pasadas del procesador de vídeo, en GPU.
-- Delante: el fotograma completo escalado a 1080×608, centrado.
-- Composición: dos flujos en una pasada si la GPU lo admite; si no, un pixel shader sobre el
-  mismo device.
-- `crop_x` no se usa en este modo.
-
-### Recursos y calidad
-
-- Texturas intermedias (miniatura, fondo, salida) reservadas una vez por export y reutilizadas
-  cada fotograma. Ningún fotograma baja a memoria del sistema.
-- La marca de agua se funde al final, sobre el lienzo de 1080×1920.
-- El bitrate se calcula para el tamaño de salida.
+- **Recorte**: ventana 9:16 de altura completa centrada en `crop_x` del bloque, escalada a la salida.
+- **Encajado**: fondo = recorte centrado a pantalla completa con el desenfoque gaussiano de Direct2D
+  (desviación 3 % del ancho) y un velo al 35 %; delante, el fotograma entero escalado y centrado.
 
 ### Sin GPU
 
-El camino por CPU existente produce el mismo resultado, más lento (el desenfoque también parte
-de la miniatura, barata en CPU). Es export, no captura.
+No hay camino por CPU: la captura ya exige D3D11 por hardware, así que un equipo sin GPU no tiene
+clips propios que exportar. El export vertical devuelve un error claro.
+
+### Recursos y calidad
+
+- Texturas intermedias (copia del fotograma, fondo del encajado) reservadas una vez por export;
+  las de salida las recicla el asignador. Ningún fotograma baja a memoria del sistema.
+- La marca de agua se funde al final, sobre el lienzo de 1080×1920.
+- El bitrate se calcula para el tamaño de salida.
 
 ### Compartir
 
