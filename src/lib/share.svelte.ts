@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { Clip } from './clips';
-import type { MixerState } from './editor.svelte';
+import type { MixerState } from './editor-state.svelte';
 
 type SavedSegment = {
   start_ms: number;

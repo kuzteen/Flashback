@@ -1,5 +1,5 @@
 import { SvelteSet } from 'svelte/reactivity';
-import { clipOrder } from '$lib/editor.svelte';
+import { clipOrder } from '$lib/editor-state.svelte';
 import type { Clip } from '$lib/clips';
 
 // La selección va por id de clip, nunca por índice: la rejilla virtualizada monta y desmonta

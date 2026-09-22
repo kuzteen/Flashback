@@ -14,11 +14,11 @@
   import { refreshLibrary } from '$lib/library.svelte';
   import { replay, setReplaySeconds, BUFFER_OPTIONS } from '$lib/replay.svelte';
   import { playReplaySound } from '$lib/replay-sound.svelte';
-  import Editor from '$lib/components/Editor.svelte';
+  import Editor from '$lib/components/editor/Editor.svelte';
   import ShareDialog from '$lib/components/ShareDialog.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import PlaylistDialog from '$lib/components/PlaylistDialog.svelte';
-  import { editorState, closeEditor } from '$lib/editor.svelte';
+  import { editorState, closeEditor } from '$lib/editor-state.svelte';
   import {
     captureConfig,
     setFps,

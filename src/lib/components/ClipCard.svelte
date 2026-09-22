@@ -16,7 +16,7 @@
     renameFavorite,
     removeFavorite
   } from '$lib/library.svelte';
-  import { openEditor } from '$lib/editor.svelte';
+  import { openEditor } from '$lib/editor-state.svelte';
   import { openShare } from '$lib/share.svelte';
   import { selected, isSelected, pick } from '$lib/selection.svelte';
   import { confirmDelete } from '$lib/confirm.svelte';

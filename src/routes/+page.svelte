@@ -8,7 +8,7 @@
   import { sortClips, clipMatchesFilters, displaySource, type LibraryFilter as Filter } from '$lib/clips';
   import { library, refreshLibrary, clipView } from '$lib/library.svelte';
   import { refreshPlaylists } from '$lib/playlists.svelte';
-  import { clipOrder, editorState } from '$lib/editor.svelte';
+  import { clipOrder, editorState } from '$lib/editor-state.svelte';
   import { selected, clearSelection, selectAll, pruneSelection } from '$lib/selection.svelte';
   import { confirmDelete, confirmState } from '$lib/confirm.svelte';
   import { shareState } from '$lib/share.svelte';

@@ -68,7 +68,7 @@
     class:on={enabled}
     aria-pressed={enabled}
     aria-label={t('ed.watermark')}
-    title={t('ed.watermarkOn')}
+    data-tip={enabled ? undefined : t('ed.watermarkOn')}
     onclick={toggle}
   >
     <span class="wm-logo"></span>

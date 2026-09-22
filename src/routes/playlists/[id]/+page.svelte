@@ -28,7 +28,7 @@
     openPlaylistEdit,
     reorderPlaylist
   } from '$lib/playlists.svelte';
-  import { clipOrder, editorState } from '$lib/editor.svelte';
+  import { clipOrder, editorState } from '$lib/editor-state.svelte';
   import { selected, clearSelection, selectAll, pruneSelection } from '$lib/selection.svelte';
   import { shareState } from '$lib/share.svelte';
   import { confirmState } from '$lib/confirm.svelte';
