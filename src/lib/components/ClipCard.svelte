@@ -695,13 +695,15 @@
     padding: 11px 14px;
   }
   /* Rejilla de 3 filas con la del título fijada al centro: el origen empuja hacia arriba y la
-     fecha hacia abajo, así el título queda a la misma altura haya o no origen. min-height fija la
-     altura del pie para que los botones de la derecha no se muevan entre tarjetas. */
+     fecha hacia abajo, así el título queda a la misma altura haya o no origen. min-height es el
+     alto del pie con origen (22 de la fila del icono, el título y otros 22 que el 1fr reparte
+     abajo): sin origen el pie mediría menos, y la tarjeta quedaría más baja que sus vecinas y
+     rompería el alto de fila único que asume la virtualización. */
   .info {
     position: relative;
     flex: 1;
     min-width: 0;
-    min-height: 52px;
+    min-height: 64px;
     display: grid;
     grid-template-rows: 1fr auto 1fr;
   }
@@ -712,6 +714,18 @@
     align-items: center;
     gap: 6px;
     align-self: end;
+  /* Filas fijas y no colocación automática: un clip importado no tiene origen, y sin esto el
+     título y la fecha subían a ocupar su hueco. Así quedan en su sitio y la fila de arriba
+     se queda vacía. */
+  .src {
+    grid-row: 1;
+  }
+  .title {
+    grid-row: 2;
+  }
+  .when {
+    grid-row: 3;
+  }
     padding-bottom: 6px;
     line-height: 1;
     font-size: 12px;
