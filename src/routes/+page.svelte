@@ -1,8 +1,9 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import Icon from '$lib/components/Icon.svelte';
+  import SortableGrid from '$lib/components/SortableGrid.svelte';
   import ClipCard from '$lib/components/ClipCard.svelte';
-  import LibraryFilter from '$lib/components/LibraryFilter.svelte';
+  import ClipToolbar from '$lib/components/ClipToolbar.svelte';
   import PlaylistPicker from '$lib/components/PlaylistPicker.svelte';
   import { sortClips, clipMatchesFilters, displaySource, type LibraryFilter as Filter } from '$lib/clips';
   import { library, refreshLibrary } from '$lib/library.svelte';
@@ -32,11 +33,12 @@
 
   let query = $state('');
   let filters = $state<Filter[]>([]);
-  let sortAsc = $state(false);
-  let sortOpen = $state(false);
-  let sortEl = $state<HTMLElement | null>(null);
-  let searchEl = $state<HTMLInputElement | null>(null);
-  let searchFocused = $state(false);
+  let sort = $state<'newest' | 'oldest'>('newest');
+  let toolbar = $state<ClipToolbar<'newest' | 'oldest'> | null>(null);
+  const sorts = [
+    { value: 'newest' as const, label: 'clips.newest' },
+    { value: 'oldest' as const, label: 'clips.oldest' }
+  ];
 
   function onKey(e: KeyboardEvent) {
     // Con un modal delante las teclas son suyas: Supr abriría una segunda confirmación encima de
@@ -49,8 +51,7 @@
 
     if (ctrl && e.key.toLowerCase() === 's') {
       e.preventDefault();
-      searchEl?.focus();
-      searchEl?.select();
+      toolbar?.focusSearch();
       return;
     }
     if (typing) return;
@@ -76,18 +77,18 @@
     refreshPlaylists();
   });
 
-  const filtered = $derived(
-    library.clips.filter((c) => {
-      const q = query.trim().toLowerCase();
+  const filtered = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    return library.clips.filter((c) => {
       const matchesQuery =
         !q ||
         c.title.toLowerCase().includes(q) ||
         c.source.toLowerCase().includes(q) ||
         displaySource(c.source).toLowerCase().includes(q);
       return matchesQuery && clipMatchesFilters(c, filters);
-    })
-  );
-  const sorted = $derived(sortClips(filtered, sortAsc));
+    });
+  });
+  const sorted = $derived(sortClips(filtered, sort === 'oldest'));
 
   // Por pertenencia, no por tamaño: con un filtro activo la selección puede ser mayor que lo
   // visible sin contener un solo clip de la lista.
@@ -97,24 +98,6 @@
     if (allSelected) clearSelection();
     else selectAll();
   }
-
-  // Virtualización: solo se montan las filas visibles más un colchón. El hueco de las filas
-  // que faltan va como padding del contenedor, no como divs espaciadores, porque en una
-  // display:grid un div de relleno ocuparía celda y descuadraría las columnas.
-  const BUFFER_ROWS = 2;
-  const INITIAL = 24;
-
-  let gridEl = $state<HTMLElement | null>(null);
-  let rowH = $state(0);
-  let cols = $state(2);
-  let start = $state(0);
-  let end = $state(INITIAL);
-  let scroller: HTMLElement | null = null;
-
-  const visible = $derived(sorted.slice(start, end));
-  const totalRows = $derived(Math.ceil(sorted.length / cols));
-  const padTop = $derived(Math.floor(start / cols) * rowH);
-  const padBottom = $derived(Math.max(0, totalRows - Math.ceil(end / cols)) * rowH);
 
   let deleting = $state(false);
   let plOpen = $state(false);
@@ -158,90 +141,6 @@
     }
   }
 
-  function findScroller(el: HTMLElement): HTMLElement {
-    let p = el.parentElement;
-    while (p) {
-      const oy = getComputedStyle(p).overflowY;
-      if (oy === 'auto' || oy === 'scroll') return p;
-      p = p.parentElement;
-    }
-    return document.documentElement;
-  }
-
-  // Las columnas y la altura de fila se leen del DOM en vez de asumirlas: gridTemplateColumns
-  // llega ya resuelto a anchos, así que el cálculo sobrevive a cualquier breakpoint nuevo.
-  function measure() {
-    if (!gridEl) return;
-    const cs = getComputedStyle(gridEl);
-    cols = cs.gridTemplateColumns.split(' ').filter(Boolean).length || 1;
-    const card = gridEl.querySelector('.card');
-    if (card) rowH = (card as HTMLElement).offsetHeight + (parseFloat(cs.rowGap) || 0);
-  }
-
-  function update() {
-    if (!gridEl || !scroller || rowH <= 0) return;
-    const gridTop =
-      gridEl.getBoundingClientRect().top -
-      scroller.getBoundingClientRect().top +
-      scroller.scrollTop;
-    const into = scroller.scrollTop - gridTop;
-    const rowsFit = Math.ceil(scroller.clientHeight / rowH) + BUFFER_ROWS * 2 + 1;
-    const maxStart = Math.max(0, (Math.ceil(sorted.length / cols) - 1) * cols);
-    const nextStart = Math.min(maxStart, Math.max(0, Math.floor(into / rowH) - BUFFER_ROWS) * cols);
-    const nextEnd = Math.min(sorted.length, nextStart + rowsFit * cols);
-    if (nextStart !== start) start = nextStart;
-    if (nextEnd !== end) end = nextEnd;
-  }
-
-  $effect(() => {
-    const el = gridEl;
-    if (!el) return;
-    scroller = findScroller(el);
-    untrack(() => {
-      measure();
-      update();
-    });
-    let ticking = false;
-    const onScroll = () => {
-      if (ticking) return;
-      ticking = true;
-      requestAnimationFrame(() => {
-        ticking = false;
-        update();
-      });
-    };
-    scroller.addEventListener('scroll', onScroll, { passive: true });
-    // Solo se observa el scroller: la rejilla cambia de alto cada vez que ajustamos su
-    // padding, y observarla realimentaría el propio cálculo.
-    const ro = new ResizeObserver(() => {
-      measure();
-      update();
-    });
-    ro.observe(scroller);
-    const sc = scroller;
-    return () => {
-      sc.removeEventListener('scroll', onScroll);
-      ro.disconnect();
-    };
-  });
-
-  $effect(() => {
-    sorted.length;
-    untrack(() => {
-      measure();
-      update();
-    });
-  });
-
-  $effect(() => {
-    if (!sortOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (sortEl && !sortEl.contains(e.target as Node)) sortOpen = false;
-    };
-    window.addEventListener('mousedown', onDown, true);
-    return () => window.removeEventListener('mousedown', onDown, true);
-  });
-
   // El editor navega anterior/siguiente por este mismo orden.
   $effect(() => {
     clipOrder.list = sorted;
@@ -262,38 +161,7 @@
       <h1>{t('clips.title')}</h1>
     </div>
 
-    <div class="right">
-      <label class="search" class:open={searchFocused || query}>
-        <Icon name="search" size={16} />
-        <input
-          aria-label={t('clips.search')}
-          placeholder={t('clips.search')}
-          bind:this={searchEl}
-          bind:value={query}
-          onfocus={() => (searchFocused = true)}
-          onblur={() => (searchFocused = false)}
-          onkeydown={(e) => e.key === 'Escape' && searchEl?.blur()}
-        />
-      </label>
-      <LibraryFilter clips={library.clips} bind:selected={filters} />
-      <div class="sort-dd" class:open={sortOpen} bind:this={sortEl}>
-        <button class="ctrl" onclick={() => (sortOpen = !sortOpen)}>
-          <Icon name="sort" size={14} />
-          {sortAsc ? t('clips.oldest') : t('clips.newest')}
-          <Icon name="chevron-down" size={13} sw={2} />
-        </button>
-        {#if sortOpen}
-          <div class="sort-menu">
-            <button class="sort-item" class:on={!sortAsc} onclick={() => { sortAsc = false; sortOpen = false; }}>
-              {t('clips.newest')}
-            </button>
-            <button class="sort-item" class:on={sortAsc} onclick={() => { sortAsc = true; sortOpen = false; }}>
-              {t('clips.oldest')}
-            </button>
-          </div>
-        {/if}
-      </div>
-    </div>
+    <ClipToolbar clips={library.clips} bind:query bind:filters bind:sort {sorts} bind:this={toolbar} />
   </header>
 
   {#if library.clips.length === 0}
@@ -308,16 +176,9 @@
       <p>{query ? t('clips.noResultsQuery', { query }) : t('clips.noResultsFilter')}</p>
     </div>
   {:else}
-    <div
-      class="grid"
-      bind:this={gridEl}
-      style:padding-top="{padTop}px"
-      style:padding-bottom="{padBottom}px"
-    >
-      {#each visible as clip (clip.id)}
-        <ClipCard {clip} />
-      {/each}
-    </div>
+    <SortableGrid items={sorted} key={(c) => c.id}>
+      {#snippet children(clip)}<ClipCard {clip} />{/snippet}
+    </SortableGrid>
   {/if}
 </div>
 
@@ -383,124 +244,6 @@
     font-weight: 650;
     letter-spacing: -0.01em;
   }
-.right {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .search {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 0 9px;
-    height: 36px;
-    width: 36px;
-    overflow: hidden;
-    cursor: pointer;
-    color: var(--text-1);
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: var(--r-sm);
-    transition: width 0.22s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.15s ease, color 0.15s ease;
-  }
-  .search :global(svg) {
-    flex-shrink: 0;
-  }
-  .search:hover {
-    color: var(--text-0);
-    border-color: var(--line-strong);
-  }
-  .search.open {
-    width: 220px;
-    cursor: text;
-  }
-  .search:focus-within {
-    border-color: var(--line-strong);
-  }
-  .search input {
-    flex: 1;
-    min-width: 0;
-    background: none;
-    border: none;
-    outline: none;
-    font-size: 13px;
-    color: var(--text-0);
-  }
-  .search input::placeholder {
-    color: var(--text-3);
-  }
-  .ctrl {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    height: 36px;
-    padding: 0 12px;
-    font-size: 13px;
-    color: var(--text-1);
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: var(--r-sm);
-    transition: color 0.15s ease, border-color 0.15s ease;
-  }
-  .ctrl:hover {
-    color: var(--text-0);
-    border-color: var(--line-strong);
-  }
-  .sort-dd {
-    position: relative;
-  }
-  .sort-dd.open .ctrl {
-    border-color: var(--line-strong);
-    color: var(--text-0);
-  }
-  .sort-dd .ctrl > :global(svg:last-child) {
-    transition: transform 0.2s ease;
-  }
-  .sort-dd.open .ctrl > :global(svg:last-child) {
-    transform: rotate(180deg);
-  }
-  .sort-menu {
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
-    min-width: 150px;
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    padding: 5px;
-    background: var(--surface);
-    border: 1px solid var(--line-strong);
-    border-radius: var(--r-sm);
-    box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
-    z-index: 70;
-  }
-  .sort-item {
-    padding: 7px 10px;
-    font-size: 13px;
-    text-align: left;
-    color: var(--text-1);
-    border-radius: 6px;
-    transition: background 0.13s ease, color 0.13s ease;
-  }
-  .sort-item:hover {
-    background: var(--bg-3);
-    color: var(--text-0);
-  }
-  .sort-item.on {
-    color: var(--text-0);
-    font-weight: 560;
-  }
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 20px;
-  }
-  @media (min-width: 1500px) {
-    .grid {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
-  }
-
   .empty {
     display: flex;
     flex-direction: column;
