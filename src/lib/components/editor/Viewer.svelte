@@ -1,6 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { editorState, setDuration } from '$lib/editor-state.svelte';
+  import { beginGesture, commit, editorState, endGesture, preview, setDuration } from '$lib/editor-state.svelte';
+  import { outToSeg, setCrop } from '$lib/edit-model';
   import { t } from '$lib/i18n.svelte';
   import { formatTimecode } from '$lib/timeline-math';
   import { playback } from './playback.svelte';
@@ -32,6 +33,7 @@
     let handle = 0;
     const cb = (_now: number, meta: { mediaTime: number }) => {
       playback.shownMediaTime = meta.mediaTime;
+      if (bgCanvas) drawBg();
       if (alive) handle = v.requestVideoFrameCallback!(cb);
     };
     handle = v.requestVideoFrameCallback(cb);
@@ -91,21 +93,130 @@
     progDrag = false;
     playback.resumeAfterGesture();
   }
+
+  const format = $derived(editorState.edit.format);
+  const fill = $derived(format.kind === 'vertical' ? format.fill : null);
+
+  // Caja real del vídeo dentro del escenario: el marco de recorte se dibuja encima de ella.
+  let vbox = $state({ x: 0, y: 0, w: 0, h: 0 });
+
+  function measure() {
+    if (!video) return;
+    vbox = { x: video.offsetLeft, y: video.offsetTop, w: video.offsetWidth, h: video.offsetHeight };
+  }
+
+  $effect(() => {
+    const v = video;
+    if (!v) return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(v);
+    measure();
+    return () => ro.disconnect();
+  });
+
+  // El encuadre que se ve y se arrastra es el del bloque bajo el cabezal.
+  const segIdx = $derived(outToSeg(editorState.edit.segments, playback.outPos).index);
+  const cropX = $derived(editorState.edit.segments[segIdx]?.cropX ?? 0.5);
+  const frameW = $derived(Math.min(vbox.w, (vbox.h * 9) / 16));
+  // Misma cuenta que reframe::crop_rect: centrado en crop_x y limitado a los bordes.
+  const frameLeft = $derived(Math.max(0, Math.min(vbox.w - frameW, cropX * vbox.w - frameW / 2)));
+
+  let cropDrag: { index: number; startX: number; startCenter: number } | null = null;
+
+  function clampCenter(c: number): number {
+    const half = vbox.w > 0 ? frameW / 2 / vbox.w : 0.5;
+    return Math.max(half, Math.min(1 - half, c));
+  }
+
+  function onCropDown(e: PointerEvent) {
+    if (e.button !== 0 || vbox.w <= 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    beginGesture();
+    // Se parte del centro efectivo y no de crop_x: si el marco está contra un borde, arrastrar
+    // hacia dentro responde al instante en vez de recorrer primero una zona muerta.
+    cropDrag = { index: segIdx, startX: e.clientX, startCenter: (frameLeft + frameW / 2) / vbox.w };
+  }
+
+  function onCropMove(e: PointerEvent) {
+    if (!cropDrag || vbox.w <= 0) return;
+    const next = clampCenter(cropDrag.startCenter + (e.clientX - cropDrag.startX) / vbox.w);
+    preview({ ...editorState.edit, segments: setCrop(editorState.edit.segments, cropDrag.index, next) });
+  }
+
+  function onCropUp() {
+    if (!cropDrag) return;
+    cropDrag = null;
+    endGesture();
+  }
+
+  function onCropKey(e: KeyboardEvent) {
+    const step = e.key === 'ArrowLeft' ? -0.02 : e.key === 'ArrowRight' ? 0.02 : 0;
+    if (!step) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const center = (frameLeft + frameW / 2) / Math.max(1, vbox.w);
+    commit({ ...editorState.edit, segments: setCrop(editorState.edit.segments, segIdx, clampCenter(center + step)) });
+  }
+
+  // Encajado: el fondo es un lienzo diminuto al que se copia el fotograma, escalado y desenfocado
+  // por CSS. Sin segundo decodificador y todo en la GPU del navegador.
+  let bgCanvas = $state<HTMLCanvasElement | null>(null);
+
+  function drawBg() {
+    const c = bgCanvas;
+    const v = video;
+    if (!c || !v || !v.videoWidth) return;
+    const ctx = c.getContext('2d');
+    if (!ctx) return;
+    const sw = Math.min(v.videoWidth, (v.videoHeight * 9) / 16);
+    ctx.drawImage(v, (v.videoWidth - sw) / 2, 0, sw, v.videoHeight, 0, 0, c.width, c.height);
+  }
+
+  $effect(() => {
+    if (fill === 'fit' && bgCanvas) drawBg();
+  });
 </script>
 
 <div class="stage">
   {#if editorState.videoSrc}
     <div class="fit">
-      <video
-        bind:this={video}
-        src={editorState.videoSrc}
-        playsinline
-        class:fs={ui.fs}
-        class:nocursor={ui.fs && !ui.fsCtrlShow}
-        onloadedmetadata={onLoaded}
-        onended={() => playback.pause()}
-        onclick={() => playback.toggle()}
-      ><track kind="captions" /></video>
+      <div class="frame" class:vfit={fill === 'fit'}>
+        {#if fill === 'fit'}
+          <canvas bind:this={bgCanvas} class="bg" width="54" height="96"></canvas>
+        {/if}
+        <video
+          bind:this={video}
+          src={editorState.videoSrc}
+          playsinline
+          class:fs={ui.fs}
+          class:nocursor={ui.fs && !ui.fsCtrlShow}
+          onloadedmetadata={onLoaded}
+          onended={() => playback.pause()}
+          onclick={() => playback.toggle()}
+        ><track kind="captions" /></video>
+      </div>
+      {#if fill === 'crop' && vbox.w > 0 && !ui.fs}
+        <div class="crop-view" style:left="{vbox.x}px" style:top="{vbox.y}px" style:width="{vbox.w}px" style:height="{vbox.h}px">
+          <div
+            class="crop-frame"
+            style:left="{frameLeft}px"
+            style:width="{frameW}px"
+            role="slider"
+            tabindex="0"
+            aria-label={t('ed.cropFrame')}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(cropX * 100)}
+            onpointerdown={onCropDown}
+            onpointermove={onCropMove}
+            onpointerup={onCropUp}
+            onpointercancel={onCropUp}
+            onkeydown={onCropKey}
+          ></div>
+        </div>
+      {/if}
     </div>
   {/if}
   {#if editorState.system}
@@ -283,5 +394,65 @@
     border: 1px solid var(--line);
     border-radius: 6px;
     pointer-events: none;
+  }
+  /* En horizontal y en recorte el envoltorio no existe para el layout y el vídeo se coloca como
+     siempre; en encajado pasa a ser el lienzo 9:16 que simula el resultado. */
+  .frame {
+    display: contents;
+  }
+  .frame.vfit {
+    position: relative;
+    display: block;
+    height: 100%;
+    aspect-ratio: 9 / 16;
+    max-width: 100%;
+    overflow: hidden;
+    border-radius: var(--r-md);
+    background: #000;
+    box-shadow: 0 24px 60px -28px rgba(0, 0, 0, 0.9);
+  }
+  .frame.vfit video:not(.fs) {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    width: 100%;
+    max-width: none;
+    max-height: none;
+    transform: translateY(-50%);
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .bg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    filter: blur(14px) brightness(0.65);
+    transform: scale(1.15);
+  }
+  .crop-view {
+    position: absolute;
+    overflow: hidden;
+    border-radius: var(--r-md);
+    pointer-events: none;
+  }
+  /* La sombra enorme atenúa todo lo que queda fuera del marco sin otro elemento. */
+  .crop-frame {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border: 2px solid var(--accent);
+    border-radius: 4px;
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6);
+    cursor: grab;
+    pointer-events: auto;
+    touch-action: none;
+    outline: none;
+  }
+  .crop-frame:active {
+    cursor: grabbing;
+  }
+  .crop-frame:focus-visible {
+    border-color: var(--accent-soft);
   }
 </style>
