@@ -5,7 +5,8 @@
   import { invoke } from '@tauri-apps/api/core';
   import { revealItemInDir } from '@tauri-apps/plugin-opener';
   import { menu } from '$lib/menu.svelte';
-  import { formatDuration, formatRelative, displaySource, type Clip } from '$lib/clips';
+  import { formatDuration, formatRelative, displaySource, isScreenSource, type Clip } from '$lib/clips';
+  import { gameIcon, ensureGameIcon } from '$lib/artwork.svelte';
   import {
     isFavorite,
     toggleFavorite,
@@ -200,6 +201,11 @@
     el.style.visibility = 'visible';
   });
 
+  // La caché de iconos es la misma que usan las playlists: si ya se pidió, no hay IPC nuevo.
+  $effect(() => {
+    if (clip.source && !isScreenSource(clip.source)) ensureGameIcon(clip.source);
+  });
+
   function toggleMenu(e: MouseEvent) {
     e.stopPropagation();
     menuPos = null;
@@ -382,7 +388,16 @@
 
   <div class="meta">
     <div class="info">
-      {#if clip.source}<span class="src label">{displaySource(clip.source)}</span>{/if}
+      {#if clip.source}
+        <span class="src label">
+          {#if isScreenSource(clip.source)}
+            <Icon name="monitor-fill" size={15} sw={1.8} />
+          {:else if gameIcon(clip.source)}
+            <img class="src-ico" src={gameIcon(clip.source)} alt="" draggable="false" />
+          {/if}
+          {displaySource(clip.source)}
+        </span>
+      {/if}
 
       <h3 class="title">{clip.title}</h3>
 
@@ -639,13 +654,26 @@
     display: grid;
     grid-template-rows: 1fr auto 1fr;
   }
+  /* El icono va un poco por encima del texto (16 contra 12): a tamaño de texto una carátula no
+     se distingue, y cuatro píxeles bastan para reconocerla sin desequilibrar la fila. */
   .src {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 6px;
     align-self: end;
     padding-bottom: 6px;
     line-height: 1;
     font-size: 12px;
     color: var(--text-2);
+    min-width: 0;
+  }
+  .src-ico {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    object-fit: cover;
+    border-radius: 4px;
+    display: block;
   }
   .title {
     font-size: 16px;
