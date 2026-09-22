@@ -26,6 +26,17 @@ export function closeConfirm(ok: boolean) {
   resolve?.(ok);
 }
 
+// Borrar una playlist no manda nada a la papelera (es solo metadato), así que el aviso de los
+// clips no vale: ahí se promete que se pueden restaurar desde Windows y aquí no hay vuelta atrás.
+export function confirmDeletePlaylist(name: string): Promise<boolean> {
+  return ask({
+    title: t('confirm.plDeleteTitle'),
+    message: t('confirm.plDeleteOne', { name }),
+    hint: t('confirm.plDeleteHint'),
+    confirmLabel: t('confirm.delete')
+  });
+}
+
 export function confirmDelete(count: number, name?: string): Promise<boolean> {
   return ask({
     title: t('confirm.deleteTitle'),

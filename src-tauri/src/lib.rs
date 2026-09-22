@@ -9,6 +9,7 @@ mod dragdrop;
 mod editor;
 mod edits;
 mod library;
+mod playlists;
 mod share;
 #[cfg(target_os = "windows")]
 mod overlay;
@@ -437,17 +438,89 @@ async fn capture_frame(app: tauri::AppHandle, path: String, time_ms: f64) -> Res
 
 #[tauri::command]
 fn rename_clip(app: tauri::AppHandle, path: String, new_name: String) -> Result<String, String> {
-    library::rename_clip(&path, &new_name, &edit_index(&app)?)
+    let new_path = library::rename_clip(&path, &new_name, &edit_index(&app)?)?;
+    playlists::rekey(&playlist_index(&app)?, &path, &new_path);
+    Ok(new_path)
 }
 
 #[tauri::command]
 fn delete_clip(app: tauri::AppHandle, path: String) -> Result<(), String> {
-    library::delete_clip(&path, &edit_index(&app)?)
+    delete_clips(app, vec![path])
 }
 
 #[tauri::command]
 fn delete_clips(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
-    library::delete_clips(&paths, &edit_index(&app)?)
+    library::delete_clips(&paths, &edit_index(&app)?)?;
+    playlists::forget(&playlist_index(&app)?, &paths);
+    Ok(())
+}
+
+fn playlist_index(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    use tauri::Manager;
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("playlists.json"))
+}
+
+#[tauri::command]
+fn list_playlists(app: tauri::AppHandle) -> Result<Vec<playlists::Playlist>, String> {
+    Ok(playlists::list(&playlist_index(&app)?))
+}
+
+#[tauri::command]
+fn create_playlist(app: tauri::AppHandle, name: String) -> Result<playlists::Playlist, String> {
+    playlists::create(&playlist_index(&app)?, &name)
+}
+
+#[tauri::command]
+fn update_playlist(
+    app: tauri::AppHandle,
+    id: String,
+    name: String,
+    description: String,
+) -> Result<(), String> {
+    playlists::update(&playlist_index(&app)?, &id, &name, &description)
+}
+
+fn playlist_covers_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    use tauri::Manager;
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("playlist-covers"))
+}
+
+#[tauri::command]
+fn set_playlist_cover(app: tauri::AppHandle, id: String, bytes: Vec<u8>) -> Result<String, String> {
+    playlists::set_cover(&playlist_index(&app)?, &playlist_covers_dir(&app)?, &id, &bytes)
+}
+
+#[tauri::command]
+fn clear_playlist_cover(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    playlists::clear_cover(&playlist_index(&app)?, &id)
+}
+
+#[tauri::command]
+fn delete_playlist(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    playlists::remove(&playlist_index(&app)?, &id)
+}
+
+#[tauri::command]
+fn playlist_add_clips(app: tauri::AppHandle, id: String, paths: Vec<String>) -> Result<(), String> {
+    playlists::add_clips(&playlist_index(&app)?, &id, &paths)
+}
+
+#[tauri::command]
+fn playlist_remove_clips(app: tauri::AppHandle, id: String, paths: Vec<String>) -> Result<(), String> {
+    playlists::remove_clips(&playlist_index(&app)?, &id, &paths)
+}
+
+#[tauri::command]
+fn playlist_set_clips(app: tauri::AppHandle, id: String, paths: Vec<String>) -> Result<(), String> {
+    playlists::set_clips(&playlist_index(&app)?, &id, paths)
 }
 
 #[tauri::command]
@@ -660,6 +733,15 @@ pub fn run() {
             rename_clip,
             delete_clip,
             delete_clips,
+            list_playlists,
+            create_playlist,
+            update_playlist,
+            set_playlist_cover,
+            clear_playlist_cover,
+            delete_playlist,
+            playlist_add_clips,
+            playlist_remove_clips,
+            playlist_set_clips,
             start_replay,
             stop_replay,
             save_replay,

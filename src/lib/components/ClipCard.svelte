@@ -1,6 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import Icon from './Icon.svelte';
+  import PlaylistPicker from './PlaylistPicker.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { revealItemInDir } from '@tauri-apps/plugin-opener';
   import { menu } from '$lib/menu.svelte';
@@ -18,11 +19,14 @@
   import { openShare } from '$lib/share.svelte';
   import { selected, isSelected, pick } from '$lib/selection.svelte';
   import { confirmDelete } from '$lib/confirm.svelte';
+  import { playlistsWith } from '$lib/playlists.svelte';
   import { t } from '$lib/i18n.svelte';
 
   let { clip }: { clip: Clip } = $props();
 
   const open = $derived(menu.openId === clip.id);
+  // Margen mínimo contra los bordes de la ventana, para el menú y su submenú.
+  const EDGE = 8;
   const favorite = $derived(isFavorite(clip.id));
   const sel = $derived(isSelected(clip.id));
   const picking = $derived(selected.size > 0);
@@ -128,6 +132,74 @@
     return () => io.disconnect();
   });
 
+  // Submenú lateral: sale pegado al panel, alineado con su fila. Se abre al posarse encima y
+  // se cierra con retardo, para que el recorrido en diagonal hasta él no lo apague a medias.
+  let plOpen = $state(false);
+  let plItemEl = $state<HTMLElement | null>(null);
+  let plEl = $state<HTMLElement | null>(null);
+  let plHoverTimer: ReturnType<typeof setTimeout> | undefined;
+  let plCloseTimer: ReturnType<typeof setTimeout> | undefined;
+  const inPlaylists = $derived(playlistsWith(clip.path).length > 0);
+
+  const PL_OPEN_MS = 110;
+  const PL_CLOSE_MS = 220;
+
+  function plEnter() {
+    clearTimeout(plCloseTimer);
+    if (plOpen || plHoverTimer) return;
+    plHoverTimer = setTimeout(() => {
+      plHoverTimer = undefined;
+      plOpen = true;
+    }, PL_OPEN_MS);
+  }
+
+  function plLeave() {
+    clearTimeout(plHoverTimer);
+    plHoverTimer = undefined;
+    clearTimeout(plCloseTimer);
+    plCloseTimer = setTimeout(() => (plOpen = false), PL_CLOSE_MS);
+  }
+
+  $effect(() => {
+    if (!open) {
+      plOpen = false;
+      clearTimeout(plHoverTimer);
+      clearTimeout(plCloseTimer);
+    }
+  });
+
+  $effect(() => () => {
+    clearTimeout(plHoverTimer);
+    clearTimeout(plCloseTimer);
+  });
+
+  // Se coloca en coordenadas de viewport y se mide ya montado: el alto depende de cuántas
+  // playlists haya, y el lado de cuánto sitio quede. Primero intenta la derecha (que es donde
+  // se espera); si no cabe, se vuelca a la izquierda del panel, y solo si tampoco cabe ahí se
+  // pega al borde. En vertical se empuja hacia arriba lo justo para entrar en pantalla.
+  $effect(() => {
+    const el = plEl;
+    const item = plItemEl;
+    const panel = menuEl;
+    if (!el || !item || !panel) return;
+    const p = panel.getBoundingClientRect();
+    const i = item.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    const GAP = 6;
+    let x = p.right + GAP;
+    if (x + r.width + EDGE > window.innerWidth) {
+      const flipped = p.left - GAP - r.width;
+      x = flipped >= EDGE ? flipped : Math.max(EDGE, window.innerWidth - r.width - EDGE);
+    }
+    // -5 px: el relleno del panel, para que la primera fila del submenú quede a la altura de
+    // la fila que lo abre y no un pelo por debajo.
+    let y = Math.min(i.top - 5, window.innerHeight - r.height - EDGE);
+    y = Math.max(EDGE, y);
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+    el.style.visibility = 'visible';
+  });
+
   function toggleMenu(e: MouseEvent) {
     e.stopPropagation();
     menuPos = null;
@@ -147,7 +219,6 @@
   // Flotando se posiciona en coordenadas de viewport (position: fixed), así que no lo recorta el
   // scroller ni lo desplaza la tarjeta. Se corrige tras medirlo: el alto depende del menú y solo
   // se conoce una vez montado.
-  const EDGE = 8;
   let menuPos = $state<{ x: number; y: number } | null>(null);
   let menuEl = $state<HTMLElement | null>(null);
 
@@ -364,10 +435,44 @@
         >
           <button role="menuitem" onclick={(e) => { e.stopPropagation(); openEditor(clip); }}><Icon name="editor" size={17} /> {t('card.openEditor')}</button>
           <button role="menuitem" class:on={favorite} onclick={favClick}><Icon name={favorite ? 'star-fill' : 'star'} size={16} /> {favorite ? t('card.favRemove') : t('card.favAdd')}</button>
+          <button
+            class="sub-item"
+            class:on-pl={inPlaylists}
+            class:open={plOpen}
+            role="menuitem"
+            aria-haspopup="menu"
+            aria-expanded={plOpen}
+            bind:this={plItemEl}
+            onmouseenter={plEnter}
+            onmouseleave={plLeave}
+            onfocus={plEnter}
+            onclick={(e) => {
+              e.stopPropagation();
+              clearTimeout(plHoverTimer);
+              plOpen = !plOpen;
+            }}
+          >
+            <Icon name="folder-plus" size={14} />
+            {t('pl.addTo')}
+            <Icon name="chevron-down" size={13} sw={2.2} />
+          </button>
           <button role="menuitem" onclick={startRename}><Icon name="rename" size={15} sw={1.9} /> {t('card.rename')}</button>
           <button role="menuitem" onclick={openLocation}><Icon name="folder-open" size={15} sw={1.9} /> {t('card.openLocation')}</button>
           <div class="sep"></div>
           <button role="menuitem" class="danger" onclick={deleteClip}><Icon name="trash" size={15} sw={1.9} /> {t('card.delete')}</button>
+
+          {#if plOpen}
+            <div
+              class="submenu"
+              role="menu"
+              tabindex="-1"
+              bind:this={plEl}
+              onmouseenter={() => clearTimeout(plCloseTimer)}
+              onmouseleave={plLeave}
+            >
+              <PlaylistPicker paths={[clip.path]} onclose={() => (plOpen = false)} />
+            </div>
+          {/if}
         </div>
       {/if}
     </div>
@@ -638,6 +743,38 @@
   }
   .menu button.on :global(svg) {
     color: var(--gold);
+  }
+  .menu button.on-pl > :global(svg:first-child) {
+    color: var(--bright);
+  }
+  /* La flecha del submenú empuja a la derecha con margin-left:auto; el chevron del set apunta
+     hacia abajo, así que se gira. Mantiene el color del texto, no el del icono de la izquierda. */
+  .sub-item > :global(svg:last-child) {
+    margin-left: auto;
+    width: auto;
+    transform: rotate(-90deg);
+    color: var(--text-3);
+  }
+  .menu .sub-item.open {
+    background: var(--bg-3);
+    color: var(--text-0);
+  }
+
+  /* Fijo respecto al viewport: el panel que lo abre puede estar anclado a la tarjeta o flotando
+     en el cursor, y así el mismo cálculo vale para los dos. Arranca oculto porque hay que
+     medirlo antes de saber de qué lado cae. */
+  .submenu {
+    position: fixed;
+    left: 0;
+    top: 0;
+    visibility: hidden;
+    width: 216px;
+    padding: 5px;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-md);
+    box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
+    z-index: 41;
   }
   .menu .danger {
     color: var(--rec);

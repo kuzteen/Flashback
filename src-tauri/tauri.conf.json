@@ -27,7 +27,13 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/clips/*", "$APPDATA/thumbs/*", "$APPDATA/audio/*", "$APPDATA/screenshots/*"]
+        "scope": [
+          "$APPDATA/clips/*",
+          "$APPDATA/thumbs/*",
+          "$APPDATA/audio/*",
+          "$APPDATA/screenshots/*",
+          "$APPDATA/playlist-covers/*"
+        ]
       }
     }
   },

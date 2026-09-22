@@ -3,8 +3,10 @@
   import Icon from '$lib/components/Icon.svelte';
   import ClipCard from '$lib/components/ClipCard.svelte';
   import LibraryFilter from '$lib/components/LibraryFilter.svelte';
+  import PlaylistPicker from '$lib/components/PlaylistPicker.svelte';
   import { sortClips, clipMatchesFilters, displaySource, type LibraryFilter as Filter } from '$lib/clips';
   import { library, refreshLibrary } from '$lib/library.svelte';
+  import { refreshPlaylists } from '$lib/playlists.svelte';
   import { clipOrder, editorState } from '$lib/editor.svelte';
   import { selected, clearSelection, selectAll, pruneSelection } from '$lib/selection.svelte';
   import { confirmDelete, confirmState } from '$lib/confirm.svelte';
@@ -69,6 +71,9 @@
 
   $effect(() => {
     refreshLibrary();
+    // La pertenencia a playlists se marca en el menú de cada tarjeta, así que el índice tiene
+    // que estar cargado antes de abrirlo.
+    refreshPlaylists();
   });
 
   const filtered = $derived(
@@ -112,6 +117,22 @@
   const padBottom = $derived(Math.max(0, totalRows - Math.ceil(end / cols)) * rowH);
 
   let deleting = $state(false);
+  let plOpen = $state(false);
+  let plEl = $state<HTMLElement | null>(null);
+  const selectedPaths = $derived(library.clips.filter((c) => selected.has(c.id)).map((c) => c.path));
+
+  $effect(() => {
+    if (selected.size === 0) plOpen = false;
+  });
+
+  $effect(() => {
+    if (!plOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (plEl && !plEl.contains(e.target as Node)) plOpen = false;
+    };
+    window.addEventListener('mousedown', onDown, true);
+    return () => window.removeEventListener('mousedown', onDown, true);
+  });
 
   async function deleteSelected(e: { shiftKey: boolean }) {
     if (deleting || selected.size === 0) return;
@@ -320,6 +341,17 @@
       <Icon name={allSelected ? 'check' : 'minus'} size={14} sw={2.8} />
     </button>
     <span class="selcount mono">{t('sel.count', { n: String(selected.size) })}</span>
+    <div class="pl-dd" bind:this={plEl}>
+      <button class="selbtn" class:on={plOpen} onclick={() => (plOpen = !plOpen)}>
+        <Icon name="folder-plus" size={14} />
+        {t('pl.addTo')}
+      </button>
+      {#if plOpen}
+        <div class="pl-menu">
+          <PlaylistPicker paths={selectedPaths} onclose={() => (plOpen = false)} />
+        </div>
+      {/if}
+    </div>
     <button class="selbtn" onclick={clearSelection}>{t('sel.cancel')}</button>
     <button class="selbtn danger" disabled={deleting} onclick={deleteSelected}>
       <Icon name="trash" size={15} sw={1.9} />
@@ -539,6 +571,25 @@
   .selbtn:hover {
     background: var(--bg-3);
     color: var(--text-0);
+  }
+  .pl-dd {
+    position: relative;
+  }
+  .selbtn.on {
+    background: var(--bg-3);
+    color: var(--text-0);
+  }
+  .pl-menu {
+    position: absolute;
+    bottom: calc(100% + 10px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 216px;
+    padding: 5px;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-md);
+    box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
   }
   .selbtn.danger {
     color: var(--rec);

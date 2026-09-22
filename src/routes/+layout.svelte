@@ -16,6 +16,7 @@
   import Editor from '$lib/components/Editor.svelte';
   import ShareDialog from '$lib/components/ShareDialog.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import PlaylistDialog from '$lib/components/PlaylistDialog.svelte';
   import { editorState, closeEditor } from '$lib/editor.svelte';
   import {
     captureConfig,
@@ -49,7 +50,8 @@
   initLocale();
 
   const nav = [
-    { href: '/', icon: 'clips-fill', labelKey: 'nav.clips' }
+    { href: '/', icon: 'clips-fill', labelKey: 'nav.clips' },
+    { href: '/playlists', icon: 'folder-fill', labelKey: 'nav.playlists' }
   ];
 
   const isActive = (href: string) =>
@@ -792,6 +794,7 @@
 
 <ShareDialog />
 <ConfirmDialog />
+<PlaylistDialog />
 
 {#if updater.popupOpen && updater.info}
   <div class="upd-overlay" role="presentation" onclick={closeUpdatePopup}>
