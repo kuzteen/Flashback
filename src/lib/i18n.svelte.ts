@@ -205,6 +205,7 @@ const en: Record<string, string> = {
   // Filtro de biblioteca
   'filter.label': 'Filter',
   'filter.edited': 'Edited',
+  'pl.coverChange': 'Change cover',
   'filter.favorites': 'Favorites',
   'filter.all': 'All',
   'filter.games': 'Games',
@@ -489,6 +490,7 @@ const es: Record<string, string> = {
   'card.select': 'Seleccionar clip',
   'sel.bar': 'Acciones de selección',
   'sel.count': '{n} seleccionados',
+  'pl.coverChange': 'Cambiar portada',
   'sel.all': 'Seleccionar todos',
   'sel.cancel': 'Cancelar',
   'sel.delete': 'Eliminar',

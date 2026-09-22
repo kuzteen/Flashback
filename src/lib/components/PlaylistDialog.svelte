@@ -19,18 +19,35 @@
   let name = $state('');
   let description = $state('');
   let fileEl = $state<HTMLInputElement | null>(null);
+  let coverMenu = $state(false);
+  let coverMenuEl = $state<HTMLElement | null>(null);
+
+  $effect(() => {
+    if (!coverMenu) return;
+    const onDown = (e: MouseEvent) => {
+      if (coverMenuEl && !coverMenuEl.contains(e.target as Node)) coverMenu = false;
+    };
+    window.addEventListener('mousedown', onDown, true);
+    return () => window.removeEventListener('mousedown', onDown, true);
+  });
   let working = $state(false);
   // Al crear todavía no hay id con el que nombrar el PNG, así que la portada se queda aquí
   // (bytes para el backend, URL de objeto para la vista previa) hasta confirmar.
   let pendingCover = $state<Uint8Array | null>(null);
   let pendingUrl = $state<string | null>(null);
+  // Quitar la portada también espera a guardar: si se aplicara al momento, Cancelar no podría
+  // devolverla porque el PNG ya no estaría en disco.
+  let pendingClear = $state(false);
 
-  const coverSrc = $derived(creating ? pendingUrl : (playlist?.coverSrc ?? null));
+  const coverSrc = $derived(
+    pendingClear ? null : (pendingUrl ?? playlist?.coverSrc ?? null)
+  );
 
   function dropPending() {
     if (pendingUrl) URL.revokeObjectURL(pendingUrl);
     pendingUrl = null;
     pendingCover = null;
+    pendingClear = false;
   }
 
   // Los campos se siembran al abrir y al cerrar, no en cada render: leer la playlist sin
@@ -44,7 +61,9 @@
       dropPending();
       const p = id ? findPlaylist(id) : undefined;
       name = p?.name ?? '';
-      description = p?.description ?? '';
+      // maxlength no recorta lo que llega por binding: sin esto una descripción guardada con
+      // el límite anterior abriría el diálogo con el contador por encima del máximo.
+      description = (p?.description ?? '').slice(0, MAX_DESC);
     });
   });
 
@@ -56,7 +75,7 @@
     node.select();
   }
 
-  const MAX_DESC = 180;
+  const MAX_DESC = 100;
   // La portada se guarda a 256 px: se ve a 46 en la tarjeta y a 96 aquí, así que cualquier cosa
   // mayor solo ocuparía disco y obligaría al WebView a decodificar de más en cada pintado.
   const COVER_PX = 256;
@@ -178,12 +197,9 @@
       const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/png'));
       if (!blob) return;
       const bytes = new Uint8Array(await blob.arrayBuffer());
-      if (playlistEdit.id) await setPlaylistCover(playlistEdit.id, bytes);
-      else {
-        dropPending();
-        pendingCover = bytes;
-        pendingUrl = URL.createObjectURL(blob);
-      }
+      dropPending();
+      pendingCover = bytes;
+      pendingUrl = URL.createObjectURL(blob);
       closeCrop();
     } catch (err) {
       console.error('playlist cover', err);
@@ -193,16 +209,23 @@
   }
 
   function clearCover() {
-    if (playlistEdit.id) clearPlaylistCover(playlistEdit.id);
-    else dropPending();
+    const had = !!playlist?.coverSrc;
+    dropPending();
+    // Sobre una playlist ya guardada solo queda anotado; el PNG se borra al confirmar.
+    pendingClear = had;
   }
 
   async function save() {
     if (!name.trim() || working) return;
     working = true;
     try {
-      if (playlistEdit.id) await updatePlaylist(playlistEdit.id, name, description);
-      else await createPlaylist(name, description, pendingCover);
+      if (playlistEdit.id) {
+        await updatePlaylist(playlistEdit.id, name, description);
+        if (pendingCover) await setPlaylistCover(playlistEdit.id, pendingCover);
+        else if (pendingClear) await clearPlaylistCover(playlistEdit.id);
+      } else {
+        await createPlaylist(name, description, pendingCover);
+      }
     } finally {
       working = false;
     }
@@ -218,7 +241,9 @@
       e.stopImmediatePropagation();
       // Estando en el recorte, Escape descarta solo ese paso: cerrar el diálogo entero
       // perdería el nombre y la descripción ya escritos.
-      if (cropUrl) closeCrop();
+      // Con el menú de la portada abierto, Escape cierra solo el menú.
+      if (coverMenu) coverMenu = false;
+      else if (cropUrl) closeCrop();
       else closePlaylistEdit();
     }
   }
@@ -287,7 +312,7 @@
         </div>
       {:else}
       <div class="body">
-        <div class="cover-col">
+        <div class="cover-wrap">
           <button
             class="cover"
             class:busy={working}
@@ -302,9 +327,42 @@
             <span class="cover-hint"><Icon name="camera-swap" size={30} /></span>
           </button>
           {#if coverSrc}
-            <button class="cover-clear" onclick={clearCover}>
-              {t('pl.coverClear')}
-            </button>
+            <div class="cover-more" class:open={coverMenu} bind:this={coverMenuEl}>
+              <button
+                class="dots"
+                aria-label={t('card.more')}
+                aria-haspopup="menu"
+                aria-expanded={coverMenu}
+                onclick={() => (coverMenu = !coverMenu)}
+              >
+                <Icon name="more" size={18} />
+              </button>
+              {#if coverMenu}
+                <div class="cover-menu" role="menu">
+                  <button
+                    role="menuitem"
+                    onclick={() => {
+                      coverMenu = false;
+                      fileEl?.click();
+                    }}
+                  >
+                    <Icon name="camera-swap" size={16} />
+                    {t('pl.coverChange')}
+                  </button>
+                  <button
+                    role="menuitem"
+                    class="danger"
+                    onclick={() => {
+                      coverMenu = false;
+                      clearCover();
+                    }}
+                  >
+                    <Icon name="trash" size={16} sw={2} />
+                    {t('pl.coverClear')}
+                  </button>
+                </div>
+              {/if}
+            </div>
           {/if}
           <input
             class="file"
@@ -316,8 +374,8 @@
         </div>
 
         <div class="fields">
-          <label class="field">
-            <span class="label">{t('pl.fieldName')}</span>
+          <label class="field name">
+            <span class="notch">{t('pl.fieldName')}</span>
             <input
               use:focusSelect
               bind:value={name}
@@ -326,12 +384,11 @@
               onkeydown={(e) => e.key === 'Enter' && save()}
             />
           </label>
-          <label class="field">
-            <span class="label">{t('pl.fieldDesc')}</span>
+          <label class="field desc">
+            <span class="notch">{t('pl.fieldDesc')}</span>
             <textarea
               bind:value={description}
               maxlength={MAX_DESC}
-              rows="3"
               placeholder={t('pl.descPlaceholder')}
             ></textarea>
             <span class="count mono">{description.length}/{MAX_DESC}</span>
@@ -360,7 +417,7 @@
     background: rgba(0, 0, 0, 0.62);
   }
   .card {
-    width: 500px;
+    width: 520px;
     max-width: calc(100vw - 40px);
     padding: 20px 22px 18px;
     background: var(--bg-1);
@@ -395,24 +452,26 @@
     color: var(--text-0);
   }
 
+  /* Alturas fijas y no derivadas: la portada mide exactamente lo que el nombre, el hueco y la
+     descripción juntos, así que las dos columnas se leen como un solo bloque. */
   .body {
+    --field-h: 40px;
+    --field-gap: 12px;
+    --block-h: 180px;
     display: flex;
-    gap: 18px;
+    gap: 16px;
     margin-top: 18px;
   }
-  .cover-col {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 1px;
+  .cover-wrap {
+    position: relative;
     flex: none;
+    width: var(--block-h);
+    height: var(--block-h);
   }
-  /* Del alto del bloque de campos de al lado (nombre + descripción, con su hueco para el
-     botón de quitar): la portada y la información se leen como un mismo bloque. */
   .cover {
     position: relative;
-    width: 160px;
-    height: 160px;
+    width: 100%;
+    height: 100%;
     display: grid;
     place-items: center;
     overflow: hidden;
@@ -446,19 +505,74 @@
   .cover.busy .cover-hint {
     opacity: 1;
   }
-  /* Se ve como texto pero pulsa como botón: sin el relleno el clic solo entra justo encima
-     de las letras. El hueco de la columna baja otro tanto para que no se separe más. */
-  .cover-clear {
-    display: inline-flex;
-    align-items: center;
-    padding: 6px 10px;
-    border-radius: var(--r-sm);
-    font-size: 11px;
-    letter-spacing: 0.04em;
-    color: var(--text-3);
-    transition: color 0.14s ease;
+  /* Hermano de la portada y no hijo: un botón dentro de otro no es HTML válido. Aparece con el
+     mismo hover que el velo de la cámara, así que no ensucia la portada en reposo, y se queda
+     mientras su menú esté abierto. */
+  .cover-more {
+    position: absolute;
+    top: 7px;
+    right: 7px;
   }
-  .cover-clear:hover {
+  .dots {
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    color: var(--text-0);
+    background: rgba(0, 0, 0, 0.6);
+    border-radius: 50%;
+    opacity: 0;
+    transition: opacity 0.15s ease, background 0.14s ease;
+  }
+  .cover-wrap:hover .dots,
+  .cover-more.open .dots,
+  .dots:focus-visible {
+    opacity: 1;
+  }
+  .dots:hover,
+  .cover-more.open .dots {
+    background: rgba(0, 0, 0, 0.82);
+  }
+  .cover-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    width: 190px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 5px;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-md);
+    box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
+    z-index: 10;
+  }
+  .cover-menu button {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    width: 100%;
+    padding: 9px 10px;
+    font-size: 13px;
+    color: var(--text-1);
+    text-align: left;
+    border-radius: 6px;
+    transition: background 0.12s ease, color 0.12s ease;
+  }
+  .cover-menu button :global(svg) {
+    flex-shrink: 0;
+    width: 17px;
+  }
+  .cover-menu button:hover {
+    background: var(--bg-3);
+    color: var(--text-0);
+  }
+  .cover-menu .danger {
+    color: var(--rec);
+  }
+  .cover-menu .danger:hover {
+    background: rgba(255, 91, 91, 0.12);
     color: var(--rec);
   }
   .file {
@@ -532,21 +646,19 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: var(--field-gap);
   }
   .field {
     position: relative;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+    display: block;
   }
   .field input,
   .field textarea {
+    display: block;
     width: 100%;
-    padding: 8px 10px;
+    padding: 0 12px;
     font-family: inherit;
     font-size: 13.5px;
-    line-height: 1.45;
     color: var(--text-0);
     background: var(--bg-0);
     border: 1px solid var(--line);
@@ -555,16 +667,45 @@
     resize: none;
     transition: border-color 0.14s ease;
   }
+  .field input {
+    height: var(--field-h);
+    font-weight: 600;
+  }
   .field textarea {
-    padding-bottom: 22px;
+    height: calc(var(--block-h) - var(--field-h) - var(--field-gap));
+    padding-top: 10px;
+    padding-bottom: 24px;
+    line-height: 1.45;
   }
   .field input:focus,
   .field textarea:focus {
-    border-color: var(--line-strong);
+    border-color: var(--text-3);
   }
   .field input::placeholder,
   .field textarea::placeholder {
     color: var(--text-3);
+    font-weight: 400;
+  }
+  /* La etiqueta va encajada en el borde superior y solo al enfocar: en reposo el placeholder
+     ya dice qué es cada campo. El fondo es mitad y mitad (diálogo arriba, campo abajo) para
+     que corte el borde sin dejar una caja visible por fuera. */
+  .notch {
+    position: absolute;
+    top: 0;
+    left: 9px;
+    padding: 0 4px;
+    transform: translateY(-50%);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--text-1);
+    background: linear-gradient(to bottom, var(--bg-1) 50%, var(--bg-0) 50%);
+    opacity: 0;
+    transition: opacity 0.14s ease;
+    pointer-events: none;
+  }
+  .field:focus-within .notch {
+    opacity: 1;
   }
   /* Dentro del recuadro: el textarea reserva sitio abajo y el contador lleva el fondo del
      campo para que el texto al desbordar no se lea por debajo. */
