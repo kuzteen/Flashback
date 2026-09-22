@@ -196,3 +196,130 @@ export function setCrop(segs: Segment[], index: number, cropX: number): Segment[
 export function sortByPos(segs: Segment[]): Segment[] {
   return [...segs].sort((a, b) => a.posMs - b.posMs);
 }
+
+// El umbral llega ya en ms (la UI convierte 8 px con el zoom actual) para que el imán se sienta
+// igual con cualquier zoom. snapMs <= 0 lo desactiva (Alt pulsado).
+export function snap(value: number, targets: number[], snapMs: number): { value: number; at: number | null } {
+  if (snapMs <= 0) return { value, at: null };
+  let best: number | null = null;
+  let bestDist = snapMs;
+  for (const t of targets) {
+    const d = Math.abs(t - value);
+    if (d <= bestDist) {
+      bestDist = d;
+      best = t;
+    }
+  }
+  return best === null ? { value, at: null } : { value: best, at: best };
+}
+
+export function snapTargets(segs: Segment[], exclude: number, playheadPos: number): number[] {
+  const out = [0, playheadPos];
+  segs.forEach((s, i) => {
+    if (i !== exclude) out.push(s.posMs, s.posMs + segLen(s));
+  });
+  return out;
+}
+
+// Coloca el bloque en el hueco libre más cercano a donde se pide, sin solaparse nunca con otro.
+// Dentro de ese hueco puede pegarse a sus bordes o, con cualquiera de sus dos bordes, a los
+// objetivos recibidos (cabezal, bordes de otros bloques).
+export function moveTo(
+  segs: Segment[],
+  index: number,
+  desiredPos: number,
+  extentMs: number,
+  snapMs: number,
+  targets: number[] = [],
+): { segments: Segment[]; snappedAt: number | null } {
+  const cur = segs[index];
+  if (!cur) return { segments: segs, snappedAt: null };
+  const dur = segLen(cur);
+  const occ = segs
+    .filter((_, i) => i !== index)
+    .map((s) => ({ a: s.posMs, b: s.posMs + segLen(s) }))
+    .sort((x, y) => x.a - y.a);
+  const gaps: [number, number][] = [];
+  let cursor = 0;
+  for (const o of occ) {
+    if (o.a - cursor > 0.5) gaps.push([cursor, o.a]);
+    cursor = Math.max(cursor, o.b);
+  }
+  gaps.push([cursor, Math.max(cursor, extentMs)]);
+
+  let best: { pos: number; lo: number; hi: number } | null = null;
+  let bestDist = Infinity;
+  for (const [gs, ge] of gaps) {
+    if (ge - gs < dur - 0.5) continue;
+    const lo = gs;
+    const hi = ge - dur;
+    const pos = Math.max(lo, Math.min(desiredPos, hi));
+    const dist = Math.abs(pos - desiredPos);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = { pos, lo, hi };
+    }
+  }
+  if (!best) return { segments: segs, snappedAt: null };
+
+  let pos = best.pos;
+  let snappedAt: number | null = null;
+  if (snapMs > 0) {
+    const cands: { pos: number; edge: number }[] = [
+      { pos: best.lo, edge: best.lo },
+      { pos: best.hi, edge: best.hi + dur },
+    ];
+    for (const t of targets) cands.push({ pos: t, edge: t }, { pos: t - dur, edge: t });
+    let d = snapMs;
+    for (const c of cands) {
+      if (c.pos < best.lo - 0.5 || c.pos > best.hi + 0.5) continue;
+      const dist = Math.abs(c.pos - best.pos);
+      if (dist <= d) {
+        d = dist;
+        pos = c.pos;
+        snappedAt = c.edge;
+      }
+    }
+  }
+  return { segments: segs.map((s, i) => (i === index ? { ...s, posMs: pos } : s)), snappedAt };
+}
+
+// La UI arrastra bordes en posiciones de timeline (donde viven los imanes); el recorte trabaja en
+// tiempo de origen. La traducción es la misma para los dos bordes.
+export function trimToPos(segs: Segment[], index: number, edge: 'start' | 'end', pos: number): Segment[] {
+  const s = segs[index];
+  if (!s) return segs;
+  return trim(segs, index, edge, s.startMs + (pos - s.posMs));
+}
+
+// Quita [fromPos, toPos) de la timeline y cierra el hueco: lo que queda detrás se desplaza a la
+// izquierda. Los trozos que sobreviven a un corte fijan su propio rango como límite, igual que
+// cutAt, y los que quedarían por debajo de MIN_SEG_MS se descartan.
+export function removeRange(segs: Segment[], fromPos: number, toPos: number): Segment[] | null {
+  const w = toPos - fromPos;
+  if (w < 1) return null;
+  const out: Segment[] = [];
+  for (const s of segs) {
+    const a = s.posMs;
+    const b = a + segLen(s);
+    if (b <= fromPos) {
+      out.push(s);
+      continue;
+    }
+    if (a >= toPos) {
+      out.push({ ...s, posMs: a - w });
+      continue;
+    }
+    if (a < fromPos) {
+      const cut = s.startMs + (fromPos - a);
+      if (cut - s.startMs >= MIN_SEG_MS) out.push({ ...s, endMs: cut, boundStartMs: s.startMs, boundEndMs: cut });
+    }
+    if (b > toPos) {
+      const cut = s.startMs + (toPos - a);
+      if (s.endMs - cut >= MIN_SEG_MS) {
+        out.push({ ...s, startMs: cut, posMs: fromPos, boundStartMs: cut, boundEndMs: s.endMs });
+      }
+    }
+  }
+  return out.length === 0 ? null : sortByPos(out);
+}

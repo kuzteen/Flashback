@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   MIN_SEG_MS,
   cutAt,
+  moveTo,
   removeAt,
+  removeRange,
+  snap,
+  snapTargets,
+  trimToPos,
   setCrop,
   sortByPos,
   toggleDisabled,
@@ -219,5 +224,94 @@ describe('removeAt / toggleDisabled / setCrop / sortByPos', () => {
 
   it('ordena por posición en la timeline', () => {
     expect(sortByPos([two[1], two[0]])).toEqual(two);
+  });
+});
+
+describe('snap', () => {
+  it('se pega al objetivo más cercano dentro del umbral', () => {
+    expect(snap(1040, [0, 1000, 2000], 50)).toEqual({ value: 1000, at: 1000 });
+  });
+
+  it('fuera del umbral no se mueve', () => {
+    expect(snap(1100, [0, 1000, 2000], 50)).toEqual({ value: 1100, at: null });
+  });
+
+  it('con umbral 0 (Alt) queda desactivado', () => {
+    expect(snap(1001, [1000], 0)).toEqual({ value: 1001, at: null });
+  });
+});
+
+describe('snapTargets', () => {
+  it('incluye inicio, cabezal y bordes de los demás bloques', () => {
+    const segs = [seg(0, 1000, 0), seg(1000, 2000, 3000)];
+    expect(snapTargets(segs, 1, 500).sort((a, b) => a - b)).toEqual([0, 0, 500, 1000]);
+  });
+});
+
+describe('moveTo', () => {
+  // A en [0, 1000], B de 1000 ms en 3000: el hueco libre para B es [1000, fin].
+  const segs = [seg(0, 1000, 0), seg(1000, 2000, 3000)];
+
+  it('coloca el bloque donde se pide si cabe', () => {
+    const r = moveTo(segs, 1, 1500, 10_000, 0);
+    expect(r.segments[1].posMs).toBe(1500);
+    expect(r.snappedAt).toBeNull();
+  });
+
+  it('se pega al borde del hueco dentro del umbral', () => {
+    const r = moveTo(segs, 1, 1080, 10_000, 100);
+    expect(r.segments[1].posMs).toBe(1000);
+    expect(r.snappedAt).toBe(1000);
+  });
+
+  it('puede pegar su borde derecho a un objetivo', () => {
+    const r = moveTo(segs, 1, 1550, 10_000, 100, [2600]);
+    expect(r.segments[1].posMs).toBe(1600);
+    expect(r.snappedAt).toBe(2600);
+  });
+
+  it('nunca se solapa: salta al hueco libre más cercano', () => {
+    const r = moveTo(segs, 0, 3200, 10_000, 0);
+    expect(r.segments[0].posMs).toBe(4000);
+  });
+});
+
+describe('trimToPos', () => {
+  it('convierte la posición de timeline en tiempo de origen', () => {
+    const moved = [seg(4000, 10_000, 6000)];
+    expect(trimToPos(moved, 0, 'end', 9000)[0].endMs).toBe(7000);
+    expect(trimToPos(moved, 0, 'start', 7000)[0].startMs).toBe(5000);
+  });
+});
+
+describe('removeRange', () => {
+  it('quita un tramo del medio y cierra el hueco', () => {
+    expect(removeRange(fullClip(10_000), 2000, 5000)).toEqual([
+      seg(0, 2000, 0),
+      seg(5000, 10_000, 2000),
+    ]);
+  });
+
+  it('abarca varios bloques', () => {
+    const segs = [seg(0, 4000, 0), seg(4000, 10_000, 4000)];
+    expect(removeRange(segs, 3000, 6000)).toEqual([seg(0, 3000, 0), seg(6000, 10_000, 3000)]);
+  });
+
+  it('desplaza a la izquierda lo que queda detrás aunque el rango caiga en un hueco', () => {
+    const segs = [seg(0, 1000, 0), seg(1000, 2000, 5000)];
+    expect(removeRange(segs, 2000, 3000)).toEqual([seg(0, 1000, 0), seg(1000, 2000, 4000)]);
+  });
+
+  it('descarta restos más cortos que MIN_SEG_MS', () => {
+    expect(removeRange(fullClip(10_000), 30, 5000)).toEqual([seg(5000, 10_000, 30)]);
+  });
+
+  it('no deja la edición vacía', () => {
+    expect(removeRange(fullClip(10_000), 0, 10_000)).toBeNull();
+    expect(removeRange(fullClip(10_000), 0, 9980)).toBeNull();
+  });
+
+  it('un rango vacío no hace nada', () => {
+    expect(removeRange(fullClip(10_000), 3000, 3000)).toBeNull();
   });
 });
