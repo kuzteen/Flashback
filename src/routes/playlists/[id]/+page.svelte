@@ -14,7 +14,7 @@
     type Clip,
     type LibraryFilter as Filter
   } from '$lib/clips';
-  import { library, refreshLibrary } from '$lib/library.svelte';
+  import { library, refreshLibrary, clipView } from '$lib/library.svelte';
   import {
     playlists,
     refreshPlaylists,
@@ -26,9 +26,7 @@
     isFreshInPlaylist,
     markPlaylistClipSeen,
     openPlaylistEdit,
-    reorderPlaylist,
-    playlistView,
-    setPlaylistView
+    reorderPlaylist
   } from '$lib/playlists.svelte';
   import { clipOrder, editorState } from '$lib/editor.svelte';
   import { selected, clearSelection, selectAll, pruneSelection } from '$lib/selection.svelte';
@@ -296,28 +294,6 @@
     {#if playlist && clips.length > 0}
       <div class="right">
         <ClipToolbar {clips} bind:query bind:filters bind:sort={sortMode} {sorts} bind:this={toolbar} />
-        <div class="view" role="radiogroup" aria-label={t('pl.view')}>
-          <button
-            role="radio"
-            aria-checked={playlistView.mode === 'cards'}
-            aria-label={t('pl.viewCards')}
-            class:on={playlistView.mode === 'cards'}
-            onclick={() => setPlaylistView('cards')}
-          >
-            <Icon name="view-cards" size={16} />
-            <span class="tip" aria-hidden="true">{t('pl.viewCards')}</span>
-          </button>
-          <button
-            role="radio"
-            aria-checked={playlistView.mode === 'list'}
-            aria-label={t('pl.viewList')}
-            class:on={playlistView.mode === 'list'}
-            onclick={() => setPlaylistView('list')}
-          >
-            <Icon name="view-list" size={16} />
-            <span class="tip" aria-hidden="true">{t('pl.viewList')}</span>
-          </button>
-        </div>
       </div>
     {/if}
   </header>
@@ -341,12 +317,12 @@
   {:else}
     <!-- Remontar al cambiar de vista: la virtualización mide el alto de fila al montar, y con
          la rejilla viva se quedaría con el de la vista anterior. -->
-    {#key playlistView.mode}
+    {#key clipView.mode}
       <SortableGrid items={sorted} key={(c) => c.id} onreorder={canReorder ? reorder : undefined}>
         {#snippet children(clip)}
           <ClipCard
             {clip}
-            compact={playlistView.mode === 'list'}
+            compact={clipView.mode === 'list'}
             fresh={isFreshInPlaylist(refs.get(clip.path))}
           />
         {/snippet}
@@ -376,7 +352,7 @@
     <span class="selcount mono">{t('sel.count', { n: String(selected.size) })}</span>
     <button class="selbtn" onclick={clearSelection}>{t('sel.cancel')}</button>
     <button class="selbtn danger" onclick={removeSelected}>
-      <Icon name="minus" size={15} sw={2.6} />
+      <Icon name="minus" size={16} sw={2} />
       {t('pl.removeFrom')}
     </button>
   </div>
@@ -419,61 +395,6 @@
     display: flex;
     align-items: center;
     gap: 8px;
-  }
-  .view {
-    display: flex;
-    height: 36px;
-    padding: 3px;
-    gap: 2px;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: var(--r-sm);
-  }
-  .view button {
-    width: 30px;
-    display: grid;
-    place-items: center;
-    color: var(--text-3);
-    border-radius: 4px;
-    transition: color 0.14s ease, background 0.14s ease;
-  }
-  .view button:hover {
-    color: var(--text-0);
-  }
-  .view button.on {
-    color: var(--text-0);
-    background: var(--bg-3);
-  }
-  /* Tooltip propio en vez de title: el nativo es el de Chromium y desentona con la app. Sale
-     debajo y alineado a la derecha porque los botones van pegados al borde de la ventana, y
-     con un pequeño retraso al aparecer para no encenderse al cruzar la barra con el ratón. */
-  .view button {
-    position: relative;
-  }
-  .tip {
-    position: absolute;
-    top: calc(100% + 9px);
-    right: -4px;
-    width: max-content;
-    padding: 7px 11px;
-    font-size: 12.5px;
-    line-height: 1.35;
-    color: var(--text-1);
-    background: var(--bg-0);
-    border: 1px solid var(--line-strong);
-    border-radius: 8px;
-    box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.7);
-    opacity: 0;
-    visibility: hidden;
-    pointer-events: none;
-    transition: opacity 0.12s ease, visibility 0.12s;
-    z-index: 60;
-  }
-  .view button:hover .tip,
-  .view button:focus-visible .tip {
-    opacity: 1;
-    visibility: visible;
-    transition-delay: 0.35s;
   }
   .back {
     width: 36px;

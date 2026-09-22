@@ -2,6 +2,7 @@
   import Icon from './Icon.svelte';
   import LibraryFilter from './LibraryFilter.svelte';
   import type { Clip, LibraryFilter as Filter } from '$lib/clips';
+  import { clipView, setClipView } from '$lib/library.svelte';
   import { t } from '$lib/i18n.svelte';
 
   let {
@@ -76,6 +77,28 @@
         {/each}
       </div>
     {/if}
+  </div>
+  <div class="view" role="radiogroup" aria-label={t('clips.view')}>
+    <button
+      role="radio"
+      aria-checked={clipView.mode === 'cards'}
+      aria-label={t('clips.viewCards')}
+      class:on={clipView.mode === 'cards'}
+      onclick={() => setClipView('cards')}
+    >
+      <Icon name="view-cards" size={16} />
+      <span class="tip" aria-hidden="true">{t('clips.viewCards')}</span>
+    </button>
+    <button
+      role="radio"
+      aria-checked={clipView.mode === 'list'}
+      aria-label={t('clips.viewList')}
+      class:on={clipView.mode === 'list'}
+      onclick={() => setClipView('list')}
+    >
+      <Icon name="view-list" size={16} />
+      <span class="tip" aria-hidden="true">{t('clips.viewList')}</span>
+    </button>
   </div>
 </div>
 
@@ -187,5 +210,58 @@
   .sort-item.on {
     color: var(--text-0);
     font-weight: 560;
+  }
+  .view {
+    display: flex;
+    height: 36px;
+    padding: 3px;
+    gap: 2px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+  }
+  .view button {
+    position: relative;
+    width: 30px;
+    display: grid;
+    place-items: center;
+    color: var(--text-3);
+    border-radius: 4px;
+    transition: color 0.14s ease, background 0.14s ease;
+  }
+  .view button:hover {
+    color: var(--text-0);
+  }
+  .view button.on {
+    color: var(--text-0);
+    background: var(--bg-3);
+  }
+  /* Tooltip propio en vez de title: el nativo es el de Chromium y desentona con la app. Sale
+     debajo y alineado a la derecha porque los botones van pegados al borde de la ventana, y
+     con un pequeño retraso al aparecer para no encenderse al cruzar la barra con el ratón. */
+  .tip {
+    position: absolute;
+    top: calc(100% + 9px);
+    right: -4px;
+    width: max-content;
+    padding: 7px 11px;
+    font-size: 12.5px;
+    line-height: 1.35;
+    color: var(--text-1);
+    background: var(--bg-0);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.7);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.12s ease, visibility 0.12s;
+    z-index: 60;
+  }
+  .view button:hover .tip,
+  .view button:focus-visible .tip {
+    opacity: 1;
+    visibility: visible;
+    transition-delay: 0.35s;
   }
 </style>

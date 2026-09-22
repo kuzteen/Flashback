@@ -6,7 +6,7 @@
   import ClipToolbar from '$lib/components/ClipToolbar.svelte';
   import PlaylistPicker from '$lib/components/PlaylistPicker.svelte';
   import { sortClips, clipMatchesFilters, displaySource, type LibraryFilter as Filter } from '$lib/clips';
-  import { library, refreshLibrary } from '$lib/library.svelte';
+  import { library, refreshLibrary, clipView } from '$lib/library.svelte';
   import { refreshPlaylists } from '$lib/playlists.svelte';
   import { clipOrder, editorState } from '$lib/editor.svelte';
   import { selected, clearSelection, selectAll, pruneSelection } from '$lib/selection.svelte';
@@ -176,9 +176,13 @@
       <p>{query ? t('clips.noResultsQuery', { query }) : t('clips.noResultsFilter')}</p>
     </div>
   {:else}
-    <SortableGrid items={sorted} key={(c) => c.id}>
-      {#snippet children(clip)}<ClipCard {clip} />{/snippet}
-    </SortableGrid>
+    <!-- Remontar al cambiar de vista: la virtualización mide el alto de fila al montar, y con
+         la rejilla viva se quedaría con el de la vista anterior. -->
+    {#key clipView.mode}
+      <SortableGrid items={sorted} key={(c) => c.id}>
+        {#snippet children(clip)}<ClipCard {clip} compact={clipView.mode === 'list'} />{/snippet}
+      </SortableGrid>
+    {/key}
   {/if}
 </div>
 
@@ -196,7 +200,6 @@
       role="checkbox"
       aria-checked={allSelected ? 'true' : 'mixed'}
       aria-label={t('sel.all')}
-      title={t('sel.all')}
       onclick={toggleAll}
     >
       <Icon name={allSelected ? 'check' : 'minus'} size={14} sw={2.8} />
@@ -204,7 +207,7 @@
     <span class="selcount mono">{t('sel.count', { n: String(selected.size) })}</span>
     <div class="pl-dd" bind:this={plEl}>
       <button class="selbtn" class:on={plOpen} onclick={() => (plOpen = !plOpen)}>
-        <Icon name="folder-plus" size={14} />
+        <Icon name="folder-plus" size={16} />
         {t('pl.addTo')}
       </button>
       {#if plOpen}
@@ -215,7 +218,7 @@
     </div>
     <button class="selbtn" onclick={clearSelection}>{t('sel.cancel')}</button>
     <button class="selbtn danger" disabled={deleting} onclick={deleteSelected}>
-      <Icon name="trash" size={15} sw={1.9} />
+      <Icon name="trash" size={16} sw={2} />
       {t('sel.delete')}
     </button>
   </div>

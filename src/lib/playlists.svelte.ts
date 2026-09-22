@@ -31,28 +31,6 @@ export type Playlist = {
   clips: PlaylistClip[];
 };
 
-// Tarjetas grandes o lista compacta dentro de una playlist. Es preferencia de quien mira, no
-// de la playlist: una sola para todas, recordada en este equipo.
-export type PlaylistView = 'cards' | 'list';
-const VIEW_KEY = 'flashback.playlists.view';
-
-function loadView(): PlaylistView {
-  try {
-    return localStorage.getItem(VIEW_KEY) === 'list' ? 'list' : 'cards';
-  } catch {
-    return 'cards';
-  }
-}
-
-export const playlistView = $state<{ mode: PlaylistView }>({ mode: loadView() });
-
-export function setPlaylistView(mode: PlaylistView) {
-  playlistView.mode = mode;
-  try {
-    localStorage.setItem(VIEW_KEY, mode);
-  } catch {}
-}
-
 export const playlists = $state<{ list: Playlist[]; loaded: boolean }>({ list: [], loaded: false });
 
 function toPlaylist(r: RawPlaylist): Playlist {

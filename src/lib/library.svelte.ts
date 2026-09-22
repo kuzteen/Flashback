@@ -24,6 +24,28 @@ function loadFavs(): string[] {
   return [];
 }
 
+// Tarjetas grandes o lista compacta, en la biblioteca y en las playlists. Es preferencia de
+// quien mira, no de cada lista: una sola, recordada en este equipo.
+export type ClipView = 'cards' | 'list';
+const VIEW_KEY = 'flashback.clips.view';
+
+function loadView(): ClipView {
+  try {
+    return localStorage.getItem(VIEW_KEY) === 'list' ? 'list' : 'cards';
+  } catch {
+    return 'cards';
+  }
+}
+
+export const clipView = $state<{ mode: ClipView }>({ mode: loadView() });
+
+export function setClipView(mode: ClipView) {
+  clipView.mode = mode;
+  try {
+    localStorage.setItem(VIEW_KEY, mode);
+  } catch {}
+}
+
 export const library = $state<{ clips: Clip[]; loaded: boolean }>({ clips: [], loaded: false });
 
 // Los favoritos no viven en el archivo: se guardan por id de clip (= nombre del MP4,
