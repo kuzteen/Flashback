@@ -140,3 +140,59 @@ export function outToSeg(segs: Segment[], outMs: number): { index: number; srcMs
 export function equalState(a: EditState, b: EditState): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
+
+// Las dos mitades quedan contiguas y cada una fija su propio rango como tamaño máximo: el
+// material del otro lado del corte ya pertenece a la otra mitad.
+export function cutAt(segs: Segment[], index: number, srcMs: number): Segment[] | null {
+  const s = segs[index];
+  if (!s) return null;
+  if (srcMs - s.startMs < MIN_SEG_MS || s.endMs - srcMs < MIN_SEG_MS) return null;
+  const left: Segment = { ...s, endMs: srcMs, boundStartMs: s.startMs, boundEndMs: srcMs };
+  const right: Segment = {
+    ...s,
+    startMs: srcMs,
+    posMs: s.posMs + (srcMs - s.startMs),
+    boundStartMs: srcMs,
+    boundEndMs: s.endMs,
+  };
+  return [...segs.slice(0, index), left, right, ...segs.slice(index + 1)];
+}
+
+// Acotado a [boundStartMs, boundEndMs] y a MIN_SEG_MS. Al recortar el inicio la posición se
+// mueve con él para que el borde derecho no se desplace, y no puede crecer por encima del
+// bloque anterior (la lista va ordenada por posición).
+export function trim(segs: Segment[], index: number, edge: 'start' | 'end', srcMs: number): Segment[] {
+  const s = segs[index];
+  if (!s) return segs;
+  const next = { ...s };
+  if (edge === 'start') {
+    const prev = segs[index - 1];
+    const leftLimitPos = prev ? prev.posMs + segLen(prev) : 0;
+    const minStartByPos = s.startMs + (leftLimitPos - s.posMs);
+    const start = Math.max(s.boundStartMs, minStartByPos, Math.min(srcMs, s.endMs - MIN_SEG_MS));
+    next.posMs = Math.max(0, s.posMs + (start - s.startMs));
+    next.startMs = start;
+  } else {
+    next.endMs = Math.min(s.boundEndMs, Math.max(srcMs, s.startMs + MIN_SEG_MS));
+  }
+  return segs.map((x, i) => (i === index ? next : x));
+}
+
+export function removeAt(segs: Segment[], index: number): Segment[] | null {
+  if (segs.length <= 1 || !segs[index]) return null;
+  return segs.filter((_, i) => i !== index);
+}
+
+export function toggleDisabled(segs: Segment[], index: number): Segment[] {
+  return segs.map((s, i) => (i === index ? { ...s, disabled: !s.disabled } : s));
+}
+
+export function setCrop(segs: Segment[], index: number, cropX: number): Segment[] {
+  return segs.map((s, i) => (i === index ? { ...s, cropX: clamp01(cropX) } : s));
+}
+
+// La salida se reproduce y exporta en orden de lista: ordenar por posición hace que coincida con
+// lo que se ve en la timeline.
+export function sortByPos(segs: Segment[]): Segment[] {
+  return [...segs].sort((a, b) => a.posMs - b.posMs);
+}

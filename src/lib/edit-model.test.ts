@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MIN_SEG_MS,
+  cutAt,
+  removeAt,
+  setCrop,
+  sortByPos,
+  toggleDisabled,
+  trim,
   DEFAULT_FORMAT,
   DEFAULT_MIXER,
   equalState,
@@ -138,5 +145,79 @@ describe('equalState', () => {
   it('compara por contenido', () => {
     expect(equalState(initialState(1000), initialState(1000))).toBe(true);
     expect(equalState(initialState(1000), initialState(2000))).toBe(false);
+  });
+});
+
+describe('cutAt', () => {
+  it('parte en dos bloques contiguos que fijan su propio rango como límite', () => {
+    const out = cutAt([seg(0, 10_000, 0, { cropX: 0.2 })], 0, 4000);
+    expect(out).toEqual([
+      seg(0, 4000, 0, { cropX: 0.2 }),
+      seg(4000, 10_000, 4000, { cropX: 0.2 }),
+    ]);
+  });
+
+  it('no crea bloques más cortos que MIN_SEG_MS', () => {
+    expect(cutAt(fullClip(10_000), 0, 30)).toBeNull();
+    expect(cutAt(fullClip(10_000), 0, 9980)).toBeNull();
+  });
+
+  it('un índice inexistente no hace nada', () => {
+    expect(cutAt(fullClip(10_000), 3, 4000)).toBeNull();
+  });
+});
+
+describe('trim', () => {
+  const cut = [seg(0, 4000, 0), seg(4000, 10_000, 4000)];
+
+  it('el final no pasa del límite del bloque', () => {
+    expect(trim(cut, 0, 'end', 3000)[0].endMs).toBe(3000);
+    expect(trim(cut, 0, 'end', 5000)[0].endMs).toBe(4000);
+  });
+
+  it('el final respeta la longitud mínima', () => {
+    expect(trim(cut, 0, 'end', 10)[0].endMs).toBe(MIN_SEG_MS);
+  });
+
+  it('recortar el inicio mueve también la posición para fijar el borde derecho', () => {
+    const out = trim(cut, 1, 'start', 5000);
+    expect(out[1].startMs).toBe(5000);
+    expect(out[1].posMs).toBe(5000);
+  });
+
+  it('el inicio no crece por encima del bloque anterior', () => {
+    const trimmed = trim(cut, 1, 'start', 5000);
+    const back = trim(trimmed, 1, 'start', 0);
+    expect(back[1].startMs).toBe(4000);
+    expect(back[1].posMs).toBe(4000);
+  });
+
+  it('no modifica la lista recibida', () => {
+    trim(cut, 0, 'end', 3000);
+    expect(cut[0].endMs).toBe(4000);
+  });
+});
+
+describe('removeAt / toggleDisabled / setCrop / sortByPos', () => {
+  const two = [seg(0, 1000, 0), seg(1000, 2000, 1000)];
+
+  it('quita un bloque pero nunca el último', () => {
+    expect(removeAt(two, 0)).toEqual([seg(1000, 2000, 1000)]);
+    expect(removeAt([seg(0, 1000, 0)], 0)).toBeNull();
+  });
+
+  it('alterna el desactivado', () => {
+    expect(toggleDisabled(two, 1)[1].disabled).toBe(true);
+    expect(toggleDisabled(toggleDisabled(two, 1), 1)[1].disabled).toBe(false);
+  });
+
+  it('limita el encuadre a [0, 1]', () => {
+    expect(setCrop(two, 0, 1.4)[0].cropX).toBe(1);
+    expect(setCrop(two, 0, -1)[0].cropX).toBe(0);
+    expect(setCrop(two, 0, 0.25)[0].cropX).toBe(0.25);
+  });
+
+  it('ordena por posición en la timeline', () => {
+    expect(sortByPos([two[1], two[0]])).toEqual(two);
   });
 });
