@@ -411,14 +411,14 @@
           {:else if gameIcon(clip.source)}
             <img class="src-ico" src={gameIcon(clip.source)} alt="" draggable="false" />
           {/if}
-          {displaySource(clip.source)}
+          <span class="src-name">{displaySource(clip.source)}</span>
         </span>
       {:else}
         <!-- Sin origen es un vídeo que no grabó Flashback: la captura y el export del editor
              siempre embeben el juego o la pantalla. -->
         <span class="src label">
           <Icon name="imported" size={15} />
-          {t('card.imported')}
+          <span class="src-name">{t('card.imported')}</span>
         </span>
       {/if}
 
@@ -738,6 +738,17 @@
     font-size: 12px;
     color: var(--text-2);
     min-width: 0;
+  }
+  .src :global(svg) {
+    flex: none;
+  }
+  /* Una sola línea con puntos suspensivos: un nombre largo partía en dos, el pie crecía y la
+     tarjeta dejaba de medir lo mismo que sus vecinas. */
+  .src-name {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
   .src-ico {
     flex: none;
