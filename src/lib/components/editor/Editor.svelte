@@ -27,6 +27,14 @@
     ui.reset();
   });
 
+  // El editor se abre con un clic en una tarjeta y el foco se quedaba en ella, detrás: Espacio le
+  // llegaba primero y la tarjeta lo tomaba como "abrir", reiniciando el editor con el mismo clip
+  // (sin volver a cargar el vídeo, así que el montaje quedaba vacío). Con el foco dentro del
+  // editor, ninguna tecla llega a lo que hay detrás.
+  $effect(() => {
+    root?.focus({ preventScroll: true });
+  });
+
   // En pantalla completa, reproducir o pausar vuelve a enseñar los controles (y reprograma su
   // ocultación si está sonando).
   $effect(() => {
@@ -88,7 +96,7 @@
 <svelte:window onkeydown={onKey} onmousemove={() => ui.fs && ui.showFsCtrl()} />
 <svelte:document onmouseleave={() => ui.hideFsCtrl()} />
 
-<div class="ed" bind:this={root}>
+<div class="ed" bind:this={root} tabindex="-1">
   <EditorHeader onclose={close} />
   <Viewer />
   <div class="dock" bind:this={dock} style:height={ui.dockH !== null ? `${ui.dockH}px` : null}>
@@ -141,6 +149,7 @@
     display: flex;
     flex-direction: column;
     background: var(--bg-0);
+    outline: none;
   }
   .dock {
     position: relative;
