@@ -1321,7 +1321,7 @@ fn build_pipeline_core(
                         if detect_resize {
                             let cw = (s.Width.max(0) as u32) & !1;
                             let ch = (s.Height.max(0) as u32) & !1;
-                            if cw >= 2 && ch >= 2 && (cw != width || ch != height) {
+                            if cw >= 2 && ch >= 2 && size_changed_enough(width, height, cw, ch) {
                                 size_changed_h.store(true, Ordering::Relaxed);
                                 let _ = frame.Close();
                                 return Ok(());
@@ -2758,6 +2758,17 @@ fn set_capture_rate(session: &GraphicsCaptureSession, fps: u32) {
     let _ = session.SetMinUpdateInterval(windows::Foundation::TimeSpan { Duration: dur });
 }
 
+// Umbral para reconstruir la captura por cambio de tamaño de la ventana. Hay juegos que la
+// encogen unos píxeles al perder el foco y la recuperan al volver (Valorant sin bordes alterna
+// 1920x1080 y 1920x1079): cada alt-tab reconstruía el pipeline, vaciaba el buffer del replay y
+// partía la grabación. Por debajo del umbral se sigue con el tamaño actual (WGC recorta o deja
+// una línea de 1-2 px); por encima (ventana <-> pantalla completa, otra resolución) sí se rehace.
+const RESIZE_TOLERANCE_PX: u32 = 16;
+
+fn size_changed_enough(w: u32, h: u32, new_w: u32, new_h: u32) -> bool {
+    w.abs_diff(new_w) > RESIZE_TOLERANCE_PX || h.abs_diff(new_h) > RESIZE_TOLERANCE_PX
+}
+
 // Intervalo mínimo (en unidades de 100 ns) entre frames codificados para no superar
 // los FPS objetivo. 0 = sin límite. El límite real se aplica descartando frames en el
 // handler de captura, antes de tocar la GPU/encoder: menos FPS = menos trabajo.
@@ -3143,6 +3154,16 @@ mod tests {
             "seg2 sin acotar (fuga): {}",
             buf.packets.len()
         );
+    }
+
+    #[test]
+    fn small_window_size_changes_do_not_rebuild() {
+        // Valorant sin bordes al perder y recuperar el foco.
+        assert!(!size_changed_enough(1920, 1080, 1920, 1078));
+        assert!(!size_changed_enough(1920, 1078, 1920, 1080));
+        // Ventana con bordes a pantalla completa, o cambio de resolución.
+        assert!(size_changed_enough(1904, 1041, 1920, 1080));
+        assert!(size_changed_enough(1280, 720, 1920, 1080));
     }
 
     #[test]
