@@ -172,7 +172,7 @@
     background: var(--surface);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-sm);
-    box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
+    box-shadow: var(--shadow-pop);
     z-index: 70;
   }
   .item {

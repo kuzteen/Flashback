@@ -330,6 +330,7 @@
             <div class="cover-more" class:open={coverMenu} bind:this={coverMenuEl}>
               <button
                 class="dots"
+               
                 aria-label={t('card.more')}
                 aria-haspopup="menu"
                 aria-expanded={coverMenu}
@@ -414,7 +415,7 @@
     z-index: 220;
     display: grid;
     place-items: center;
-    background: rgba(0, 0, 0, 0.62);
+    background: var(--scrim);
   }
   .card {
     width: 520px;
@@ -423,7 +424,7 @@
     background: var(--bg-1);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
-    box-shadow: 0 24px 60px -18px rgba(0, 0, 0, 0.8);
+    box-shadow: var(--shadow-dialog);
     animation: dlg-in 0.16s ease-out;
   }
   @keyframes dlg-in {
@@ -545,7 +546,7 @@
     background: var(--surface);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
-    box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
+    box-shadow: var(--shadow-pop);
     z-index: 10;
   }
   .cover-menu button {
@@ -572,7 +573,7 @@
     color: var(--rec);
   }
   .cover-menu .danger:hover {
-    background: rgba(255, 91, 91, 0.12);
+    background: color-mix(in srgb, var(--rec) 12%, transparent);
     color: var(--rec);
   }
   .file {

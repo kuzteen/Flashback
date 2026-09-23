@@ -414,7 +414,7 @@
     pointer-events: none;
     opacity: 0.95;
     box-shadow:
-      0 0 0 2px rgba(255, 255, 255, 0.22),
+      0 0 0 2px var(--ring-strong),
       0 26px 60px -14px rgba(0, 0, 0, 0.85) !important;
     transition: scale 0.18s cubic-bezier(0.2, 0.8, 0.2, 1), rotate 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
     will-change: translate;

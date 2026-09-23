@@ -140,12 +140,12 @@
     gap: 2px;
     height: 56px;
     padding: 0 8px;
-    background: rgba(18, 18, 20, 0.62);
+    background: var(--glass-soft);
     backdrop-filter: blur(20px) saturate(140%);
     border: 1px solid var(--line);
     border-radius: var(--r-lg);
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.06),
+      inset 0 1px 0 var(--glass-edge),
       0 18px 48px -12px rgba(0, 0, 0, 0.6);
     z-index: 10000;
   }

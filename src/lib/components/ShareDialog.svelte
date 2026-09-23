@@ -168,7 +168,7 @@
     z-index: 210;
     display: grid;
     place-items: center;
-    background: rgba(0, 0, 0, 0.62);
+    background: var(--scrim);
   }
   .card {
     width: 460px;
@@ -179,7 +179,7 @@
     background: var(--bg-1);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
-    box-shadow: 0 24px 60px -18px rgba(0, 0, 0, 0.8);
+    box-shadow: var(--shadow-dialog);
   }
   /* El contenedor solo recibe el foco para capturar el teclado, no es un control: sin anillo. */
   .card:focus {
@@ -314,7 +314,7 @@
   }
   /* El resalte del hover va pegado al fotograma, no al borde discontinuo de fuera. */
   .drop:hover:not(.busy) .frame {
-    border-color: rgba(160, 167, 182, 0.3);
+    border-color: var(--line-strong);
   }
 
   .media {
@@ -411,7 +411,7 @@
     margin-top: 12px;
     font-size: 12px;
     line-height: 1.4;
-    color: #ff6166;
+    color: var(--rec-text);
   }
 
   @media (prefers-reduced-motion: reduce) {

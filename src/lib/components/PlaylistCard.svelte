@@ -212,12 +212,12 @@
     padding: 11px 10px 11px 12px;
     background: var(--surface);
     border-radius: 4px;
-    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08);
+    box-shadow: 0 0 0 2px var(--ring);
     transition: box-shadow 0.15s ease;
   }
   .pcard:hover,
   .pcard.open {
-    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.16);
+    box-shadow: 0 0 0 4px var(--ring-strong);
   }
   /* Sin esto, la tarjeta siguiente (posterior en el DOM) taparía un tooltip que se salga. */
   .pcard:hover {
@@ -307,7 +307,7 @@
     background: var(--bg-0);
     border: 1px solid var(--line-strong);
     border-radius: 8px;
-    box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.7);
+    box-shadow: var(--shadow-float);
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
@@ -393,7 +393,7 @@
     background: var(--surface);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
-    box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
+    box-shadow: var(--shadow-pop);
     z-index: 40;
   }
   .menu.floating {
@@ -424,7 +424,7 @@
     color: var(--rec);
   }
   .menu .danger:hover {
-    background: rgba(255, 91, 91, 0.12);
+    background: color-mix(in srgb, var(--rec) 12%, transparent);
   }
   .sep {
     height: 1px;

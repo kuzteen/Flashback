@@ -51,7 +51,7 @@
     z-index: 220;
     display: grid;
     place-items: center;
-    background: rgba(0, 0, 0, 0.62);
+    background: var(--scrim);
   }
   .card {
     width: 360px;
@@ -60,7 +60,7 @@
     background: var(--bg-1);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
-    box-shadow: 0 24px 60px -18px rgba(0, 0, 0, 0.8);
+    box-shadow: var(--shadow-dialog);
     text-align: center;
     animation: confirm-in 0.16s ease-out;
   }
@@ -125,11 +125,11 @@
   }
   .btn.danger {
     color: var(--rec);
-    border-color: rgba(255, 91, 91, 0.35);
+    border-color: color-mix(in srgb, var(--rec) 35%, transparent);
   }
   .btn.danger:hover {
     color: var(--rec);
-    background: rgba(255, 91, 91, 0.14);
+    background: color-mix(in srgb, var(--rec) 14%, transparent);
     border-color: var(--rec);
   }
 </style>

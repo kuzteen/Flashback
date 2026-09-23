@@ -528,14 +528,14 @@
     position: relative;
     background: var(--surface);
     border-radius: 4px;
-    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08);
+    box-shadow: 0 0 0 2px var(--ring);
     transition: box-shadow 0.15s ease;
   }
   /* El borde es una sola sombra sólida por fuera de la card: en hover solo crece su spread, que
      es pintado puro (sin layout), así nada se mueve y nunca hay dos piezas con tonos distintos. */
   .card:hover,
   .card.open {
-    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.16);
+    box-shadow: 0 0 0 4px var(--ring-strong);
   }
   /* Por encima de la barra de selección (z-index 40): con el clic derecho el menú puede caer
      justo donde está, y quedar por debajo lo dejaría a medias. */
@@ -825,7 +825,7 @@
     background: var(--surface);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
-    box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
+    box-shadow: var(--shadow-pop);
     z-index: 40;
   }
   .menu.floating {
@@ -886,14 +886,14 @@
     background: var(--surface);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
-    box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
+    box-shadow: var(--shadow-pop);
     z-index: 41;
   }
   .menu .danger {
     color: var(--rec);
   }
   .menu .danger:hover {
-    background: rgba(255, 91, 91, 0.12);
+    background: color-mix(in srgb, var(--rec) 12%, transparent);
     color: var(--rec);
   }
   .sep {

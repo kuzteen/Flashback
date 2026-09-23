@@ -444,8 +444,8 @@
     justify-content: center;
     width: 22px;
     height: 22px;
-    color: #000;
-    background: #fff;
+    color: var(--on-bright);
+    background: var(--bright);
     border-radius: 999px;
     box-shadow: 0 3px 10px -2px rgba(0, 0, 0, 0.6);
     transition: transform 0.12s ease, opacity 0.12s ease;
@@ -473,7 +473,7 @@
     flex-shrink: 0;
     width: 44px;
     height: 34px;
-    color: #000;
+    color: var(--on-bright);
     background: var(--bright);
     border: 1px solid transparent;
     border-radius: var(--r-sm);

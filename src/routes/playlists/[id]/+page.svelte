@@ -521,7 +521,7 @@
     border-radius: 12px;
     background: var(--bg-0);
     border: 1px solid var(--line-strong);
-    box-shadow: 0 18px 44px -14px rgba(0, 0, 0, 0.75);
+    box-shadow: var(--shadow-pop);
   }
   .selall {
     width: 22px;
@@ -584,6 +584,6 @@
     color: var(--rec);
   }
   .selbtn.danger:hover {
-    background: rgba(255, 91, 91, 0.12);
+    background: color-mix(in srgb, var(--rec) 12%, transparent);
   }
 </style>

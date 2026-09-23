@@ -7,9 +7,12 @@
   --bg-2: #232324;
   --bg-3: #2c2c2e;
   --bg-hover: rgba(255, 255, 255, 0.05);
+  --field: #101010;
 
   --line: rgba(255, 255, 255, 0.08);
   --line-strong: rgba(255, 255, 255, 0.15);
+  --ring: rgba(255, 255, 255, 0.08);
+  --ring-strong: rgba(255, 255, 255, 0.16);
 
   --text-0: #ededed;
   --text-1: #c4c4c6;
@@ -23,14 +26,27 @@
   --on-accent: #0a0a0a;
 
   --bright: #f0f2f7;
+  --on-bright: #000;
 
   --rec: #ff5b5b;
   --rec-glow: rgba(255, 91, 91, 0.32);
+  --rec-text: #ff6166;
 
   --gold: #f4c95d;
 
   --link: #5b9dff;
   --link-hover: #8ab6ff;
+
+  --glass: rgba(18, 18, 20, 0.72);
+  --glass-soft: rgba(18, 18, 20, 0.62);
+  --glass-edge: rgba(255, 255, 255, 0.06);
+  --scrim: rgba(0, 0, 0, 0.62);
+  --shadow-pop: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
+  --shadow-float: 0 12px 30px -10px rgba(0, 0, 0, 0.7);
+  --shadow-dialog: 0 24px 60px -18px rgba(0, 0, 0, 0.8);
+  --wave: rgba(237, 237, 237, 0.55);
+  --wave-off: rgba(255, 255, 255, 0.14);
+  --wave-base: rgba(255, 255, 255, 0.07);
 
   --font-ui: 'Geist Variable', system-ui, -apple-system, sans-serif;
   --font-mono: var(--font-ui);
@@ -123,6 +139,39 @@ a {
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--text-2);
+}
+
+/* Deslizador del editor (zoom, ajustes): pista fina y tirador rectangular, como los de volumen. */
+input[type='range'].fader {
+  width: 100%;
+  height: 18px;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+input[type='range'].fader::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-3);
+}
+/* La rayita interior es la misma de los tiradores de volumen; el tirador nativo no admite
+   pseudo-elementos, así que va como un segundo fondo centrado. */
+input[type='range'].fader::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 4px;
+  background:
+    linear-gradient(var(--bg-3), var(--bg-3)) center / 8px 2px no-repeat,
+    var(--text-0);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+}
+input[type='range'].fader:focus-visible {
+  outline: none;
+}
+input[type='range'].fader:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
 ::-webkit-scrollbar {

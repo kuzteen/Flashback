@@ -191,7 +191,7 @@
     background: var(--surface);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-sm);
-    box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
+    box-shadow: var(--shadow-pop);
     z-index: 70;
   }
   .sort-item {
@@ -251,7 +251,7 @@
     background: var(--bg-0);
     border: 1px solid var(--line-strong);
     border-radius: 8px;
-    box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.7);
+    box-shadow: var(--shadow-float);
     opacity: 0;
     visibility: hidden;
     pointer-events: none;

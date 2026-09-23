@@ -1131,7 +1131,7 @@
     background: var(--surface);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
-    box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
+    box-shadow: var(--shadow-pop);
     z-index: 50;
     animation: cap-in 0.14s ease-out;
   }
@@ -1301,7 +1301,7 @@
     background: var(--bg-0);
     border: 1px solid var(--line-strong);
     border-radius: 8px;
-    box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.7);
+    box-shadow: var(--shadow-float);
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
@@ -1366,7 +1366,7 @@
     background: var(--surface);
     border: 1px solid var(--line-strong);
     border-radius: 8px;
-    box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
+    box-shadow: var(--shadow-pop);
     z-index: 70;
   }
   .mic-item {
@@ -1440,7 +1440,7 @@
     padding: 6px 10px;
     font-size: 11.5px;
     color: var(--text-1);
-    background: #101010;
+    background: var(--field);
     border: 1px solid var(--line);
     border-radius: var(--r-sm);
     white-space: nowrap;
@@ -1485,7 +1485,7 @@
     padding: 10px 18px;
     font-size: 13.5px;
     color: var(--text-1);
-    background: #101010;
+    background: var(--field);
     border: 1px solid var(--line);
     border-radius: var(--r-sm);
     cursor: pointer;
@@ -1548,7 +1548,7 @@
     background: var(--surface);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
-    box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
+    box-shadow: var(--shadow-pop);
     z-index: 60;
     animation: qset-in 0.14s ease-out;
   }
@@ -1629,7 +1629,7 @@
     background: var(--surface);
     border: 1px solid var(--line-strong);
     border-radius: 8px;
-    box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
+    box-shadow: var(--shadow-pop);
     z-index: 70;
   }
   .qdd-item {
@@ -1684,7 +1684,7 @@
   }
 
   .recpill {
-    background: #101010;
+    background: var(--field);
     transition: background 0.16s ease, border-color 0.16s ease;
   }
   .recpill .rec-seg {
@@ -1695,14 +1695,14 @@
     align-items: center;
   }
   .recpill.on {
-    background: rgba(229, 72, 77, 0.16);
-    border-color: rgba(229, 72, 77, 0.55);
+    background: color-mix(in srgb, var(--rec) 16%, transparent);
+    border-color: color-mix(in srgb, var(--rec) 55%, transparent);
   }
   .recpill.on .rec-seg {
-    color: #ff6166;
+    color: var(--rec-text);
   }
   .recpill.on .sep {
-    color: rgba(229, 72, 77, 0.45);
+    color: color-mix(in srgb, var(--rec) 45%, transparent);
   }
   .recpill .rec-hotkey {
     font-size: 11px;
@@ -1748,7 +1748,7 @@
     z-index: 200;
     display: grid;
     place-items: center;
-    background: rgba(0, 0, 0, 0.6);
+    background: var(--scrim);
   }
   .upd-modal {
     width: 380px;
@@ -1760,7 +1760,7 @@
     background: var(--bg-1);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
-    box-shadow: 0 24px 60px -18px rgba(0, 0, 0, 0.8);
+    box-shadow: var(--shadow-dialog);
   }
   .upd-title {
     font-size: 17px;
