@@ -33,8 +33,8 @@ pub struct AudioInput {
 
 #[cfg(target_os = "windows")]
 pub use win::{
-    list_audio_inputs, list_monitors, replay_active, save_replay, start, start_replay, status,
-    stop, stop_replay,
+    list_audio_inputs, list_monitors, replay_active, replay_target, save_replay, start,
+    start_replay, status, stop, stop_replay,
 };
 
 #[cfg(not(target_os = "windows"))]
@@ -99,6 +99,11 @@ pub fn save_replay(_source: &str) -> Option<String> {
 #[cfg(not(target_os = "windows"))]
 pub fn replay_active() -> bool {
     false
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn replay_target() -> Option<String> {
+    None
 }
 
 #[cfg(target_os = "windows")]

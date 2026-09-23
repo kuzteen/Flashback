@@ -836,6 +836,11 @@ pub fn replay_active() -> bool {
     REPLAY_STATE.lock_ok().is_some()
 }
 
+// Objetivo del replay en marcha ("window" o el id de un monitor), o None si está apagado.
+pub fn replay_target() -> Option<String> {
+    REPLAY_STATE.lock_ok().as_ref().map(|r| r.target.clone())
+}
+
 // Muxea los últimos N s del ring a un MP4 desde el último IDR. Se clona lo necesario
 // bajo el lock y se libera antes de tocar disco para no frenar el hilo de codificación.
 pub fn save_replay(source: &str) -> Option<String> {

@@ -13,7 +13,7 @@
   import { hotkeys, capture, labelFor, labelTokens } from '$lib/hotkeys.svelte';
   import { refreshLibrary } from '$lib/library.svelte';
   import { replay, setReplaySeconds, BUFFER_OPTIONS } from '$lib/replay.svelte';
-  import { playReplaySound } from '$lib/replay-sound.svelte';
+  import { gainFor, replaySound } from '$lib/replay-sound.svelte';
   import Editor from '$lib/components/editor/Editor.svelte';
   import ShareDialog from '$lib/components/ShareDialog.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
@@ -299,30 +299,37 @@
     goto('/settings#atajos');
   }
 
-  async function saveReplay() {
-    if (!replay.enabled) {
-      toast(t('toast.enableReplay'));
-      return;
-    }
-    if (!captureTarget) {
-      toast(t('toast.noTargetReplay'));
-      return;
-    }
-    try {
-      const source = game || activeMonitor?.label || 'Pantalla';
-      const path = await invoke<string | null>('save_replay', { source });
-      if (path) {
-        playReplaySound();
-        toast(t('toast.clipSaved'), 'saved');
-        await refreshLibrary();
-      } else {
-        toast(t('toast.replaySaveFailed'));
-      }
-    } catch (e) {
-      toast(t('toast.replaySaveError', { e: String(e) }), 'error');
-      console.error('save_replay', e);
-    }
-  }
+  // Guardar clip y grabar los atiende Rust al pulsar el atajo (sin pasar por aquí, que con un
+  // juego exigente en primer plano podía tardar segundos). La interfaz solo refleja el resultado.
+  $effect(() => {
+    const saved = listen('clip-saved', () => refreshLibrary());
+    const rec = listen<{ recording: boolean; tapped: boolean; path: string | null }>('recording-changed', (e) => {
+      recording = e.payload.recording;
+      recordingTapped = e.payload.tapped;
+      if (e.payload.path) refreshLibrary();
+    });
+    return () => {
+      saved.then((u) => u());
+      rec.then((u) => u());
+    };
+  });
+
+  // Lo que Rust necesita para grabar con el atajo y para el sonido de guardado.
+  $effect(() => {
+    const prefs = {
+      target: captureTarget,
+      fps: captureConfig.fps,
+      quality: captureConfig.quality,
+      resolution: captureConfig.resolution,
+      mic: micOn,
+      micDevice: micInput
+    };
+    invoke('set_record_prefs', { prefs }).catch(() => {});
+  });
+
+  $effect(() => {
+    invoke('set_save_sound', { gain: gainFor(replaySound.level) }).catch(() => {});
+  });
 
   async function openFlashback() {
     try {
@@ -439,12 +446,18 @@
       // Cada atajo se registra por separado: en Windows RegisterHotKey falla si la combinación
       // ya la tiene otra app, y antes ese fallo (dentro de un try común) abortaba el registro de
       // los siguientes, tumbando los tres atajos. Aislado, un conflicto solo pierde ese atajo.
+      // Guardar y grabar se registran en Rust, que los atiende sin pasar por el webview.
+      const failed: string[] = [];
+      try {
+        const bad = await invoke<string[]>('set_native_hotkeys', { save: sr, record: rec });
+        if (bad.includes(sr)) failed.push(`${t('hk.name.saveClip')} (${labelFor(sr)})`);
+        if (bad.includes(rec)) failed.push(`${t('hk.name.recording')} (${labelFor(rec)})`);
+      } catch (e) {
+        console.error('set_native_hotkeys', e);
+      }
       const binds: { accel: string; name: string; run: () => void }[] = [
-        { accel: sr, name: t('hk.name.saveClip'), run: saveReplay },
-        { accel: rec, name: t('hk.name.recording'), run: toggleRecording },
         { accel: op, name: t('hk.name.openFlashback'), run: openFlashback }
       ];
-      const failed: string[] = [];
       for (const b of binds) {
         if (cancelled) return;
         try {

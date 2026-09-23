@@ -7,6 +7,7 @@ mod detect;
 mod discord;
 mod dragdrop;
 mod editor;
+mod hotkeys;
 mod edits;
 mod library;
 mod look;
@@ -197,6 +198,23 @@ async fn start_replay(
         )
     })
     .await?
+}
+
+// Atajos de guardar y grabar: los atiende Rust directamente (ver hotkeys.rs). Asíncrono porque el
+// registro del plugin pasa por el hilo principal y espera su respuesta.
+#[tauri::command]
+async fn set_native_hotkeys(app: tauri::AppHandle, save: String, record: String) -> Vec<String> {
+    hotkeys::register(&app, &save, &record)
+}
+
+#[tauri::command]
+fn set_record_prefs(prefs: hotkeys::RecordPrefs) {
+    hotkeys::set_record_prefs(prefs);
+}
+
+#[tauri::command]
+fn set_save_sound(gain: f32) {
+    hotkeys::set_sound_gain(gain);
 }
 
 #[tauri::command]
@@ -798,6 +816,9 @@ pub fn run() {
             stop_replay,
             save_replay,
             replay_active,
+            set_native_hotkeys,
+            set_record_prefs,
+            set_save_sound,
             toast,
             dismiss_toast
         ])
