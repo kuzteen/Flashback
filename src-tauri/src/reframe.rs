@@ -411,6 +411,10 @@ pub mod win {
                 self.ctx.EndDraw(None, None)?;
                 self.ctx.SetTarget(None);
             }
+            // Las muestras del asignador nacen con longitud 0 y el sink rechaza una muestra vacía
+            // (E_INVALIDARG en WriteSample): la textura ya está llena, así que ocupa el búfer entero.
+            let buf = unsafe { out.GetBufferByIndex(0)? };
+            unsafe { buf.SetCurrentLength(buf.GetMaxLength()?)? };
             Ok(out)
         }
 
