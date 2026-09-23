@@ -412,13 +412,18 @@ async fn start_file_drag(
 
 // Ruta de la miniatura cacheada de un clip. La comparten el comando que la genera y el arrastre,
 // que la reutiliza como imagen bajo el cursor: si los dos no derivan el nombre igual, el arrastre
-// se quedaría sin imagen aunque la miniatura ya exista.
+// se quedaría sin imagen aunque la miniatura ya exista. Tamaño y fecha entran en el nombre: un
+// archivo nuevo en la ruta de uno borrado (otro export con el mismo nombre) no hereda su miniatura.
 fn thumb_path_for(app: &tauri::AppHandle, clip: &str) -> Option<std::path::PathBuf> {
     use std::hash::{Hash, Hasher};
     use tauri::Manager;
     let dir = app.path().app_data_dir().ok()?.join("thumbs");
     let mut h = std::collections::hash_map::DefaultHasher::new();
     clip.hash(&mut h);
+    if let Ok(m) = std::fs::metadata(clip) {
+        m.len().hash(&mut h);
+        m.modified().ok().hash(&mut h);
+    }
     Some(dir.join(format!("{:016x}.jpg", h.finish())))
 }
 
@@ -591,7 +596,28 @@ fn playlist_mark_seen(app: tauri::AppHandle, id: String, path: String) -> Result
 
 #[tauri::command]
 fn list_clips(app: tauri::AppHandle) -> Vec<library::ClipInfo> {
-    library::list_clips(config::library_dirs(&app))
+    let clips = library::list_clips(config::library_dirs(&app));
+    if !clips.is_empty() {
+        let paths: Vec<String> = clips.iter().map(|c| c.path.clone()).collect();
+        std::thread::spawn(move || prune_thumbs(&app, &paths));
+    }
+    clips
+}
+
+// Borra las miniaturas de clips que ya no existen o que cambiaron (su nombre ya no coincide).
+fn prune_thumbs(app: &tauri::AppHandle, clips: &[String]) {
+    let keep: std::collections::HashSet<std::path::PathBuf> =
+        clips.iter().filter_map(|c| thumb_path_for(app, c)).collect();
+    let Some(dir) = keep.iter().next().and_then(|p| p.parent()).map(|d| d.to_path_buf()) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else { return };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.extension().is_some_and(|x| x == "jpg") && !keep.contains(&p) {
+            let _ = std::fs::remove_file(&p);
+        }
+    }
 }
 
 #[tauri::command]
@@ -618,10 +644,18 @@ fn edit_dest(app: tauri::AppHandle, src: String) -> String {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("clip");
-    config::clips_edit_dir(&app)
-        .join(format!("{stem}_edit.mp4"))
+    free_path(&config::clips_edit_dir(&app), &format!("{stem}_edit"))
         .to_string_lossy()
         .into_owned()
+}
+
+// Primer nombre libre (`x.mp4`, `x_2.mp4`, …): exportar otra vez el mismo clip no debe pisar el
+// export anterior.
+fn free_path(dir: &std::path::Path, stem: &str) -> std::path::PathBuf {
+    (1..1000u32)
+        .map(|n| dir.join(if n == 1 { format!("{stem}.mp4") } else { format!("{stem}_{n}.mp4") }))
+        .find(|p| !p.exists())
+        .unwrap_or_else(|| dir.join(format!("{stem}.mp4")))
 }
 
 #[derive(serde::Deserialize)]
@@ -824,4 +858,20 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_repeated_export_gets_the_next_free_name() {
+        let dir = std::env::temp_dir().join("flashback_free_path");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(super::free_path(&dir, "a_edit"), dir.join("a_edit.mp4"));
+        std::fs::write(dir.join("a_edit.mp4"), b"").unwrap();
+        assert_eq!(super::free_path(&dir, "a_edit"), dir.join("a_edit_2.mp4"));
+        std::fs::write(dir.join("a_edit_2.mp4"), b"").unwrap();
+        assert_eq!(super::free_path(&dir, "a_edit"), dir.join("a_edit_3.mp4"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

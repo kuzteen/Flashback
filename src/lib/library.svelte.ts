@@ -95,9 +95,12 @@ function toClip(r: RawClip, withEdits: Set<string>): Clip {
     createdAt: new Date(r.modified_ms),
     path: r.path,
     edited: withEdits.has(r.path),
-    // Los clips exportados desde el editor se nombran `<nombre>_edit.mp4`.
-    exported: r.id.endsWith('_edit.mp4'),
-    previewSrc: convertFileSrc(r.path)
+    // Los clips exportados desde el editor se nombran `<nombre>_edit.mp4` (`_edit_2.mp4`… si se
+    // exporta más de una vez).
+    exported: /_edit(_\d+)?\.mp4$/.test(r.id),
+    // La fecha en la URL: un archivo nuevo con la ruta de otro no debe salir de la caché del
+    // WebView como si fuera el anterior.
+    previewSrc: `${convertFileSrc(r.path)}?v=${r.modified_ms}`
   };
 }
 
@@ -106,6 +109,7 @@ function toClip(r: RawClip, withEdits: Set<string>): Clip {
 // generación al abrir una biblioteca grande. Una vez en disco, las siguientes peticiones
 // devuelven al instante.
 const thumbCache = new Map<string, string>();
+const thumbStamp = new Map<string, number>();
 const thumbQueue: (() => void)[] = [];
 let thumbActive = 0;
 const THUMB_CONCURRENCY = 4;
@@ -154,6 +158,11 @@ export async function refreshLibrary() {
       invoke<string[]>('clips_with_edits').catch(() => [] as string[])
     ]);
     const edited = new Set(withEdits);
+    for (const r of raw) {
+      const was = thumbStamp.get(r.path);
+      if (was !== undefined && was !== r.modified_ms) thumbCache.delete(r.path);
+      thumbStamp.set(r.path, r.modified_ms);
+    }
     library.clips = raw.map((r) => toClip(r, edited));
   } catch {
     // fuera de Tauri (preview en navegador): biblioteca vacía
