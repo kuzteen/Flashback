@@ -781,6 +781,16 @@
     flex: none;
     color: var(--text-2);
   }
+  /* Mismo recorte que la duración para centrar el texto en la píldora. El nombre necesita
+     relleno simétrico: su overflow recorta, y sin él se comería los trazos bajo la línea (g, p, y). */
+  .pl-tag .pl-name,
+  .pl-tag .pl-more {
+    line-height: 1;
+    text-box: trim-both cap alphabetic;
+  }
+  .pl-tag .pl-name {
+    padding-block: 3px;
+  }
   /* Al llegar con Tab no hay puntero que descubra el check, y sin él la tarjeta parece no tener
      forma de seleccionarse. :focus-visible y no :focus-within: pulsar un botón con el ratón
      también deja el foco dentro, y entonces el check se quedaba clavado al apartar el ratón.
