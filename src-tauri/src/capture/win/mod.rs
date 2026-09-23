@@ -1962,6 +1962,8 @@ fn run_encoder_thread(
     // reordenar), la N-ésima salida corresponde al N-ésimo timestamp aquí.
     let mut pts_fifo: VecDeque<i64> = VecDeque::new();
     let mut convert_err_logged = false;
+    // Frame ya recibido del canal mientras se esperaba, pendiente de procesar.
+    let mut next: Option<SendItem> = None;
 
     while !stop.load(Ordering::SeqCst)
         && !pipe.size_changed.load(Ordering::Relaxed)
@@ -1987,10 +1989,13 @@ fn run_encoder_thread(
         // pacing; la cola BGRA absorbe el retardo.
         let mut did = false;
         while need > 0 {
-            let item = match rx.try_recv() {
-                Ok(item) => item,
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => return,
+            let item = match next.take() {
+                Some(item) => item,
+                None => match rx.try_recv() {
+                    Ok(item) => item,
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => return,
+                },
             };
             inflight.fetch_sub(1, Ordering::Relaxed);
             // Frame stale: mientras esperaba en cola, el handler recicló su slot del ring
@@ -2036,9 +2041,20 @@ fn run_encoder_thread(
             need -= 1;
         }
 
-        // Sin trabajo (sin crédito o sin frames): cede la CPU brevemente para no girar.
+        // Sin trabajo. Con crédito del encoder lo que falta es un frame: se espera en el canal
+        // hasta que llegue (despierta en cuanto el pacing lo envía) en vez de sondear cada
+        // milisegundo, que era la mayor parte del gasto de CPU con la pantalla quieta. Sin crédito
+        // se sigue sondeando: un GetEvent bloqueante no se podría interrumpir al parar.
         if !did {
-            std::thread::sleep(Duration::from_millis(1));
+            if need > 0 && next.is_none() {
+                match rx.recv_timeout(Duration::from_millis(5)) {
+                    Ok(item) => next = Some(item),
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                }
+            } else {
+                std::thread::sleep(Duration::from_millis(1));
+            }
         }
     }
 }
