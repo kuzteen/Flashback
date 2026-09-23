@@ -172,7 +172,7 @@
     </div>
   {:else if filtered.length === 0}
     <div class="empty">
-      <Icon name="chevrons" size={56} sw={1.2} />
+      <span class="logo-mark"></span>
       <p>{query ? t('clips.noResultsQuery', { query }) : t('clips.noResultsFilter')}</p>
     </div>
   {:else}
@@ -180,7 +180,7 @@
          la rejilla viva se quedaría con el de la vista anterior. -->
     {#key clipView.mode}
       <SortableGrid items={sorted} key={(c) => c.id}>
-        {#snippet children(clip)}<ClipCard {clip} compact={clipView.mode === 'list'} />{/snippet}
+        {#snippet children(clip)}<ClipCard {clip} playlistTag compact={clipView.mode === 'list'} />{/snippet}
       </SortableGrid>
     {/key}
   {/if}
@@ -254,6 +254,14 @@
     gap: 14px;
     padding: 90px 0;
     color: var(--text-3);
+  }
+  /* El logo como máscara, para que tome el color apagado del aviso. */
+  .logo-mark {
+    width: 46px;
+    height: 46px;
+    background-color: currentColor;
+    -webkit-mask: url('/flashback-mono.svg') center / contain no-repeat;
+    mask: url('/flashback-mono.svg') center / contain no-repeat;
   }
   .empty p {
     font-size: 14px;

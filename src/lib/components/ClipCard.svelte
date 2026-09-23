@@ -3,6 +3,7 @@
   import Icon from './Icon.svelte';
   import PlaylistPicker from './PlaylistPicker.svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import { goto } from '$app/navigation';
   import { revealItemInDir } from '@tauri-apps/plugin-opener';
   import { menu } from '$lib/menu.svelte';
   import { formatDuration, formatRelative, displaySource, isScreenSource, type Clip } from '$lib/clips';
@@ -24,13 +25,15 @@
   import { t } from '$lib/i18n.svelte';
 
   // fresh solo lo enciende la vista de playlist: en la biblioteca no hay "añadido" que marcar.
-  // compact es la vista en lista de las playlists: la misma tarjeta con otro layout, así que el
-  // menú, renombrar, seleccionar y la vista previa no se duplican en otro componente.
+  // playlistTag es lo contrario: en la biblioteca dice en qué playlist está el clip, y usa el
+  // mismo hueco que fresh. compact es la vista en lista: la misma tarjeta con otro layout, así
+  // que el menú, renombrar, seleccionar y la vista previa no se duplican en otro componente.
   let {
     clip,
     fresh = false,
+    playlistTag = false,
     compact = false
-  }: { clip: Clip; fresh?: boolean; compact?: boolean } = $props();
+  }: { clip: Clip; fresh?: boolean; playlistTag?: boolean; compact?: boolean } = $props();
 
   const open = $derived(menu.openId === clip.id);
   // Margen mínimo contra los bordes de la ventana, para el menú y su submenú.
@@ -43,6 +46,9 @@
   // untrack: la tarjeta va keyed por clip.id, así que el valor inicial basta y leerlo aquí
   // no debe crear dependencia.
   let poster = $state<string | null>(untrack(() => (clip.path ? cachedThumb(clip.path) : null)));
+  // Un clip vertical (export 9:16) se ve entero en la tarjeta 16:9, sobre su propia imagen
+  // desenfocada como en el editor, en vez de recortado como si fuera horizontal.
+  let tall = $state(false);
   // El vídeo solo se monta en hover (sin precarga); videoReady marca cuándo ya tiene su
   // primer frame para fundirlo sobre el póster, que no se oculta y así nunca pasa por negro.
   // Al salir se desvanece y se desmonta al acabar el fundido, liberando el decodificador.
@@ -147,7 +153,17 @@
   let plEl = $state<HTMLElement | null>(null);
   let plHoverTimer: ReturnType<typeof setTimeout> | undefined;
   let plCloseTimer: ReturnType<typeof setTimeout> | undefined;
-  const inPlaylists = $derived(playlistsWith(clip.path).length > 0);
+  const lists = $derived(playlistsWith(clip.path));
+  const inPlaylists = $derived(lists.length > 0);
+  const listNames = $derived(lists.map((p) => p.name).join(', '));
+
+  // Lleva a la primera playlist, la que da nombre a la etiqueta. Seleccionando, el clic sigue
+  // siendo marcar la tarjeta.
+  function openList(e: MouseEvent) {
+    if (picking) return;
+    e.stopPropagation();
+    goto(`/playlists/${lists[0].id}`);
+  }
 
   const PL_OPEN_MS = 110;
   const PL_CLOSE_MS = 220;
@@ -336,6 +352,18 @@
 
 <svelte:window onclick={() => (menu.openId = null)} />
 
+{#snippet plLabel()}
+  <span class="pl-cover">
+    {#if lists[0].coverSrc}
+      <img src={lists[0].coverSrc} alt="" draggable="false" />
+    {:else}
+      <Icon name="heart-fill" size={9} />
+    {/if}
+  </span>
+  <span class="pl-name">{lists[0].name}</span>
+  {#if lists.length > 1}<span class="pl-more">+{lists.length - 1}</span>{/if}
+{/snippet}
+
 <div
   class="card"
   class:open
@@ -353,11 +381,21 @@
   oncontextmenu={onContextMenu}
   onkeydown={onCardKey}
 >
-  <div class="thumb">
+  <div class="thumb" class:tall>
     {#if poster}
-      <img class="preview" src={poster} alt="" draggable="false" />
+      {#if tall}<img class="backdrop" src={poster} alt="" draggable="false" />{/if}
+      <img
+        class="preview"
+        src={poster}
+        alt=""
+        draggable="false"
+        onload={(e) => {
+          const img = e.currentTarget as HTMLImageElement;
+          tall = img.naturalHeight > img.naturalWidth;
+        }}
+      />
     {:else}
-      <div class="watermark"><Icon name="chevrons" size={150} sw={1.1} /></div>
+      <div class="watermark"></div>
     {/if}
     {#if videoMounted && clip.previewSrc}
       <video
@@ -388,6 +426,10 @@
         <Icon name="bolt" size={12} />
         {t('pl.recentlyAdded')}
       </span>
+    {:else if playlistTag && inPlaylists && !compact}
+      <button class="pl-tag" title={listNames} onclick={openList}>
+        {@render plLabel()}
+      </button>
     {/if}
   </div>
 
@@ -444,6 +486,11 @@
         {#if fresh && compact}
           <span class="dot">•</span>
           <span class="fresh-inline"><Icon name="bolt" size={12} />{t('pl.recentlyAdded')}</span>
+        {:else if playlistTag && inPlaylists && compact}
+          <span class="dot">•</span>
+          <button class="pl-inline" title={listNames} onclick={openList}>
+            {@render plLabel()}
+          </button>
         {/if}
       </span>
     </div>
@@ -554,7 +601,11 @@
     position: absolute;
     right: -26px;
     bottom: -34px;
-    color: #ffffff;
+    width: 150px;
+    height: 150px;
+    background-color: #ffffff;
+    -webkit-mask: url('/flashback-mono.svg') center / contain no-repeat;
+    mask: url('/flashback-mono.svg') center / contain no-repeat;
     opacity: 0.07;
     transform: rotate(-8deg);
   }
@@ -571,6 +622,18 @@
     height: 100%;
     object-fit: cover;
     display: block;
+  }
+  .tall .preview {
+    object-fit: contain;
+  }
+  .backdrop {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    filter: blur(14px) brightness(0.55);
+    transform: scale(1.15);
   }
   .vid {
     opacity: 0;
@@ -658,6 +721,65 @@
   .fresh :global(svg) {
     flex: none;
     color: var(--accent);
+  }
+  /* Misma píldora que la duración. El nombre lo escribe el usuario: se corta con puntos
+     suspensivos para no tapar media miniatura, y el "+N" queda siempre a la vista. */
+  .pl-tag {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    max-width: 55%;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 9px 0 7px;
+    font-size: 11.5px;
+    white-space: nowrap;
+    color: var(--text-0);
+    background: rgba(27, 30, 38, 0.6);
+    backdrop-filter: blur(6px);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.14s ease, border-color 0.14s ease;
+  }
+  .pl-tag:hover {
+    background: rgba(27, 30, 38, 0.85);
+    border-color: var(--line-strong);
+  }
+  /* Portada en miniatura; sin foto, el corazón sobre gris de las tarjetas de playlist. */
+  .pl-cover {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    border-radius: 4px;
+    color: var(--text-2);
+    background: var(--bg-2);
+  }
+  .pl-inline .pl-cover {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+  }
+  .pl-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .pl-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .pl-more {
+    flex: none;
+    color: var(--text-2);
   }
   /* Al llegar con Tab no hay puntero que descubra el check, y sin él la tarjeta parece no tener
      forma de seleccionarse. :focus-visible y no :focus-within: pulsar un botón con el ratón
@@ -906,6 +1028,7 @@
      la línea hacia abajo y la fecha quedaría más lejos del título que el origen. */
   .when {
     display: flex;
+    min-width: 0;
     align-self: end;
     align-items: center;
     height: 11px;
@@ -998,5 +1121,23 @@
   .fresh-inline :global(svg) {
     flex: none;
     color: var(--accent);
+  }
+  .pl-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    padding: 0;
+    white-space: nowrap;
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    color: var(--text-1);
+    background: none;
+    border: 0;
+    cursor: pointer;
+  }
+  .pl-inline:hover {
+    color: var(--text-0);
   }
 </style>

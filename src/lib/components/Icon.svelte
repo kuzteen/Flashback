@@ -43,9 +43,6 @@
     <path d="M17 3a2 2 0 0 1 2 2v15a1 1 0 0 1-1.496.868l-4.512-2.578a2 2 0 0 0-1.984 0l-4.512 2.578A1 1 0 0 1 5 20V5a2 2 0 0 1 2-2z" />
   {:else if name === 'bookmark-fill'}
     <path d="M17 3a2 2 0 0 1 2 2v15a1 1 0 0 1-1.496.868l-4.512-2.578a2 2 0 0 0-1.984 0l-4.512 2.578A1 1 0 0 1 5 20V5a2 2 0 0 1 2-2z" fill="currentColor" stroke="none" />
-  {:else if name === 'chevrons'}
-    <path d="M11 6.5 5.5 12 11 17.5" />
-    <path d="M17.5 6.5 12 12 17.5 17.5" />
   {:else if name === 'star'}
     <path
       fill="currentColor"
