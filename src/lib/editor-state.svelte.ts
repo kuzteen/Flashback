@@ -2,6 +2,7 @@ import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { Clip } from './clips';
 import { EditHistory } from './edit-history';
+import { clearFilmstrip, loadFilmstrip } from './filmstrip.svelte';
 import {
   DEFAULT_FORMAT,
   fromSaved,
@@ -202,6 +203,8 @@ export function openEditor(clip: Clip) {
   editorState.clip = clip;
   editorState.videoSrc = clip.previewSrc ?? null;
   editorState.loading = true;
+  if (clip.path) loadFilmstrip(clip.path);
+  else clearFilmstrip();
   void load(clip);
 }
 
@@ -260,7 +263,7 @@ export async function exportClip(): Promise<string | undefined> {
   });
   try {
     const dst = await invoke<string>('edit_dest', { src: clip.path });
-    await invoke('export_clip', { src: clip.path, dst, edit: { segments: s.segments, mixer: s.mixer, format: s.format ?? DEFAULT_FORMAT } });
+    await invoke('export_clip', { src: clip.path, dst, edit: { segments: s.segments, mixer: s.mixer, format: s.format ?? DEFAULT_FORMAT, look: s.look } });
     return dst;
   } finally {
     unlisten();
@@ -302,4 +305,5 @@ export async function navigateClip(dir: 1 | -1): Promise<void> {
 
 export function closeEditor() {
   resetAll();
+  clearFilmstrip();
 }

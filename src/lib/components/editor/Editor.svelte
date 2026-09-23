@@ -10,6 +10,7 @@
   import EditorHeader from './EditorHeader.svelte';
   import Viewer from './Viewer.svelte';
   import Transport from './Transport.svelte';
+  import LookPanel from './LookPanel.svelte';
   import Timeline from './Timeline.svelte';
   import OutputBar from './OutputBar.svelte';
   import FormatPanel from './FormatPanel.svelte';
@@ -100,6 +101,7 @@
 <div class="ed" bind:this={root} tabindex="-1">
   <EditorHeader onclose={close} />
   <div class="middle">
+    <LookPanel />
     <Viewer />
     <FormatPanel />
   </div>
@@ -156,6 +158,7 @@
     outline: none;
   }
   .middle {
+    --format-w: 260px;
     position: relative;
     flex: 1;
     min-height: 0;
@@ -226,7 +229,7 @@
     background: var(--bg-0);
     border: 1px solid var(--line-strong);
     border-radius: 7px;
-    box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.7);
+    box-shadow: var(--shadow-float);
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
@@ -265,7 +268,7 @@
     background: var(--bg-2);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-sm);
-    box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.7);
+    box-shadow: var(--shadow-float);
   }
   .shot {
     position: absolute;
@@ -278,7 +281,7 @@
     padding: 9px 12px;
     font-size: 13px;
     color: var(--text-0);
-    background: rgba(18, 18, 20, 0.72);
+    background: var(--glass);
     backdrop-filter: blur(12px);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
@@ -305,7 +308,7 @@
     z-index: 150;
     display: grid;
     place-items: center;
-    background: rgba(0, 0, 0, 0.55);
+    background: var(--scrim);
   }
   .export-card {
     width: 320px;
@@ -316,7 +319,7 @@
     background: var(--bg-1);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
-    box-shadow: 0 24px 60px -18px rgba(0, 0, 0, 0.8);
+    box-shadow: var(--shadow-dialog);
   }
   .export-title {
     font-size: 13.5px;

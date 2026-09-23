@@ -40,6 +40,11 @@ describe('place', () => {
     close(place(1920, 1080, 1080, 1920, 0, 0.5, 1), [0, 1312.5, 1080, 607.5]);
   });
 
+  it('zoom 2 dobla el recorte y la posición desplaza en los dos ejes', () => {
+    close(place(1920, 1080, 1080, 1920, 2, 0.5, 0.5), [-2873.33, -960, 6826.67, 3840]);
+    close(place(1920, 1080, 1080, 1920, 2, 0.5, 0), [-2873.33, 0, 6826.67, 3840]);
+  });
+
   it('un origen ya vertical llena el lienzo con cualquier zoom', () => {
     close(place(1080, 1920, 1080, 1920, 0, 0.3, 0.8), [0, 0, 1080, 1920]);
     close(place(1080, 1920, 1080, 1920, 1, 0.3, 0.8), [0, 0, 1080, 1920]);

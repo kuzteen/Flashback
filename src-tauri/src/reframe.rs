@@ -50,13 +50,15 @@ pub fn vertical_bitrate(src_bps: u32, src_w: u32, src_h: u32, out_w: u32, out_h:
     (src_bps as u64 * out_px / src_px).clamp(4_000_000, 40_000_000) as u32
 }
 
-// Encajado y recorte son los extremos de un mismo control: 0 = el fotograma entero cabe, 1 = llena
-// el lienzo. Personalizado queda entre medias.
+// Encajado y recorte son dos puntos de un mismo control: 0 = el fotograma entero cabe, 1 = llena
+// el lienzo. Personalizado recorre 0..ZOOM_MAX: por encima de 1 amplía más allá del recorte.
+pub const ZOOM_MAX: f32 = 2.0;
+
 pub fn zoom_of(fill: Fill, zoom: Option<f32>) -> f32 {
     match fill {
         Fill::Fit => 0.0,
         Fill::Crop => 1.0,
-        Fill::Custom => zoom.unwrap_or(0.5).clamp(0.0, 1.0),
+        Fill::Custom => zoom.unwrap_or(0.5).clamp(0.0, ZOOM_MAX),
     }
 }
 
@@ -68,7 +70,10 @@ pub fn place(src_w: u32, src_h: u32, out_w: u32, out_h: u32, zoom: f32, cx: f64,
     let (sw, sh, ow, oh) = (src_w as f32, src_h as f32, out_w as f32, out_h as f32);
     let fit = (ow / sw).min(oh / sh);
     let fill = (ow / sw).max(oh / sh);
-    let s = fit + (fill - fit) * zoom.clamp(0.0, 1.0);
+    // Hasta 1 se interpola entre encajar y llenar; a partir de ahí multiplica la escala de llenar, así
+    // que 2 es el doble de acercado que el recorte.
+    let z = zoom.clamp(0.0, ZOOM_MAX);
+    let s = if z <= 1.0 { fit + (fill - fit) * z } else { fill * z };
     let (w, h) = (sw * s, sh * s);
     Rect { x: axis(w, ow, cx), y: axis(h, oh, cy), w, h }
 }
@@ -120,7 +125,14 @@ mod tests {
         assert_eq!(zoom_of(Fill::Crop, Some(0.7)), 1.0);
         assert_eq!(zoom_of(Fill::Custom, Some(0.7)), 0.7);
         assert_eq!(zoom_of(Fill::Custom, None), 0.5);
-        assert_eq!(zoom_of(Fill::Custom, Some(3.0)), 1.0);
+        assert_eq!(zoom_of(Fill::Custom, Some(1.5)), 1.5);
+        assert_eq!(zoom_of(Fill::Custom, Some(3.0)), 2.0);
+    }
+
+    #[test]
+    fn zoom_two_doubles_the_crop_and_pans_on_both_axes() {
+        close(place(1920, 1080, 1080, 1920, 2.0, 0.5, 0.5), r(-2873.33, -960.0, 6826.67, 3840.0));
+        close(place(1920, 1080, 1080, 1920, 2.0, 0.5, 0.0), r(-2873.33, 0.0, 6826.67, 3840.0));
     }
 
     #[test]
@@ -190,8 +202,13 @@ pub mod win {
         D2D1_PIXEL_FORMAT, D2D_RECT_F, D2D_SIZE_U,
     };
     use windows::Win32::Graphics::Direct2D::{
-        D2D1CreateDevice, ID2D1Bitmap1, ID2D1DeviceContext, ID2D1Effect, ID2D1SolidColorBrush,
-        CLSID_D2D1GaussianBlur, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_NONE,
+        D2D1CreateDevice, ID2D1Bitmap1, ID2D1DeviceContext, ID2D1Effect, ID2D1Image, ID2D1SolidColorBrush,
+        CLSID_D2D1ColorMatrix, CLSID_D2D1ConvolveMatrix, CLSID_D2D1GaussianBlur,
+        D2D1_COLORMATRIX_PROP_CLAMP_OUTPUT, D2D1_COLORMATRIX_PROP_COLOR_MATRIX,
+        D2D1_CONVOLVEMATRIX_PROP_BORDER_MODE, D2D1_CONVOLVEMATRIX_PROP_CLAMP_OUTPUT,
+        D2D1_CONVOLVEMATRIX_PROP_KERNEL_MATRIX, D2D1_CONVOLVEMATRIX_PROP_PRESERVE_ALPHA,
+        D2D1_INTERPOLATION_MODE, D2D1_PROPERTY_TYPE_BLOB, D2D1_PROPERTY_TYPE_BOOL,
+        D2D1_PROPERTY_TYPE_MATRIX_5X4, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_NONE,
         D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
         D2D1_GAUSSIANBLUR_OPTIMIZATION_SPEED, D2D1_GAUSSIANBLUR_PROP_BORDER_MODE,
         D2D1_GAUSSIANBLUR_PROP_OPTIMIZATION, D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION,
@@ -202,7 +219,9 @@ pub mod win {
         ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET,
         D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
     };
-    use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
+    use windows::Win32::Graphics::Dxgi::Common::{
+        DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
+    };
     use windows::Win32::Graphics::Dxgi::{IDXGIDevice, IDXGISurface};
     use windows::Win32::Media::MediaFoundation::{
         IMF2DBuffer, IMFDXGIBuffer, IMFDXGIDeviceManager, IMFMediaType, IMFSample,
@@ -213,8 +232,53 @@ pub mod win {
         MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_SA_D3D11_BINDFLAGS, MF_SA_D3D11_USAGE,
     };
 
-    fn d2d(r: Rect) -> D2D_RECT_F {
-        D2D_RECT_F { left: r.x, top: r.y, right: r.x + r.w, bottom: r.y + r.h }
+    fn f32_bytes(values: &[f32]) -> Vec<u8> {
+        values.iter().flat_map(|v| v.to_le_bytes()).collect()
+    }
+
+    // Vertical: encuadre 9:16 con su zoom. Full: el fotograma tal cual, solo para los ajustes.
+    #[derive(Clone, Copy)]
+    pub enum Layout {
+        Vertical(f32),
+        Full,
+    }
+
+    // D2D1_COLORMATRIX multiplica un vector fila (r, g, b, a, 1): cada fila de la matriz es un canal
+    // de entrada y cada columna uno de salida, al revés que Look::color_matrix.
+    fn color_effect(ctx: &ID2D1DeviceContext, look: &crate::look::Look) -> Result<ID2D1Effect> {
+        let m = look.color_matrix();
+        let rows = [
+            [m[0][0], m[1][0], m[2][0], 0.0],
+            [m[0][1], m[1][1], m[2][1], 0.0],
+            [m[0][2], m[1][2], m[2][2], 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [m[0][3], m[1][3], m[2][3], 0.0],
+        ];
+        let effect = unsafe { ctx.CreateEffect(&CLSID_D2D1ColorMatrix)? };
+        unsafe {
+            effect.SetValue(
+                D2D1_COLORMATRIX_PROP_COLOR_MATRIX.0 as u32,
+                D2D1_PROPERTY_TYPE_MATRIX_5X4,
+                &f32_bytes(rows.as_flattened()),
+            )?;
+            effect.SetValue(D2D1_COLORMATRIX_PROP_CLAMP_OUTPUT.0 as u32, D2D1_PROPERTY_TYPE_BOOL, &1i32.to_le_bytes())?;
+        }
+        Ok(effect)
+    }
+
+    fn sharpen_effect(ctx: &ID2D1DeviceContext, kernel: &[f32; 9]) -> Result<ID2D1Effect> {
+        let effect = unsafe { ctx.CreateEffect(&CLSID_D2D1ConvolveMatrix)? };
+        unsafe {
+            effect.SetValue(D2D1_CONVOLVEMATRIX_PROP_KERNEL_MATRIX.0 as u32, D2D1_PROPERTY_TYPE_BLOB, &f32_bytes(kernel))?;
+            effect.SetValue(
+                D2D1_CONVOLVEMATRIX_PROP_BORDER_MODE.0 as u32,
+                D2D1_PROPERTY_TYPE_ENUM,
+                &(D2D1_BORDER_MODE_HARD.0 as u32).to_le_bytes(),
+            )?;
+            effect.SetValue(D2D1_CONVOLVEMATRIX_PROP_PRESERVE_ALPHA.0 as u32, D2D1_PROPERTY_TYPE_BOOL, &1i32.to_le_bytes())?;
+            effect.SetValue(D2D1_CONVOLVEMATRIX_PROP_CLAMP_OUTPUT.0 as u32, D2D1_PROPERTY_TYPE_BOOL, &1i32.to_le_bytes())?;
+        }
+        Ok(effect)
     }
 
     fn bgra(options: windows::Win32::Graphics::Direct2D::D2D1_BITMAP_OPTIONS) -> D2D1_BITMAP_PROPERTIES1 {
@@ -227,8 +291,31 @@ pub mod win {
         }
     }
 
-    // Recorta o encaja cada fotograma decodificado en una textura vertical, todo en la GPU y sobre
-    // el mismo device que el decodificador (la textura del fotograma no es accesible desde otro).
+    fn bgra_texture(device: &ID3D11Device, ctx: &ID2D1DeviceContext, w: u32, h: u32) -> Result<(ID3D11Texture2D, ID2D1Bitmap1)> {
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: w,
+            Height: h,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0) as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let mut t: Option<ID3D11Texture2D> = None;
+        unsafe { device.CreateTexture2D(&desc, None, Some(&mut t))? };
+        let tex = t.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
+        let surface: IDXGISurface = tex.cast()?;
+        let bmp = unsafe { ctx.CreateBitmapFromDxgiSurface(&surface, Some(&bgra(D2D1_BITMAP_OPTIONS_NONE)))? };
+        Ok((tex, bmp))
+    }
+
+    // Recorta o encaja cada fotograma decodificado en una textura vertical y le aplica los ajustes de
+    // imagen, todo en la GPU y sobre el mismo device que el decodificador (la textura del fotograma
+    // no es accesible desde otro). El color se corrige sobre el origen y la nitidez al final, sobre
+    // la imagen ya escalada: así compensa también la pérdida de detalle del zoom vertical.
     // El fotograma se copia antes a una textura propia: el decodificador entrega subtexturas de un
     // array y Direct2D solo dibuja desde la subtextura 0.
     pub struct Reframer {
@@ -239,11 +326,14 @@ pub mod win {
         bg_bmp: ID2D1Bitmap1,
         blur: ID2D1Effect,
         dim: ID2D1SolidColorBrush,
+        color: Option<ID2D1Effect>,
+        // La nitidez necesita la composición entera como entrada: se pinta antes en ese bitmap.
+        sharpen: Option<(ID2D1Effect, ID2D1Bitmap1)>,
         allocator: IMFVideoSampleAllocatorEx,
         out_type: IMFMediaType,
         // Un bitmap destino por textura del asignador: crearlos por fotograma costaba sin motivo.
         targets: RefCell<HashMap<usize, ID2D1Bitmap1>>,
-        zoom: f32,
+        layout: Layout,
         src_w: u32,
         src_h: u32,
         out_w: u32,
@@ -260,30 +350,15 @@ pub mod win {
             out_w: u32,
             out_h: u32,
             fps: u32,
-            zoom: f32,
+            layout: Layout,
+            look: &crate::look::Look,
         ) -> Result<Self> {
             let dxgi: IDXGIDevice = device.cast()?;
             let d2d_device = unsafe { D2D1CreateDevice(&dxgi, None)? };
             let ctx = unsafe { d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)? };
             let d3d = unsafe { device.GetImmediateContext()? };
 
-            let desc = D3D11_TEXTURE2D_DESC {
-                Width: src_w,
-                Height: src_h,
-                MipLevels: 1,
-                ArraySize: 1,
-                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
-                Usage: D3D11_USAGE_DEFAULT,
-                BindFlags: (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0) as u32,
-                CPUAccessFlags: 0,
-                MiscFlags: 0,
-            };
-            let mut t: Option<ID3D11Texture2D> = None;
-            unsafe { device.CreateTexture2D(&desc, None, Some(&mut t))? };
-            let src_tex = t.ok_or_else(|| windows::core::Error::from(E_POINTER))?;
-            let surface: IDXGISurface = src_tex.cast()?;
-            let src_bmp = unsafe { ctx.CreateBitmapFromDxgiSurface(&surface, Some(&bgra(D2D1_BITMAP_OPTIONS_NONE)))? };
+            let (src_tex, src_bmp) = bgra_texture(device, &ctx, src_w, src_h)?;
 
             // Fondo desenfocado siempre preparado: con zoom intermedio o encajado se ve arriba y
             // abajo, y solo sobra cuando el fotograma cubre el lienzo entero.
@@ -317,6 +392,25 @@ pub mod win {
             }
             let dim = unsafe {
                 ctx.CreateSolidColorBrush(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.35 }, None)?
+            };
+
+            let color = if look.has_color() {
+                let e = color_effect(&ctx, look)?;
+                unsafe { e.SetInput(0, &src_bmp, true) };
+                Some(e)
+            } else {
+                None
+            };
+            let sharpen = match look.sharpen_kernel() {
+                Some(k) => {
+                    let comp = unsafe {
+                        ctx.CreateBitmap(D2D_SIZE_U { width: out_w, height: out_h }, None, 0, &bgra(D2D1_BITMAP_OPTIONS_TARGET))?
+                    };
+                    let e = sharpen_effect(&ctx, &k)?;
+                    unsafe { e.SetInput(0, &comp, true) };
+                    Some((e, comp))
+                }
+                None => None,
             };
 
             let out_type = unsafe { MFCreateMediaType()? };
@@ -361,10 +455,12 @@ pub mod win {
                 bg_bmp,
                 blur,
                 dim,
+                color,
+                sharpen,
                 allocator,
                 out_type,
                 targets: RefCell::new(HashMap::new()),
-                zoom,
+                layout,
                 src_w,
                 src_h,
                 out_w,
@@ -381,24 +477,38 @@ pub mod win {
         }
 
         pub fn process(&self, input: &IMFSample, crop_x: f64, crop_y: f64) -> Result<IMFSample> {
-            self.load_input(input)?;
+            self.load_into(input, &self.src_tex)?;
+            self.compose(crop_x, crop_y)
+        }
+
+        fn compose(&self, crop_x: f64, crop_y: f64) -> Result<IMFSample> {
             let out = self.next_sample()?;
             let target = self.target_for(&out)?;
             let (ow, oh) = (self.out_w as f32, self.out_h as f32);
             let full = D2D_RECT_F { left: 0.0, top: 0.0, right: ow, bottom: oh };
-            let fg = place(self.src_w, self.src_h, self.out_w, self.out_h, self.zoom, crop_x, crop_y);
+            let fg = match self.layout {
+                Layout::Vertical(zoom) => place(self.src_w, self.src_h, self.out_w, self.out_h, zoom, crop_x, crop_y),
+                Layout::Full => Rect { x: 0.0, y: 0.0, w: ow, h: oh },
+            };
             let covers = fg.x <= 0.0 && fg.y <= 0.0 && fg.x + fg.w >= ow && fg.y + fg.h >= oh;
+            let src: ID2D1Image = match &self.color {
+                Some(e) => unsafe { e.GetOutput()? },
+                None => self.src_bmp.cast()?,
+            };
             unsafe {
                 if !covers {
                     // Fondo: el fotograma llenando el lienzo, desenfocado y velado para que el de
                     // delante destaque.
-                    let cover = d2d(place(self.src_w, self.src_h, self.out_w, self.out_h, 1.0, 0.5, 0.5));
+                    let cover = place(self.src_w, self.src_h, self.out_w, self.out_h, 1.0, 0.5, 0.5);
                     self.ctx.SetTarget(&self.bg_bmp);
                     self.ctx.BeginDraw();
-                    self.ctx.DrawBitmap(&self.src_bmp, Some(&cover), 1.0, D2D1_INTERPOLATION_MODE_LINEAR, None, None);
+                    self.draw_scaled(&src, cover, D2D1_INTERPOLATION_MODE_LINEAR);
                     self.ctx.EndDraw(None, None)?;
                 }
-                self.ctx.SetTarget(&target);
+                match &self.sharpen {
+                    Some((_, comp)) => self.ctx.SetTarget(comp),
+                    None => self.ctx.SetTarget(&target),
+                }
                 self.ctx.BeginDraw();
                 if !covers {
                     self.blur.SetInput(0, &self.bg_bmp, true);
@@ -407,8 +517,15 @@ pub mod win {
                     self.ctx.FillRectangle(&full, &self.dim);
                 }
                 // El fotograma entero en su sitio: lo que cae fuera del lienzo lo recorta el destino.
-                self.ctx.DrawBitmap(&self.src_bmp, Some(&d2d(fg)), 1.0, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, None, None);
+                self.draw_scaled(&src, fg, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC);
                 self.ctx.EndDraw(None, None)?;
+                if let Some((sharpen, _)) = &self.sharpen {
+                    self.ctx.SetTarget(&target);
+                    self.ctx.BeginDraw();
+                    let img = sharpen.GetOutput()?;
+                    self.ctx.DrawImage(&img, None, None, D2D1_INTERPOLATION_MODE_LINEAR, D2D1_COMPOSITE_MODE_SOURCE_OVER);
+                    self.ctx.EndDraw(None, None)?;
+                }
                 self.ctx.SetTarget(None);
             }
             // Las muestras del asignador nacen con longitud 0 y el sink rechaza una muestra vacía
@@ -418,9 +535,25 @@ pub mod win {
             Ok(out)
         }
 
+        // Dibuja la imagen de origen (quizá ya corregida de color) ocupando `r`. Una imagen de efecto
+        // no admite rectángulo destino como DrawBitmap: la escala y la posición van en la transformación.
+        unsafe fn draw_scaled(&self, img: &ID2D1Image, r: Rect, mode: D2D1_INTERPOLATION_MODE) {
+            let m = windows_numerics::Matrix3x2 {
+                M11: r.w / self.src_w as f32,
+                M12: 0.0,
+                M21: 0.0,
+                M22: r.h / self.src_h as f32,
+                M31: r.x,
+                M32: r.y,
+            };
+            self.ctx.SetTransform(&m);
+            self.ctx.DrawImage(img, None, None, mode, D2D1_COMPOSITE_MODE_SOURCE_OVER);
+            self.ctx.SetTransform(&windows_numerics::Matrix3x2::identity());
+        }
+
         // Copia GPU→GPU del fotograma a la textura de origen. Si el lector lo dio en memoria de
         // sistema (negociación sin texturas), se sube; nunca se baja nada a la CPU.
-        fn load_input(&self, input: &IMFSample) -> Result<()> {
+        fn load_into(&self, input: &IMFSample, dst: &ID3D11Texture2D) -> Result<()> {
             let buf = unsafe { input.GetBufferByIndex(0)? };
             if let Ok(dxgi) = buf.cast::<IMFDXGIBuffer>() {
                 let mut tex: Option<ID3D11Texture2D> = None;
@@ -438,7 +571,7 @@ pub mod win {
                 }
                 let sub = unsafe { dxgi.GetSubresourceIndex()? };
                 let region = D3D11_BOX { left: 0, top: 0, front: 0, right: self.src_w, bottom: self.src_h, back: 1 };
-                unsafe { self.d3d.CopySubresourceRegion(&self.src_tex, 0, 0, 0, 0, &tex, sub, Some(&region)) };
+                unsafe { self.d3d.CopySubresourceRegion(dst, 0, 0, 0, 0, &tex, sub, Some(&region)) };
                 return Ok(());
             }
             let b2: IMF2DBuffer = buf.cast()?;
@@ -447,7 +580,7 @@ pub mod win {
             unsafe { b2.Lock2D(&mut scan0, &mut pitch)? };
             if pitch > 0 && !scan0.is_null() {
                 unsafe {
-                    self.d3d.UpdateSubresource(&self.src_tex, 0, None, scan0 as *const std::ffi::c_void, pitch as u32, 0)
+                    self.d3d.UpdateSubresource(dst, 0, None, scan0 as *const std::ffi::c_void, pitch as u32, 0)
                 };
             }
             unsafe { b2.Unlock2D()? };

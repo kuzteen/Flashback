@@ -45,6 +45,8 @@ codegen-units = 1
 strip = true
 
 [target.'cfg(windows)'.dependencies]
+# Ya viene con `windows`; se nombra para las transformaciones de Direct2D del compositor.
+windows-numerics = "0.2"
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",

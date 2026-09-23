@@ -2,6 +2,9 @@
 // recibe segmentos y devuelve una lista nueva (o null si no procede), sin Svelte ni IPC, para
 // que el historial pueda guardar copias y los tests no necesiten la app.
 
+import { ZOOM_MAX } from './frame-math';
+import { NEUTRAL_LOOK, readLook, type Look } from './look';
+
 export const MIN_SEG_MS = 50;
 
 export type Segment = {
@@ -37,7 +40,7 @@ export type OutputFormat =
 
 export const DEFAULT_FORMAT: OutputFormat = { kind: 'horizontal' };
 
-export type EditState = { segments: Segment[]; mixer: MixerState; format: OutputFormat };
+export type EditState = { segments: Segment[]; mixer: MixerState; format: OutputFormat; look: Look };
 
 export type SavedSegment = {
   start_ms: number;
@@ -54,6 +57,7 @@ export type SavedEdit = {
   segments: SavedSegment[];
   mixer?: Partial<MixerState> | null;
   format?: OutputFormat | null;
+  look?: Partial<Look> | null;
 };
 
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
@@ -69,13 +73,13 @@ export function fullClip(durationMs: number): Segment[] {
 }
 
 export function initialState(durationMs: number): EditState {
-  return { segments: fullClip(durationMs), mixer: { ...DEFAULT_MIXER }, format: { ...DEFAULT_FORMAT } };
+  return { segments: fullClip(durationMs), mixer: { ...DEFAULT_MIXER }, format: { ...DEFAULT_FORMAT }, look: { ...NEUTRAL_LOOK } };
 }
 
 function readFormat(f: OutputFormat | null | undefined): OutputFormat {
   if (f?.kind !== 'vertical') return { kind: 'horizontal' };
   if (f.fill === 'crop' || f.fill === 'fit') return { kind: 'vertical', fill: f.fill };
-  if (f.fill === 'custom') return { kind: 'vertical', fill: 'custom', zoom: clamp01(f.zoom ?? 0.5) };
+  if (f.fill === 'custom') return { kind: 'vertical', fill: 'custom', zoom: Math.max(0, Math.min(ZOOM_MAX, f.zoom ?? 0.5)) };
   return { kind: 'horizontal' };
 }
 
@@ -86,7 +90,8 @@ export function fromSaved(saved: SavedEdit | null | undefined, durationMs: numbe
   if (!saved) return base;
   const mixer = { ...DEFAULT_MIXER, ...(saved.mixer ?? {}) };
   const format = readFormat(saved.format);
-  if (!saved.segments?.length) return { segments: base.segments, mixer, format };
+  const look = readLook(saved.look);
+  if (!saved.segments?.length) return { segments: base.segments, mixer, format, look };
   let acc = 0;
   const segments = saved.segments.map((s) => {
     const posMs = s.pos_ms ?? acc;
@@ -103,7 +108,7 @@ export function fromSaved(saved: SavedEdit | null | undefined, durationMs: numbe
     };
   });
   segments.sort((a, b) => a.posMs - b.posMs);
-  return { segments, mixer, format };
+  return { segments, mixer, format, look };
 }
 
 export function toSaved(state: EditState, enabledOnly = false): SavedEdit {
@@ -121,6 +126,7 @@ export function toSaved(state: EditState, enabledOnly = false): SavedEdit {
     })),
     mixer: { ...state.mixer },
     format: state.format,
+    look: { ...state.look },
   };
 }
 

@@ -60,8 +60,12 @@ pub struct ClipEdit {
     pub mixer: MixerState,
     #[serde(default)]
     pub format: crate::reframe::OutputFormat,
+    #[serde(default)]
+    pub look: crate::look::Look,
 }
 
+#[cfg(target_os = "windows")]
+pub(crate) use win::create_gpu;
 #[cfg(target_os = "windows")]
 pub use win::{
     clip_dims, clip_fps, export_clip, frame_times, keyframe_times, prepare_clip_audio,
@@ -74,7 +78,7 @@ pub use win::{
 // montaje que no recorta, no desactiva nada y no cambia la mezcla no es una edición: se borra la
 // entrada en vez de guardarla, para que la biblioteca no marque como editados clips intactos.
 fn is_noop(edit: &ClipEdit) -> bool {
-    if edit.format != crate::reframe::OutputFormat::Horizontal {
+    if edit.format != crate::reframe::OutputFormat::Horizontal || !edit.look.is_neutral() {
         return false;
     }
     let m = &edit.mixer;
@@ -144,6 +148,7 @@ pub fn load_edit(index: String, path: String) -> Result<ClipEdit, String> {
         segments: Vec::new(),
         mixer: MixerState::default(),
         format: Default::default(),
+        look: Default::default(),
     })
 }
 
@@ -762,12 +767,12 @@ mod win {
     // cruzan devices y, sobre todo, el camino de captura es sagrado y no debe cargar con el trabajo
     // del export. Tampoco se le sube la prioridad de GPU (la captura sí lo hace) para no competir
     // con una grabación en curso.
-    struct Gpu {
-        device: ID3D11Device,
-        manager: IMFDXGIDeviceManager,
+    pub(crate) struct Gpu {
+        pub(crate) device: ID3D11Device,
+        pub(crate) manager: IMFDXGIDeviceManager,
     }
 
-    fn create_gpu() -> Option<Gpu> {
+    pub(crate) fn create_gpu() -> Option<Gpu> {
         // Válvula de escape para comparar contra el camino por CPU sin recompilar.
         if std::env::var_os("FLASHBACK_EXPORT_CPU").is_some() {
             return None;
@@ -1012,8 +1017,10 @@ mod win {
         // El vídeo puede copiarse tal cual cuando no hay nada que repintar ni reescalar y los
         // cortes caen en keyframe. El audio no condiciona la decisión: recodificarlo cuesta una
         // fracción de lo que cuesta el vídeo, así que cabe dentro del camino sin recodificar.
+        let graded = !edit.look.clamped().is_neutral();
         let can_pass = watermark.is_none()
             && !vertical
+            && !graded
             && bitrate.is_none()
             && !scaled
             && clip.in_order
@@ -1038,9 +1045,13 @@ mod win {
         }
 
         let gpu = create_gpu();
-        // La captura ya exige D3D11 por hardware, así que no hay camino por CPU para el vertical.
+        // La captura ya exige D3D11 por hardware, así que no hay camino por CPU para el vertical ni
+        // para los ajustes de imagen: los dos se componen con Direct2D.
         if vertical && gpu.is_none() {
             return Err("El formato vertical necesita una GPU compatible con DirectX 11".into());
+        }
+        if graded && gpu.is_none() {
+            return Err("Los ajustes de imagen necesitan una GPU compatible con DirectX 11".into());
         }
         let r = reencode_export(
             src, dst, edit, &meta, &plan, remix.as_mut(), gpu.as_ref(), watermark, max_height,
@@ -1205,7 +1216,6 @@ mod win {
 
         let clip = probe(src)?;
         let keyframes = &clip.keyframes;
-        let frame_dur = (10_000_000 / meta.fps.max(1) as i64).max(1);
 
         // Lector con procesado de vídeo avanzado (conversión de color y reescalado sin insertar
         // ningún MFT a mano) y, si hay GPU, con el device manager: eso enciende la decodificación
@@ -1235,6 +1245,9 @@ mod win {
             crate::reframe::OutputFormat::Vertical { fill, zoom } => Some(crate::reframe::zoom_of(fill, zoom)),
             crate::reframe::OutputFormat::Horizontal => None,
         };
+        let look = edit.look.clamped();
+        let graded = !look.is_neutral();
+        let frame_dur = (10_000_000 / meta.fps.max(1) as i64).max(1);
         // En vertical el origen se decodifica a tamaño nativo: el recorte amplía una ventana y
         // reescalar antes solo perdería detalle. El preset se aplica al tamaño de salida.
         let (req_w, req_h) = match max_height {
@@ -1248,7 +1261,7 @@ mod win {
             &v_reader,
             v_idx,
             gpu.is_some(),
-            watermark.is_some() || vertical.is_some(),
+            watermark.is_some() || vertical.is_some() || graded,
             req_w,
             req_h,
             meta.width,
@@ -1261,14 +1274,18 @@ mod win {
             unsafe { v_in.GetUINT64(&MF_MT_FRAME_SIZE) }.unwrap_or(pack2(meta.width, meta.height));
         let out_w = (out_size >> 32) as u32;
         let out_h = (out_size & 0xFFFF_FFFF) as u32;
-        let reframer = match (vertical, gpu) {
-            (Some(zoom), Some(g)) => {
-                let (vw, vh) = crate::reframe::vertical_size(max_height);
-                Some(
-                    crate::reframe::win::Reframer::new(&g.device, &g.manager, out_w, out_h, vw, vh, meta.fps, zoom)
-                        .map_err(mf)?,
-                )
-            }
+        // Sin vertical, el compositor solo hace falta para los ajustes de imagen y deja el tamaño
+        // tal cual (el reescalado de un preset ya lo hizo el lector).
+        let layout = match vertical {
+            Some(zoom) => Some((crate::reframe::win::Layout::Vertical(zoom), crate::reframe::vertical_size(max_height))),
+            None if graded => Some((crate::reframe::win::Layout::Full, (out_w, out_h))),
+            None => None,
+        };
+        let reframer = match (layout, gpu) {
+            (Some((layout, (vw, vh))), Some(g)) => Some(
+                crate::reframe::win::Reframer::new(&g.device, &g.manager, out_w, out_h, vw, vh, meta.fps, layout, &look)
+                    .map_err(mf)?,
+            ),
             _ => None,
         };
         // Tamaño de lo que llega al encoder: el vertical si hay Reframer, el decodificado si no.
@@ -1315,6 +1332,21 @@ mod win {
         unsafe { sink.BeginWriting().map_err(mf)? };
 
         let total = kept_hns(edit) as f32;
+        let mut write = |sample: IMFSample, out_t: i64| -> std::result::Result<(), String> {
+            if let Some(logo) = &logo {
+                blend_watermark(&sample, logo, gpu_logo.as_ref(), enc_w, enc_h);
+            }
+            unsafe {
+                sample.SetSampleTime(out_t).map_err(mf)?;
+                sample.SetSampleDuration(frame_dur).map_err(mf)?;
+                sink.WriteSample(v_stream, &sample).map_err(mf)?;
+            }
+            if let Some(a) = audio.as_mut() {
+                a.advance(&sink, out_t, cancel)?;
+            }
+            progress.set(out_t as f32 / total);
+            Ok(())
+        };
         let mut kept_before: i64 = 0;
         for seg in &edit.segments {
             let start_hns = (seg.start_ms * 10_000.0) as i64;
@@ -1347,24 +1379,11 @@ mod win {
                 // Re-tiempo al hueco eliminado, idéntico al del audio: los tramos se concatenan sin
                 // huecos en la salida (mismo mapeo origen→salida que el audio para mantener el sync).
                 let out_t = (t - start_hns) + kept_before;
-                let sample = match &reframer {
-                    Some(r) => r
-                        .process(&sample, seg.crop_x.unwrap_or(0.5), seg.crop_y.unwrap_or(0.5))
-                        .map_err(mf)?,
-                    None => sample,
-                };
-                if let Some(logo) = &logo {
-                    blend_watermark(&sample, logo, gpu_logo.as_ref(), enc_w, enc_h);
+                let (cx, cy) = (seg.crop_x.unwrap_or(0.5), seg.crop_y.unwrap_or(0.5));
+                match &reframer {
+                    Some(r) => write(r.process(&sample, cx, cy).map_err(mf)?, out_t)?,
+                    None => write(sample, out_t)?,
                 }
-                unsafe {
-                    sample.SetSampleTime(out_t).map_err(mf)?;
-                    sample.SetSampleDuration(frame_dur).map_err(mf)?;
-                    sink.WriteSample(v_stream, &sample).map_err(mf)?;
-                }
-                if let Some(a) = audio.as_mut() {
-                    a.advance(&sink, out_t, cancel)?;
-                }
-                progress.set(out_t as f32 / total);
             }
             kept_before += end_hns - start_hns;
         }
@@ -1960,6 +1979,7 @@ mod win {
                     .collect(),
                 mixer: MixerState::default(),
                 format: Default::default(),
+                look: Default::default(),
             }
         }
 

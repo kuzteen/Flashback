@@ -8,13 +8,20 @@ import { playback } from './playback.svelte';
 // Estado de interfaz del editor abierto que comparten varias piezas. No es parte de la edición:
 // no entra en el historial ni se guarda con el clip.
 const FORMAT_KEY = 'flashback.editor.formatPanel';
+const LOOK_KEY = 'flashback.editor.lookPanel';
 
-function readFormatOpen(): boolean {
+function readOpen(key: string): boolean {
   try {
-    return localStorage.getItem(FORMAT_KEY) === '1';
+    return localStorage.getItem(key) === '1';
   } catch {
     return false;
   }
+}
+
+function saveOpen(key: string, open: boolean) {
+  try {
+    localStorage.setItem(key, open ? '1' : '0');
+  } catch {}
 }
 
 class EditorUi {
@@ -31,13 +38,17 @@ class EditorUi {
   toolsOpen = $state(false);
   blockMenu = $state<{ x: number; y: number; index: number } | null>(null);
   // Preferencia de quien edita: plegado por defecto y recordado entre sesiones.
-  formatOpen = $state(readFormatOpen());
+  formatOpen = $state(readOpen(FORMAT_KEY));
+  lookOpen = $state(readOpen(LOOK_KEY));
 
   toggleFormat() {
     this.formatOpen = !this.formatOpen;
-    try {
-      localStorage.setItem(FORMAT_KEY, this.formatOpen ? '1' : '0');
-    } catch {}
+    saveOpen(FORMAT_KEY, this.formatOpen);
+  }
+
+  toggleLook() {
+    this.lookOpen = !this.lookOpen;
+    saveOpen(LOOK_KEY, this.lookOpen);
   }
 
   private wasMaximized = false;

@@ -18,6 +18,13 @@
   import AudioTrack from './AudioTrack.svelte';
 
   const GUTTER = 208;
+  // Aire a ambos lados de la línea de tiempo para que no quede pegada a la cabecera de pistas
+  // ni al borde de la ventana. El tiempo 0 empieza en GUTTER + PAD.
+  const PAD = 16;
+  const ORIGIN = GUTTER + PAD;
+  // A la derecha el hueco reservado de la barra vertical (11 px, ver app.css) ya forma parte del
+  // margen: el carril solo añade lo que falta hasta PAD.
+  const PAD_R = PAD - 11;
 
   let scrollEl = $state<HTMLDivElement | null>(null);
   let viewW = $state(0);
@@ -37,12 +44,22 @@
   });
   const headPos = $derived(outToPos(segs, playback.outPos));
   const px = (ms: number) => (mpp > 0 ? ms / mpp : 0);
+  // Ventana visible en coordenadas de carril: siempre la misma franja que ocupa la línea de tiempo
+  // sin zoom. Lo que queda fuera se recorta, así que con zoom nada asoma por debajo de la cabecera
+  // de pistas ni por los márgenes. En los extremos del contenido se deja holgura para los tiradores
+  // y el cabezal, que sobresalen unos píxeles del bloque.
+  const SLACK = 12;
+  const clipL = $derived(scrollLeft > 0.5 ? scrollLeft : -SLACK);
+  const clipR = $derived(scrollLeft + viewW >= width - 0.5 ? width + SLACK : scrollLeft + viewW);
+  const laneClip = $derived(
+    `polygon(${clipL}px -40px, ${clipR}px -40px, ${clipR}px calc(100% + 40px), ${clipL}px calc(100% + 40px))`,
+  );
 
   $effect(() => {
     const el = scrollEl;
     if (!el) return;
     const ro = new ResizeObserver(() => {
-      viewW = Math.max(0, el.clientWidth - GUTTER);
+      viewW = Math.max(0, el.clientWidth - GUTTER - PAD - PAD_R);
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -57,7 +74,7 @@
       if (!e.ctrlKey) return;
       e.preventDefault();
       const r = el.getBoundingClientRect();
-      const offset = e.clientX - r.left - GUTTER;
+      const offset = e.clientX - r.left - ORIGIN;
       const anchor = posAt(e.clientX);
       const z = zoomBy(ui.zoom, e.deltaY);
       ui.zoom = z;
@@ -72,7 +89,7 @@
   function posAt(clientX: number): number {
     if (!scrollEl || mpp <= 0) return 0;
     const r = scrollEl.getBoundingClientRect();
-    return Math.max(0, Math.min(extent, (clientX - r.left - GUTTER + scrollEl.scrollLeft) * mpp));
+    return Math.max(0, Math.min(extent, (clientX - r.left - ORIGIN + scrollEl.scrollLeft) * mpp));
   }
 
   // Regla: un clic mueve el cabezal; arrastrar marca un rango.
@@ -122,8 +139,8 @@
   }
 </script>
 
-<div class="tl" bind:this={scrollEl} style:--gutter="{GUTTER}px" onscroll={(e) => (scrollLeft = e.currentTarget.scrollLeft)}>
-  <div class="inner" style:width="{GUTTER + width}px">
+<div class="tl" bind:this={scrollEl} style:--gutter="{GUTTER}px" style:--pad="{PAD}px" style:--lane-clip={laneClip} onscroll={(e) => (scrollLeft = e.currentTarget.scrollLeft)}>
+  <div class="inner" style:width="{ORIGIN + width + PAD_R}px">
     <div class="row ruler-row">
       <div class="head"></div>
       <div
@@ -143,27 +160,29 @@
       </div>
     </div>
 
-    <VideoTrack {mpp} {width} {posAt} {headPos} />
-    <AudioTrack kind="sys" {mpp} {width} {viewW} {scrollLeft} />
+    <VideoTrack {mpp} {width} viewX={scrollLeft} {viewW} {posAt} {headPos} />
+    <AudioTrack kind="sys" {mpp} {width} viewX={scrollLeft} {viewW} />
     {#if editorState.loading || editorState.mic}
-      <AudioTrack kind="mic" {mpp} {width} {viewW} {scrollLeft} />
+      <AudioTrack kind="mic" {mpp} {width} viewX={scrollLeft} {viewW} />
     {/if}
 
-    {#if ui.range}
-      <div class="range" style:left="{GUTTER + px(ui.range.from)}px" style:width="{px(ui.range.to - ui.range.from)}px"></div>
-    {/if}
-    {#if ui.guideAt !== null}
-      <div class="guide" style:left="{GUTTER + px(ui.guideAt)}px"></div>
-    {/if}
-    <div class="playhead" style:left="{GUTTER + px(headPos)}px">
-      <span
-        class="knob"
-        role="presentation"
-        onpointerdown={onKnobDown}
-        onpointermove={onKnobMove}
-        onpointerup={onKnobUp}
-        onpointercancel={onKnobUp}
-      ></span>
+    <div class="over" style:left="{ORIGIN}px" style:width="{width}px">
+      {#if ui.range}
+        <div class="range" style:left="{px(ui.range.from)}px" style:width="{px(ui.range.to - ui.range.from)}px"></div>
+      {/if}
+      {#if ui.guideAt !== null}
+        <div class="guide" style:left="{px(ui.guideAt)}px"></div>
+      {/if}
+      <div class="playhead" style:left="{px(headPos)}px">
+        <span
+          class="knob"
+          role="presentation"
+          onpointerdown={onKnobDown}
+          onpointermove={onKnobMove}
+          onpointerup={onKnobUp}
+          onpointercancel={onKnobUp}
+        ></span>
+      </div>
     </div>
   </div>
 </div>
@@ -174,6 +193,9 @@
     min-height: 0;
     overflow-x: auto;
     overflow-y: auto;
+    /* El hueco de la barra vertical está siempre reservado: si apareciera solo al encoger el panel,
+       el ancho útil cambiaría y toda la línea de tiempo se reescalaría de golpe. */
+    scrollbar-gutter: stable;
     background: var(--base);
   }
   .inner {
@@ -183,9 +205,20 @@
   .row {
     display: flex;
   }
+  /* La línea bajo la regla va solo en el carril: en la columna de cabeceras la regla y el vídeo se
+     leen como un bloque. */
   .ruler-row {
+    position: relative;
     height: 28px;
-    border-bottom: 1px solid var(--line);
+  }
+  .ruler-row::after {
+    content: '';
+    position: absolute;
+    left: var(--gutter);
+    right: 0;
+    bottom: 0;
+    height: 1px;
+    background: var(--line);
   }
   .head {
     position: sticky;
@@ -193,12 +226,14 @@
     z-index: 3;
     flex: none;
     width: var(--gutter);
-    background: var(--bg-0);
+    background: var(--base);
     border-right: 1px solid var(--line);
   }
   .ruler {
     position: relative;
     flex: none;
+    margin-left: var(--pad);
+    clip-path: var(--lane-clip);
     cursor: text;
     touch-action: none;
   }
@@ -220,6 +255,14 @@
     font-size: 10.5px;
     color: var(--text-3);
     white-space: nowrap;
+    pointer-events: none;
+  }
+  .over {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    z-index: 2;
+    clip-path: var(--lane-clip);
     pointer-events: none;
   }
   .range {

@@ -169,6 +169,7 @@ mod tests {
             }],
             mixer: Default::default(),
             format: Default::default(),
+            look: Default::default(),
         }
     }
 

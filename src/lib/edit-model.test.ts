@@ -23,6 +23,7 @@ import {
   toSaved,
   type Segment,
 } from './edit-model';
+import { NEUTRAL_LOOK } from './look';
 
 const seg = (startMs: number, endMs: number, posMs: number, extra: Partial<Segment> = {}): Segment => ({
   startMs,
@@ -90,7 +91,7 @@ describe('fromSaved', () => {
     expect(s.segments[0].cropY).toBe(0.5);
   });
 
-  it('lee el formato personalizado con su zoom y lo limita a [0, 1]', () => {
+  it('lee el formato personalizado con su zoom y lo limita a [0, 2]', () => {
     const c = fromSaved(
       { segments: [{ start_ms: 0, end_ms: 1000 }], format: { kind: 'vertical', fill: 'custom', zoom: 0.4 } },
       1000,
@@ -100,7 +101,7 @@ describe('fromSaved', () => {
       { segments: [{ start_ms: 0, end_ms: 1000 }], format: { kind: 'vertical', fill: 'custom', zoom: 9 } },
       1000,
     );
-    expect(big.format).toEqual({ kind: 'vertical', fill: 'custom', zoom: 1 });
+    expect(big.format).toEqual({ kind: 'vertical', fill: 'custom', zoom: 2 });
   });
 
   it('limita crop_x a [0, 1]', () => {
@@ -129,6 +130,7 @@ describe('toSaved', () => {
       segments: [seg(0, 1000, 0, { cropX: 0.3, cropY: 0.7 }), seg(2000, 3000, 1500, { disabled: true })],
       mixer: DEFAULT_MIXER,
       format: { kind: 'vertical', fill: 'crop' } as const,
+      look: { ...NEUTRAL_LOOK, contrast: 0.3, sharpness: 0.5 },
     };
     expect(fromSaved(toSaved(state), 10_000)).toEqual(state);
   });
@@ -138,6 +140,7 @@ describe('toSaved', () => {
       segments: [seg(0, 1000, 0), seg(2000, 3000, 1000, { disabled: true })],
       mixer: DEFAULT_MIXER,
       format: DEFAULT_FORMAT,
+      look: NEUTRAL_LOOK,
     };
     expect(toSaved(state, true).segments).toHaveLength(1);
   });

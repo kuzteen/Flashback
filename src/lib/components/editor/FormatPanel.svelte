@@ -2,6 +2,7 @@
   import Icon from '../Icon.svelte';
   import { beginGesture, commit, editorState, endGesture, preview } from '$lib/editor-state.svelte';
   import type { OutputFormat } from '$lib/edit-model';
+  import { ZOOM_MAX } from '$lib/frame-math';
   import { t } from '$lib/i18n.svelte';
   import { ui } from './ui.svelte';
 
@@ -107,9 +108,10 @@
           <label class="zoom">
             <span class="zl">{t('ed.zoom')}</span>
             <input
+              class="fader"
               type="range"
               min="0"
-              max="100"
+              max={ZOOM_MAX * 100}
               step="1"
               value={Math.round(customZoom * 100)}
               onpointerdown={startSlide}
@@ -128,7 +130,7 @@
 
 <style>
   /* Plegado no ocupa sitio: solo el botón, flotando sobre la esquina del visor. Abierto pasa a
-     ser una columna que empuja el vídeo a la izquierda. */
+     ser una columna; el visor compensa su ancho para que el vídeo no se mueva del centro. */
   .panel {
     position: absolute;
     top: 12px;
@@ -142,7 +144,7 @@
   .panel.open {
     position: static;
     flex: none;
-    width: 260px;
+    width: var(--format-w);
     padding: 10px 14px 14px;
     background: var(--bg-0);
     border-left: 1px solid var(--line);
@@ -167,7 +169,7 @@
   /* Sobre el vídeo necesita su propio fondo para verse en escenas claras. */
   .panel:not(.open) .toggle {
     color: var(--text-1);
-    background: rgba(18, 18, 20, 0.72);
+    background: var(--glass);
     backdrop-filter: blur(12px);
     border: 1px solid var(--line);
   }
@@ -278,34 +280,6 @@
     font-size: 11.5px;
     text-align: right;
     color: var(--text-1);
-  }
-  /* Mismo aspecto que los faders de volumen: pista fina y tirador rectangular. */
-  .zoom input {
-    width: 100%;
-    height: 14px;
-    appearance: none;
-    background: transparent;
-    cursor: pointer;
-  }
-  .zoom input::-webkit-slider-runnable-track {
-    height: 4px;
-    border-radius: 999px;
-    background: var(--bg-3);
-  }
-  .zoom input::-webkit-slider-thumb {
-    appearance: none;
-    width: 16px;
-    height: 10px;
-    margin-top: -3px;
-    border-radius: 3px;
-    background: var(--text-0);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
-  }
-  .zoom input:focus-visible {
-    outline: none;
-  }
-  .zoom input:focus-visible::-webkit-slider-thumb {
-    box-shadow: 0 0 0 3px var(--accent-glow);
   }
   .note {
     font-size: 12px;

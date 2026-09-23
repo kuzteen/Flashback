@@ -1,5 +1,5 @@
 <script lang="ts">
-  import Icon from '../Icon.svelte';
+  import FilmTiles from './FilmTiles.svelte';
   import { beginGesture, editorState, endGesture, preview } from '$lib/editor-state.svelte';
   import { moveTo, segLen, snap, snapTargets, sortByPos, trimToPos } from '$lib/edit-model';
   import { SNAP_PX, extentMs, outStartOf, posToOut } from '$lib/timeline-math';
@@ -11,9 +11,18 @@
   let {
     mpp,
     width,
+    viewX,
+    viewW,
     posAt,
     headPos,
-  }: { mpp: number; width: number; posAt: (clientX: number) => number; headPos: number } = $props();
+  }: {
+    mpp: number;
+    width: number;
+    viewX: number;
+    viewW: number;
+    posAt: (clientX: number) => number;
+    headPos: number;
+  } = $props();
 
   // Mantener pulsado un bloque sin moverlo lo levanta para moverlo; si el puntero se mueve antes,
   // el gesto se queda en buscar.
@@ -170,10 +179,7 @@
 </script>
 
 <div class="row">
-  <div class="head">
-    <span class="ico"><Icon name="clips-fill" size={16} /></span>
-    <span class="name">{t('ed.video')}</span>
-  </div>
+  <div class="head"></div>
   <div
     class="lane"
     class:trimming
@@ -198,6 +204,9 @@
         onpointerdown={(e) => onBlockDown(e, i)}
         oncontextmenu={(e) => onContext(e, i)}
       >
+        <div class="film">
+          <FilmTiles startMs={s.startMs} left={px(s.posMs)} width={px(segLen(s))} {mpp} {viewX} {viewW} />
+        </div>
         {#if i === editorState.active}
           <span class="grip start" role="presentation" onpointerdown={(e) => onGripDown(e, i, 'start')}></span>
           <span class="grip end" role="presentation" onpointerdown={(e) => onGripDown(e, i, 'end')}></span>
@@ -239,24 +248,14 @@
     z-index: 3;
     flex: none;
     width: var(--gutter);
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    padding: 0 14px;
-    background: var(--bg-0);
+    background: var(--base);
     border-right: 1px solid var(--line);
-  }
-  .ico {
-    display: grid;
-    color: var(--text-2);
-  }
-  .name {
-    font-size: 12.5px;
-    color: var(--text-1);
   }
   .lane {
     position: relative;
     flex: none;
+    margin-left: var(--pad);
+    clip-path: var(--lane-clip);
     cursor: pointer;
     touch-action: none;
   }
@@ -266,14 +265,32 @@
     bottom: 9px;
     border-radius: 6px;
     background: linear-gradient(to bottom, var(--bg-3), var(--bg-2));
-    box-shadow: inset 0 0 0 1px var(--line-strong);
     transition: left 0.18s ease, box-shadow 0.14s ease, transform 0.14s ease;
+  }
+  /* El borde va por encima de la tira de fotogramas, que lo taparía si fuera del propio bloque. */
+  .block::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+    transition: box-shadow 0.14s ease;
+    pointer-events: none;
+  }
+  .film {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    overflow: hidden;
+  }
+  .block.disabled .film {
+    opacity: 0.3;
   }
   .lane.trimming .block,
   .lane.lifting .block {
     transition: box-shadow 0.14s ease, transform 0.14s ease;
   }
-  .block.active {
+  .block.active::after {
     box-shadow: inset 0 0 0 2px var(--accent);
   }
   .block.disabled {
@@ -282,13 +299,12 @@
   .block.lifted {
     z-index: 2;
     transform: scale(1.05);
-    box-shadow:
-      inset 0 0 0 2px var(--accent),
-      0 12px 26px -8px rgba(0, 0, 0, 0.8);
+    box-shadow: 0 12px 26px -8px rgba(0, 0, 0, 0.8);
     cursor: grabbing;
   }
   .grip {
     position: absolute;
+    z-index: 1;
     top: -2px;
     bottom: -2px;
     width: 10px;
@@ -318,7 +334,7 @@
     background: var(--surface);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
-    box-shadow: 0 18px 42px -14px rgba(0, 0, 0, 0.7);
+    box-shadow: var(--shadow-pop);
   }
   .ctx button {
     padding: 8px 10px;
@@ -335,7 +351,7 @@
     color: var(--rec);
   }
   .ctx .danger:hover {
-    background: rgba(255, 91, 91, 0.12);
+    background: color-mix(in srgb, var(--rec) 12%, transparent);
     color: var(--rec);
   }
   .ctx button:disabled {

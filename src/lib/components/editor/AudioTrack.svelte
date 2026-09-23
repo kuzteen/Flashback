@@ -8,9 +8,9 @@
     kind,
     mpp,
     width,
+    viewX,
     viewW,
-    scrollLeft,
-  }: { kind: 'sys' | 'mic'; mpp: number; width: number; viewW: number; scrollLeft: number } = $props();
+  }: { kind: 'sys' | 'mic'; mpp: number; width: number; viewX: number; viewW: number } = $props();
 
 
   const mixer = $derived(editorState.edit.mixer);
@@ -79,6 +79,10 @@
   }
 
   let canvas = $state<HTMLCanvasElement | null>(null);
+  // El lienzo pegado a la izquierda no puede salirse del carril: al principio y al final se queda
+  // en su borde en vez de seguir a la ventana, igual que hace el navegador con el sticky.
+  const canvasW = $derived(Math.max(0, Math.floor(Math.min(width, viewW))));
+  const canvasX = $derived(Math.max(0, Math.min(viewX, width - canvasW)));
 
   // Solo se pinta el tramo visible: con zoom alto un lienzo del ancho completo pasaría de los
   // 30.000 px. La capa base es la onda original sin editar, para que los huecos no queden
@@ -86,7 +90,7 @@
   function draw() {
     const c = canvas;
     if (!c) return;
-    const w = Math.max(0, Math.floor(viewW));
+    const w = canvasW;
     const h = c.clientHeight;
     const dpr = window.devicePixelRatio || 1;
     c.width = Math.round(w * dpr);
@@ -102,7 +106,7 @@
     const amp = h * 0.44;
     const bar = (src: number) => {
       const b = Math.min(p.length - 1, Math.max(0, Math.floor((src / dur) * p.length)));
-      return Math.max(0.5, Math.min(1, p[b] * 1.8) * amp);
+      return Math.max(0.5, Math.min(1, p[b] * 1.8) * amp * vol);
     };
     const ordered = [...editorState.edit.segments].sort((a, b) => a.posMs - b.posMs);
     const base = new Path2D();
@@ -110,7 +114,7 @@
     const off = new Path2D();
     let k = 0;
     for (let x = 0; x < w; x++) {
-      const pos = (scrollLeft + x) * mpp;
+      const pos = (canvasX + x) * mpp;
       if (pos < dur) {
         const y = bar(pos);
         base.rect(x, mid - y, 1, y * 2);
@@ -124,16 +128,16 @@
     }
     // El lienzo no entiende var(): los colores se leen de los tokens del tema al pintar.
     const css = getComputedStyle(c);
-    ctx.fillStyle = css.getPropertyValue('--line').trim();
+    ctx.fillStyle = css.getPropertyValue('--wave-base').trim();
     ctx.fill(base);
-    ctx.fillStyle = css.getPropertyValue('--line-strong').trim();
+    ctx.fillStyle = css.getPropertyValue('--wave-off').trim();
     ctx.fill(off);
-    ctx.fillStyle = css.getPropertyValue('--text-0').trim();
+    ctx.fillStyle = css.getPropertyValue('--wave').trim();
     ctx.fill(on);
   }
 
   $effect(() => {
-    void [canvas, peaks, editorState.edit.segments, editorState.durationMs, muted, mpp, viewW, scrollLeft];
+    void [canvas, peaks, editorState.edit.segments, editorState.durationMs, muted, vol, mpp, canvasX, canvasW];
     draw();
   });
 </script>
@@ -142,7 +146,8 @@
   <div class="head">
     {#if editorState.loading}
       <div class="sk-ico"></div>
-      <div class="info"><div class="sk-line"></div><div class="sk-rail"></div></div>
+      <div class="sk-line"></div>
+      <div class="sk-rail"></div>
     {:else}
       <button
         class="mute"
@@ -153,14 +158,11 @@
         data-tip-align="start"
         onclick={toggleMute}
       >
-        <Icon name={muted ? 'speaker-off' : icon} size={17} />
+        <Icon name={icon} size={17} />
       </button>
-      <div class="info">
-        <div class="line">
-          <span class="name">{label}</span>
-          <span class="pct mono" class:show={dragging || hovering}>{Math.round(vol * 100)}%</span>
-        </div>
-        <div
+      <span class="name">{label}</span>
+      <span class="pct mono" class:active={dragging || hovering}>{Math.round(vol * 100)}%</span>
+      <div
           class="rail"
           bind:this={rail}
           role="slider"
@@ -178,14 +180,13 @@
           onpointerleave={() => (hovering = false)}
           onkeydown={onRailKey}
         >
-          <div class="bar"><div class="fill"></div></div>
-          <div class="thumb"></div>
-        </div>
+        <div class="bar"><div class="fill"></div></div>
+        <div class="thumb"></div>
       </div>
     {/if}
   </div>
   <div class="lane" style:width="{width}px">
-    <canvas bind:this={canvas} class="wave" class:ready={!!peaks} style:width="{viewW}px"></canvas>
+    <canvas bind:this={canvas} class="wave" class:ready={!!peaks} style:width="{canvasW}px"></canvas>
     {#if noAudio}
       <span class="note mono">{t('ed.noAudio')}</span>
     {:else if !peaks}
@@ -195,10 +196,20 @@
 </div>
 
 <style>
+  /* Igual que la regla: las cabeceras de audio forman un solo bloque y la línea queda en el carril. */
   .row {
+    position: relative;
     display: flex;
     height: 52px;
-    border-bottom: 1px solid var(--line);
+  }
+  .row::after {
+    content: '';
+    position: absolute;
+    left: var(--gutter);
+    right: 0;
+    bottom: 0;
+    height: 1px;
+    background: var(--line);
   }
   .head {
     position: sticky;
@@ -206,16 +217,21 @@
     z-index: 3;
     flex: none;
     width: var(--gutter);
-    display: flex;
+    /* Dos columnas: icono sobre porcentaje y nombre sobre tirador, alineados fila a fila. */
+    display: grid;
+    grid-template-columns: 32px minmax(0, 1fr);
+    grid-template-rows: 22px 16px;
+    align-content: center;
     align-items: center;
-    gap: 10px;
+    column-gap: 10px;
+    row-gap: 2px;
     padding: 0 14px 0 8px;
-    background: var(--bg-0);
+    background: var(--base);
     border-right: 1px solid var(--line);
   }
   .mute {
     width: 32px;
-    height: 32px;
+    height: 22px;
     flex: none;
     display: grid;
     place-items: center;
@@ -230,39 +246,30 @@
   .mute.on {
     color: var(--rec);
   }
-  .info {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .line {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 6px;
-  }
   .name {
     min-width: 0;
-    font-size: 12px;
-    color: var(--text-1);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-2);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .pct {
-    font-size: 11px;
-    color: var(--text-2);
-    opacity: 0;
-    transition: opacity 0.12s ease;
+    justify-self: center;
+    font-size: 10.5px;
+    line-height: 1;
+    color: var(--text-3);
+    transition: color 0.12s ease;
   }
-  .pct.show {
-    opacity: 1;
+  .pct.active {
+    color: var(--text-1);
   }
   .rail {
     position: relative;
-    height: 14px;
+    /* Más alta que su fila (16 px) a propósito: solo crece la zona de clic, la barra no cambia. */
+    height: 20px;
     cursor: pointer;
     touch-action: none;
     outline: none;
@@ -297,17 +304,30 @@
     transform: translate(-50%, -50%);
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
   }
+  .thumb::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 8px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--bg-3);
+    transform: translate(-50%, -50%);
+  }
   .rail:focus-visible .thumb {
     box-shadow: 0 0 0 3px var(--accent-glow);
   }
   .lane {
     position: relative;
     flex: none;
+    margin-left: var(--pad);
+    clip-path: var(--lane-clip);
   }
   /* Pegado al borde izquierdo visible: el lienzo mide lo que se ve y se repinta al hacer scroll. */
   .wave {
     position: sticky;
-    left: var(--gutter);
+    left: calc(var(--gutter) + var(--pad));
     display: block;
     height: 100%;
     opacity: 0;
@@ -341,6 +361,7 @@
     border-radius: 6px;
   }
   .sk-ico {
+    grid-row: 1 / 3;
     width: 32px;
     height: 32px;
     border-radius: var(--r-sm);

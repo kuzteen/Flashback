@@ -5,10 +5,12 @@ import type { OutputFormat } from './edit-model';
 
 export type Box = { x: number; y: number; w: number; h: number };
 
+export const ZOOM_MAX = 2;
+
 export function zoomOf(format: OutputFormat): number {
   if (format.kind !== 'vertical' || format.fill === 'fit') return 0;
   if (format.fill === 'crop') return 1;
-  return Math.max(0, Math.min(1, format.zoom ?? 0.5));
+  return Math.max(0, Math.min(ZOOM_MAX, format.zoom ?? 0.5));
 }
 
 // Dónde va el fotograma ENTERO dentro del lienzo (puede salirse). En cada eje, si el fotograma es
@@ -16,7 +18,8 @@ export function zoomOf(format: OutputFormat): number {
 export function place(sw: number, sh: number, ow: number, oh: number, zoom: number, cx: number, cy: number): Box {
   const fit = Math.min(ow / sw, oh / sh);
   const fill = Math.max(ow / sw, oh / sh);
-  const s = fit + (fill - fit) * Math.max(0, Math.min(1, zoom));
+  const z = Math.max(0, Math.min(ZOOM_MAX, zoom));
+  const s = z <= 1 ? fit + (fill - fit) * z : fill * z;
   const w = sw * s;
   const h = sh * s;
   return { x: axis(w, ow, cx), y: axis(h, oh, cy), w, h };

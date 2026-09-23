@@ -9,6 +9,7 @@ mod dragdrop;
 mod editor;
 mod edits;
 mod library;
+mod look;
 mod playlists;
 mod reframe;
 mod share;
@@ -418,6 +419,16 @@ async fn clip_thumbnail(app: tauri::AppHandle, path: String) -> Result<String, S
     thumb_path
 }
 
+// Sin caché en disco: generarla cuesta una fracción de segundo y el frontend conserva las de los
+// últimos clips abiertos durante la sesión.
+#[tauri::command]
+async fn clip_filmstrip(path: String) -> Result<tauri::ipc::Response, String> {
+    let strip = tokio::task::spawn_blocking(move || thumbnail::filmstrip(path, 72, 180))
+        .await
+        .map_err(|e| format!("Error interno: {e}"))??;
+    Ok(tauri::ipc::Response::new(strip.into_bytes()))
+}
+
 #[tauri::command]
 async fn capture_frame(app: tauri::AppHandle, path: String, time_ms: f64) -> Result<String, String> {
     let dir = config::screenshots_dir(&app);
@@ -756,6 +767,7 @@ pub fn run() {
             clip_fps,
             clip_thumbnail,
             capture_frame,
+            clip_filmstrip,
             export_clip,
             share_prepare,
             share_cancel,

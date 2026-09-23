@@ -1024,6 +1024,7 @@ dependencies = [
  "tokio",
  "urlencoding",
  "windows",
+ "windows-numerics",
 ]
 
 [[package]]

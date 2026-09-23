@@ -2,7 +2,8 @@
   import { untrack } from 'svelte';
   import { beginGesture, commit, editorState, endGesture, preview, setDuration } from '$lib/editor-state.svelte';
   import { outToSeg, setFraming } from '$lib/edit-model';
-  import { place, zoomOf } from '$lib/frame-math';
+  import { place, ZOOM_MAX, zoomOf } from '$lib/frame-math';
+  import { isNeutral, sharpenKernel, svgColorValues } from '$lib/look';
   import { t } from '$lib/i18n.svelte';
   import { formatTimecode } from '$lib/timeline-math';
   import { playback } from './playback.svelte';
@@ -104,6 +105,14 @@
   const SNAP_PX = 6;
 
   const format = $derived(editorState.edit.format);
+
+  // Ajustes de imagen en la vista previa: un filtro SVG con la misma matriz y el mismo núcleo que
+  // el export. Solo se engancha si hay algo que ajustar, para no sacar el vídeo del camino rápido
+  // de composición del navegador sin motivo.
+  const look = $derived(editorState.edit.look);
+  const graded = $derived(!isNeutral(look));
+  const kernel = $derived(sharpenKernel(look));
+  const lookFilter = $derived(graded ? 'url(#fb-look)' : null);
   // En pantalla completa se ve el vídeo tal cual: el lienzo vertical es una herramienta de encuadre.
   const vert = $derived(format.kind === 'vertical' && !ui.fs);
   const zoom = $derived(zoomOf(format));
@@ -138,15 +147,15 @@
   }
 
   // Mueve un eje d unidades del lienzo. Mayor que el lienzo: arrastrar a la derecha enseña lo de
-  // la izquierda. Menor: el fotograma sigue al puntero. A menos de SNAP_PX del centro se pega a
-  // él, como las guías de Photoshop.
-  function moveAxis(p0: number, d: number, size: number, canvas: number, k: number) {
+  // la izquierda. Menor: el fotograma sigue al puntero. Con snap, a menos de SNAP_PX del centro se
+  // pega a él, como las guías de Photoshop; k pasa de unidades del lienzo a px en pantalla.
+  function moveAxis(p0: number, d: number, size: number, canvas: number, k: number, snap: boolean) {
     const [lo, hi] = axisRange(size, canvas);
     if (hi - lo < 1e-6) return { p: 0.5, snapped: false };
     const raw = size > canvas ? p0 - d / size : p0 + d / canvas;
     let p = Math.max(lo, Math.min(hi, raw));
     const span = size > canvas ? size : canvas;
-    const snapped = Math.abs(p - 0.5) * span * k < SNAP_PX;
+    const snapped = snap && Math.abs(p - 0.5) * span * k < SNAP_PX;
     if (snapped) p = 0.5;
     return { p, snapped };
   }
@@ -175,8 +184,9 @@
       beginGesture();
     }
     const k = frameEl.clientWidth / OW;
-    const nx = moveAxis(drag.px, dx / k, fg.w, OW, k);
-    const ny = moveAxis(drag.py, dy / k, fg.h, OH, k);
+    // Alt suelta el imán, como en la línea de tiempo.
+    const nx = moveAxis(drag.px, dx / k, fg.w, OW, k, !e.altKey);
+    const ny = moveAxis(drag.py, dy / k, fg.h, OH, k, !e.altKey);
     guideX = nx.snapped;
     guideY = ny.snapped;
     preview({ ...editorState.edit, segments: setFraming(editorState.edit.segments, drag.index, nx.p, ny.p) });
@@ -199,9 +209,38 @@
     e.preventDefault();
     e.stopPropagation();
     const step = 20;
-    const nx = moveAxis(axisPos(fg.x, fg.w, OW), sx * step, fg.w, OW, 0);
-    const ny = moveAxis(axisPos(fg.y, fg.h, OH), sy * step, fg.h, OH, 0);
+    // Las flechas mueven la ventana del recorte sobre el vídeo, no el vídeo: en el eje donde el
+    // fotograma sobresale, eso es el sentido contrario al de arrastrar.
+    const dir = (size: number, canvas: number) => (size > canvas ? -1 : 1);
+    const nx = moveAxis(axisPos(fg.x, fg.w, OW), dir(fg.w, OW) * sx * step, fg.w, OW, 0, false);
+    const ny = moveAxis(axisPos(fg.y, fg.h, OH), dir(fg.h, OH) * sy * step, fg.h, OH, 0, false);
     commit({ ...editorState.edit, segments: setFraming(editorState.edit.segments, segIdx, nx.p, ny.p) });
+  }
+
+  // Rueda sobre el marco = zoom personalizado. Toda una tanda de rueda es un solo paso de deshacer:
+  // se cierra cuando la rueda lleva un rato quieta.
+  // Cada muesca suma o resta un 10 % exacto (67 → 57), solo limitado por los extremos; los deltas
+  // pequeños de un touchpad se acumulan hasta sumar una muesca.
+  let wheelEnd: ReturnType<typeof setTimeout> | null = null;
+  let wheelAcc = 0;
+  const NOTCH = 100;
+
+  function onFrameWheel(e: WheelEvent) {
+    if (format.kind !== 'vertical' || format.fill !== 'custom' || drag) return;
+    wheelAcc += e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
+    const notches = Math.trunc(wheelAcc / NOTCH);
+    if (!notches) return;
+    wheelAcc -= notches * NOTCH;
+    const pct = Math.round((format.zoom ?? 0.5) * 100) - notches * 10;
+    const z = Math.max(0, Math.min(ZOOM_MAX * 100, pct)) / 100;
+    if (wheelEnd) clearTimeout(wheelEnd);
+    else beginGesture();
+    preview({ ...editorState.edit, format: { kind: 'vertical', fill: 'custom', zoom: z } });
+    wheelEnd = setTimeout(() => {
+      wheelEnd = null;
+      wheelAcc = 0;
+      endGesture();
+    }, 350);
   }
 
   // Encajado: el fondo es un lienzo diminuto al que se copia el fotograma, escalado y desenfocado
@@ -223,9 +262,18 @@
   });
 </script>
 
+<svg class="defs" aria-hidden="true">
+  <filter id="fb-look" color-interpolation-filters="sRGB">
+    <feColorMatrix type="matrix" values={svgColorValues(look)} />
+    {#if kernel}
+      <feConvolveMatrix order="3" kernelMatrix={kernel.join(' ')} preserveAlpha="true" edgeMode="duplicate" />
+    {/if}
+  </filter>
+</svg>
+
 <div class="stage">
   {#if editorState.videoSrc}
-    <div class="fit">
+    <div class="fit" class:balance-l={ui.formatOpen && !ui.lookOpen} class:balance-r={ui.lookOpen && !ui.formatOpen}>
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
       <div
         class="frame"
@@ -239,14 +287,16 @@
         onpointerup={vert ? onFrameUp : undefined}
         onpointercancel={vert ? onFrameUp : undefined}
         onkeydown={vert ? onFrameKey : undefined}
+        onwheel={vert ? onFrameWheel : undefined}
       >
         {#if vert && !covers}
-          <canvas bind:this={bgCanvas} class="bg" width="54" height="96"></canvas>
+          <div class="bg-clip" style:filter={lookFilter}><canvas bind:this={bgCanvas} class="bg" width="54" height="96"></canvas></div>
         {/if}
         <video
           bind:this={video}
           src={editorState.videoSrc}
           playsinline
+          style:filter={lookFilter}
           class:fs={ui.fs}
           class:nocursor={ui.fs && !ui.fsCtrlShow}
           style:left={vert ? `${(fg.x / OW) * 100}%` : null}
@@ -322,6 +372,19 @@
     align-items: center;
     justify-content: center;
     padding: 18px 40px;
+  }
+  /* Con un solo panel abierto se reserva su ancho también en el lado contrario, para que el vídeo
+     siga centrado en la ventana; con los dos abiertos ya se compensan solos. */
+  .fit.balance-l {
+    padding-left: calc(40px + var(--format-w));
+  }
+  .fit.balance-r {
+    padding-right: calc(40px + var(--format-w));
+  }
+  .defs {
+    position: absolute;
+    width: 0;
+    height: 0;
   }
   video {
     max-width: 100%;
@@ -449,7 +512,6 @@
     height: 100%;
     aspect-ratio: 9 / 16;
     max-width: 100%;
-    overflow: hidden;
     border-radius: var(--r-md);
     background: #000;
     box-shadow: 0 24px 60px -28px rgba(0, 0, 0, 0.9);
@@ -460,8 +522,24 @@
   .frame.vert:active {
     cursor: grabbing;
   }
-  .frame.vert:focus-visible {
-    box-shadow: 0 0 0 2px var(--accent);
+  .frame.vert:focus-visible::after {
+    box-shadow:
+      inset 0 0 0 2px var(--accent),
+      0 0 0 100vmax var(--outside);
+  }
+  /* Lo que el recorte deja fuera se sigue viendo, atenuado: así se sabe qué se pierde al encuadrar.
+     El velo es la sombra del propio marco, que solo pinta por fuera de él. */
+  .frame.vert::after {
+    --outside: color-mix(in srgb, var(--base) 78%, transparent);
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    border-radius: inherit;
+    box-shadow:
+      inset 0 0 0 1px var(--line-strong),
+      0 0 0 100vmax var(--outside);
+    pointer-events: none;
   }
   .frame.vert video {
     position: absolute;
@@ -470,7 +548,12 @@
     object-fit: fill;
     border-radius: 0;
     box-shadow: none;
-    pointer-events: none;
+  }
+  .bg-clip {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    overflow: hidden;
   }
   .bg {
     position: absolute;
