@@ -216,8 +216,9 @@ pub mod win {
         D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT,
     };
     use windows::Win32::Graphics::Direct3D11::{
-        ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET,
-        D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+        ID3D11Device, ID3D11DeviceContext, ID3D11Query, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET,
+        D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_QUERY_DESC, D3D11_QUERY_EVENT,
+        D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
     };
     use windows::Win32::Graphics::Dxgi::Common::{
         DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
@@ -321,6 +322,8 @@ pub mod win {
     pub struct Reframer {
         ctx: ID2D1DeviceContext,
         d3d: ID3D11DeviceContext,
+        // Marca en la cola de la GPU para esperar a que termine el fotograma compuesto.
+        copied: ID3D11Query,
         src_tex: ID3D11Texture2D,
         src_bmp: ID2D1Bitmap1,
         bg_bmp: ID2D1Bitmap1,
@@ -357,6 +360,11 @@ pub mod win {
             let d2d_device = unsafe { D2D1CreateDevice(&dxgi, None)? };
             let ctx = unsafe { d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)? };
             let d3d = unsafe { device.GetImmediateContext()? };
+            let copied = unsafe {
+                let mut q: Option<ID3D11Query> = None;
+                device.CreateQuery(&D3D11_QUERY_DESC { Query: D3D11_QUERY_EVENT, MiscFlags: 0 }, Some(&mut q))?;
+                q.ok_or_else(|| windows::core::Error::from(E_POINTER))?
+            };
 
             let (src_tex, src_bmp) = bgra_texture(device, &ctx, src_w, src_h)?;
 
@@ -450,6 +458,7 @@ pub mod win {
             Ok(Self {
                 ctx,
                 d3d,
+                copied,
                 src_tex,
                 src_bmp,
                 bg_bmp,
@@ -528,6 +537,13 @@ pub mod win {
                 }
                 self.ctx.SetTarget(None);
             }
+            // Copia y dibujo solo quedan encolados en la GPU. Sin esperar, al volver se soltaba la
+            // superficie del decodificador (que podía reutilizarla para un fotograma posterior
+            // antes de la copia) y se entregaba al encoder una textura aún a medio pintar: al
+            // arrancar el export, con la GPU más cargada, ~20 fotogramas del primer segundo salían
+            // con la imagen de 3 fotogramas después y el clip daba tirones. La cola es en orden,
+            // así que esperar al dibujo cubre también la copia.
+            self.wait_for_gpu();
             // Las muestras del asignador nacen con longitud 0 y el sink rechaza una muestra vacía
             // (E_INVALIDARG en WriteSample): la textura ya está llena, así que ocupa el búfer entero.
             let buf = unsafe { out.GetBufferByIndex(0)? };
@@ -585,6 +601,26 @@ pub mod win {
             }
             unsafe { b2.Unlock2D()? };
             Ok(())
+        }
+
+        fn wait_for_gpu(&self) {
+            unsafe {
+                self.d3d.End(&self.copied);
+                self.d3d.Flush();
+                for _ in 0..20_000 {
+                    let mut done = windows::core::BOOL(0);
+                    let r = self.d3d.GetData(
+                        &self.copied,
+                        Some(&mut done as *mut _ as *mut std::ffi::c_void),
+                        std::mem::size_of::<windows::core::BOOL>() as u32,
+                        0,
+                    );
+                    if r.is_err() || done.as_bool() {
+                        return;
+                    }
+                    std::thread::yield_now();
+                }
+            }
         }
 
         // Si todas las texturas siguen en el encoder, se espera a que suelte una; el límite evita
