@@ -100,12 +100,21 @@ export function qualityFactor(quality: QualityKey): number {
   }
 }
 
+// Réplica de effective_fps() y MAX_AUTO_BITRATE del backend: por encima de 60 FPS el bitrate
+// crece con la raíz y nunca pasa de 150 Mbps.
+const MAX_AUTO_BITRATE = 150_000_000;
+
+function effectiveFps(fps: number): number {
+  return fps <= 60 ? fps : 60 * Math.sqrt(fps / 60);
+}
+
 // Estima el bitrate de vídeo (bps) replicando la fórmula del backend
-// (ancho·alto·fps·factor, piso 1 Mbps). Asume 16:9 sobre el alto objetivo: suficiente
-// para una estimación de tamaño en la barra sin conocer el aspecto real de la pantalla.
+// (ancho·alto·fps efectivos·factor, entre 1 y 150 Mbps). Asume 16:9 sobre el alto objetivo:
+// suficiente para una estimación de tamaño en la barra sin conocer el aspecto real de la pantalla.
 function videoBitrate(quality: QualityKey, height: number, fps: number): number {
   const width = Math.round((height * 16) / 9 / 2) * 2;
-  return Math.max(width * height * fps * qualityFactor(quality), 1_000_000);
+  const bps = width * height * effectiveFps(fps) * qualityFactor(quality);
+  return Math.min(Math.max(bps, 1_000_000), MAX_AUTO_BITRATE);
 }
 
 // Tamaño aproximado de un clip de `seconds` con los ajustes dados (vídeo + una pista de audio).

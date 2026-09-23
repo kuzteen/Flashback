@@ -14,8 +14,10 @@ use windows::core::{Result, GUID, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Media::Audio::{
     eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceEnumerator,
-    AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-    AUDCLNT_STREAMFLAGS_LOOPBACK, MMDeviceEnumerator, WAVEFORMATEX, WAVEFORMATEXTENSIBLE,
+    AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
+    AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK,
+    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, MMDeviceEnumerator, WAVEFORMATEX,
+    WAVEFORMATEXTENSIBLE, WAVE_FORMAT_PCM,
 };
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::{
@@ -202,6 +204,103 @@ pub fn spawn_track(
     }
 }
 
+// Stream WASAPI abierto sobre un dispositivo concreto. Si el formato nativo tiene la frecuencia
+// de la pista se lee tal cual (float o PCM16, con downmix propio); si no, se pide a Windows PCM16
+// ya remuestreado y con los canales de la pista (AUTOCONVERTPCM), así un DAC a 96/192 kHz o un
+// micro de 16 kHz entran igual que uno de 48 kHz.
+struct Stream {
+    client: IAudioClient,
+    capture: IAudioCaptureClient,
+    event: HANDLE,
+    channels: u16,
+    block_align: u16,
+    bits: u16,
+    is_float: bool,
+    device_id: String,
+}
+
+impl Drop for Stream {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = self.client.Stop();
+            let _ = CloseHandle(self.event);
+        }
+    }
+}
+
+fn device_id(device: &IMMDevice) -> String {
+    unsafe { device.GetId().ok().and_then(|id| id.to_string().ok()) }.unwrap_or_default()
+}
+
+fn open_stream(kind: &TrackKind, rate: u32, channels: u16) -> Result<Stream> {
+    let device = resolve_device(kind)?;
+    let id = device_id(&device);
+    let client: IAudioClient = unsafe { device.Activate(CLSCTX_ALL, None)? };
+    let pwfx = unsafe { client.GetMixFormat()? };
+    let (mix_rate, mix_ch, mix_align, mix_bits, mix_float) = unsafe {
+        ((*pwfx).nSamplesPerSec, (*pwfx).nChannels, (*pwfx).nBlockAlign, (*pwfx).wBitsPerSample, is_float_format(pwfx))
+    };
+
+    let mut flags: u32 = AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
+    if matches!(kind, TrackKind::SystemLoopback) {
+        flags |= AUDCLNT_STREAMFLAGS_LOOPBACK;
+    }
+    let native = mix_rate == rate && (mix_float || mix_bits == 16);
+    // Buffer de 2s: generoso para no perder paquetes si el hilo se retrasa un momento;
+    // el ritmo real lo marca el evento, no este tamaño.
+    let (init, fmt) = if native {
+        let r = unsafe { client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 20_000_000, 0, pwfx, None) };
+        (r, (mix_ch, mix_align, mix_bits, mix_float))
+    } else {
+        let align = channels * 2;
+        let wanted = WAVEFORMATEX {
+            wFormatTag: WAVE_FORMAT_PCM as u16,
+            nChannels: channels,
+            nSamplesPerSec: rate,
+            nAvgBytesPerSec: rate * align as u32,
+            nBlockAlign: align,
+            wBitsPerSample: 16,
+            cbSize: 0,
+        };
+        let conv = flags | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+        let r = unsafe { client.Initialize(AUDCLNT_SHAREMODE_SHARED, conv, 20_000_000, 0, &wanted, None) };
+        (r, (channels, align, 16, false))
+    };
+    unsafe { CoTaskMemFree(Some(pwfx as *const _)) };
+    init?;
+
+    let event = unsafe { CreateEventW(None, false, false, PCWSTR::null())? };
+    let stream = (|| -> Result<Stream> {
+        unsafe { client.SetEventHandle(event)? };
+        let capture: IAudioCaptureClient = unsafe { client.GetService()? };
+        unsafe { client.Start()? };
+        Ok(Stream {
+            client: client.clone(),
+            capture,
+            event,
+            channels: fmt.0,
+            block_align: fmt.1,
+            bits: fmt.2,
+            is_float: fmt.3,
+            device_id: id,
+        })
+    })();
+    if stream.is_err() {
+        unsafe { let _ = CloseHandle(event); }
+    }
+    stream
+}
+
+enum StreamEnd {
+    Stopped,
+    // El dispositivo desapareció o dejó de ser el de salida por defecto: hay que reabrir.
+    Lost,
+}
+
+// La pista vive lo que dure la captura aunque el dispositivo cambie por debajo: al conectar unos
+// cascos, cambiar la salida por defecto o desenchufar el micro se reabre contra el dispositivo
+// que toque, sin reiniciar la captura. El encoder AAC y el formato de la pista son fijos, así que
+// el clip sigue siendo una sola pista continua; solo queda el hueco del cambio.
 fn run_track(
     kind: &TrackKind,
     encoding: Encoding,
@@ -211,81 +310,86 @@ fn run_track(
     pcm_tap: Option<&Arc<dyn PcmTap>>,
     stop: &Arc<AtomicBool>,
 ) -> Result<()> {
-    let device = resolve_device(kind)?;
-    let client: IAudioClient = unsafe { device.Activate(CLSCTX_ALL, None)? };
-    let pwfx = unsafe { client.GetMixFormat()? };
-    let is_float = unsafe { is_float_format(pwfx) };
-    let block_align = unsafe { (*pwfx).nBlockAlign };
-    let bits = unsafe { (*pwfx).wBitsPerSample };
-    if !is_float && bits != 16 {
-        eprintln!("audio: PCM de {bits} bits no convertible (se capturará silencio); hace falta normalizar el formato");
-    }
-
-    let mut flags: u32 = AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
-    if matches!(kind, TrackKind::SystemLoopback) {
-        flags |= AUDCLNT_STREAMFLAGS_LOOPBACK;
-    }
-
-    // Buffer de 2s: generoso para no perder paquetes si el hilo se retrasa un momento;
-    // el ritmo real lo marca el evento, no este tamaño.
-    let init = unsafe { client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 20_000_000, 0, pwfx, None) };
-    unsafe { CoTaskMemFree(Some(pwfx as *const _)) };
-    init?;
-
-    // El encoder AAC solo admite 1-2 canales: capturamos a `channels` nativos y hacemos
-    // downmix a `dst_ch` (mono/estéreo) antes de codificar/empujar.
-    let dst_ch = target_channels(channels);
-
-    let event = unsafe { CreateEventW(None, false, false, PCWSTR::null())? };
-    let result = run_track_loop(
-        &client, &event, channels, dst_ch, block_align, bits, is_float, sample_rate, encoding,
-        sink, pcm_tap, stop,
-    );
-    unsafe { let _ = CloseHandle(event); }
-    result
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_track_loop(
-    client: &IAudioClient,
-    event: &windows::Win32::Foundation::HANDLE,
-    channels: u16,
-    dst_ch: u16,
-    block_align: u16,
-    bits: u16,
-    is_float: bool,
-    sample_rate: u32,
-    encoding: Encoding,
-    sink: &Arc<dyn AudioSink>,
-    pcm_tap: Option<&Arc<dyn PcmTap>>,
-    stop: &Arc<AtomicBool>,
-) -> Result<()> {
-    unsafe { client.SetEventHandle(*event)? };
-    let capture: IAudioCaptureClient = unsafe { client.GetService()? };
-
+    let (rate, dst_ch) = aac_target_format(sample_rate, channels);
     let mut aac = match encoding {
-        Encoding::Aac(bitrate) => match build_aac_encoder(sample_rate, dst_ch, bitrate) {
+        Encoding::Aac(bitrate) => match build_aac_encoder(rate, dst_ch, bitrate) {
             Ok(enc) => Some(enc),
             Err(e) => {
-                eprintln!(
-                    "audio: el encoder AAC rechazó el formato (rate={sample_rate} ch={dst_ch} bitrate={bitrate}): {e:?}"
-                );
+                eprintln!("audio: el encoder AAC rechazó el formato (rate={rate} ch={dst_ch} bitrate={bitrate}): {e:?}");
                 return Err(e);
             }
         },
     };
 
-    unsafe { client.Start()? };
+    let mut open_err_logged = false;
+    while !stop.load(Ordering::SeqCst) {
+        match open_stream(kind, rate, dst_ch) {
+            Ok(stream) => {
+                open_err_logged = false;
+                match pump_stream(&stream, kind, rate, dst_ch, &mut aac, sink, pcm_tap, stop) {
+                    StreamEnd::Stopped => break,
+                    StreamEnd::Lost => eprintln!("audio: el dispositivo cambió o se perdió; reabriendo la pista"),
+                }
+            }
+            Err(e) => {
+                if !open_err_logged {
+                    eprintln!("audio: no se pudo abrir el dispositivo; se reintenta cada segundo: {e:?}");
+                    open_err_logged = true;
+                }
+            }
+        }
+        for _ in 0..10 {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pump_stream(
+    stream: &Stream,
+    kind: &TrackKind,
+    sample_rate: u32,
+    dst_ch: u16,
+    aac: &mut Option<AacEncoder>,
+    sink: &Arc<dyn AudioSink>,
+    pcm_tap: Option<&Arc<dyn PcmTap>>,
+    stop: &Arc<AtomicBool>,
+) -> StreamEnd {
+    // Solo el loopback sigue a la salida por defecto; un micro es un dispositivo concreto y su
+    // desaparición llega como error de lectura.
+    let enumerator: Option<IMMDeviceEnumerator> = matches!(kind, TrackKind::SystemLoopback)
+        .then(|| unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }.ok())
+        .flatten();
+    let mut last_check = std::time::Instant::now();
 
     while !stop.load(Ordering::SeqCst) {
         // El evento despierta de inmediato en captura normal (micrófono). En el loopback de
         // sistema el evento puede no señalizarse, así que NO condicionamos el drenaje a
         // WAIT_OBJECT_0: el timeout actúa como sondeo y, en ambos casos, vaciamos los
-        // paquetes disponibles. (Antes, en loopback, el timeout hacía `continue` y el audio
-        // del sistema no se capturaba jamás.)
-        unsafe { WaitForSingleObject(*event, 100); }
+        // paquetes disponibles.
+        unsafe { WaitForSingleObject(stream.event, 100); }
+
+        if let Some(en) = &enumerator {
+            if last_check.elapsed() >= std::time::Duration::from_secs(1) {
+                last_check = std::time::Instant::now();
+                let current = unsafe { en.GetDefaultAudioEndpoint(eRender, eConsole) }
+                    .map(|d| device_id(&d))
+                    .unwrap_or_default();
+                if !current.is_empty() && current != stream.device_id {
+                    return StreamEnd::Lost;
+                }
+            }
+        }
+
         loop {
-            let packet = unsafe { capture.GetNextPacketSize() }.unwrap_or(0);
+            let packet = match unsafe { stream.capture.GetNextPacketSize() } {
+                Ok(n) => n,
+                Err(_) => return StreamEnd::Lost,
+            };
             if packet == 0 {
                 break;
             }
@@ -293,39 +397,39 @@ fn run_track_loop(
             let mut frames = 0u32;
             let mut buf_flags = 0u32;
             let mut qpc = 0u64;
-            unsafe {
-                capture.GetBuffer(&mut data_ptr, &mut frames, &mut buf_flags, None, Some(&mut qpc))?;
+            if unsafe { stream.capture.GetBuffer(&mut data_ptr, &mut frames, &mut buf_flags, None, Some(&mut qpc)) }.is_err() {
+                return StreamEnd::Lost;
             }
             let silent = buf_flags & (AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0;
-            let byte_len = frames as usize * block_align as usize;
+            let byte_len = frames as usize * stream.block_align as usize;
             let pcm16 = if silent {
-                vec![0u8; frames as usize * channels as usize * 2]
+                vec![0u8; frames as usize * stream.channels as usize * 2]
             } else {
                 let raw = unsafe { std::slice::from_raw_parts(data_ptr, byte_len) };
-                if is_float {
+                if stream.is_float {
                     float_to_pcm16(raw)
-                } else if bits == 16 {
+                } else if stream.bits == 16 {
                     raw.to_vec()
                 } else {
                     Vec::new()
                 }
             };
-            unsafe { capture.ReleaseBuffer(frames)? };
+            if unsafe { stream.capture.ReleaseBuffer(frames) }.is_err() {
+                return StreamEnd::Lost;
+            }
 
             if !pcm16.is_empty() && frames > 0 {
-                let out = downmix(&pcm16, channels as usize, dst_ch as usize);
+                let out = downmix(&pcm16, stream.channels as usize, dst_ch as usize);
                 let dur = (frames as i64 * 10_000_000) / sample_rate.max(1) as i64;
                 let time = qpc as i64;
                 if let Some(tap) = pcm_tap {
                     tap.on_pcm(&out, time, dur);
                 }
-                emit_encoded(&mut aac, out, time, dur, sink);
+                emit_encoded(aac, out, time, dur, sink);
             }
         }
     }
-
-    unsafe { let _ = client.Stop(); }
-    Ok(())
+    StreamEnd::Stopped
 }
 
 // Codifica (AAC) o reenvía (PCM) un bloque ya downmezclado al sink. Compartido por las
@@ -376,14 +480,11 @@ fn target_channels(channels: u16) -> u16 {
 }
 
 // El encoder AAC de Media Foundation solo admite 1-2 canales y 44100/48000 Hz. Dado el
-// formato nativo del dispositivo, devuelve el formato AAC admisible más cercano (downmix a
-// mono/estéreo) o None si el sample rate exigiría remuestreo (en ese caso el audio se omite
-// en vez de romper la captura; los dispositivos virtuales 7.1 que vemos aquí ya son 48 kHz).
-pub fn aac_target_format(rate: u32, channels: u16) -> Option<(u32, u16)> {
-    if rate != 44100 && rate != 48000 {
-        return None;
-    }
-    Some((rate, target_channels(channels)))
+// formato nativo del dispositivo, devuelve el formato de la pista: su misma frecuencia si el AAC
+// la admite y 48 kHz si no (Windows remuestrea al abrir, ver open_stream), en mono o estéreo.
+pub fn aac_target_format(rate: u32, channels: u16) -> (u32, u16) {
+    let rate = if rate == 44100 || rate == 48000 { rate } else { 48000 };
+    (rate, target_channels(channels))
 }
 
 // Downmix de PCM16 entrelazado de `src` canales a `dst` (1 o 2). Para >2 canales aplica la

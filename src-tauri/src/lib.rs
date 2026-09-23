@@ -120,8 +120,15 @@ fn set_watermark_corner(app: tauri::AppHandle, corner: String) -> Result<(), Str
     config::set_watermark_corner(&app, &corner)
 }
 
+// Los comandos de captura van fuera del hilo principal: un comando síncrono de Tauri corre en él,
+// y construir el pipeline, pararlo o muxear un replay de minutos congelaba la ventana (y retenía
+// los atajos globales, que también llegan por ese hilo) mientras duraba.
+async fn off_main<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
+    tokio::task::spawn_blocking(f).await.map_err(|e| format!("Error interno: {e}"))
+}
+
 #[tauri::command]
-fn start_capture(
+async fn start_capture(
     app: tauri::AppHandle,
     target: String,
     fps: u32,
@@ -130,25 +137,18 @@ fn start_capture(
     bitrate: u32,
     mic: bool,
     mic_device: String,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let dir = config::clips_dir(&app).to_string_lossy().into_owned();
     let encoder_pref = config::get_encoder(&app);
-    capture::start(
-        target,
-        dir,
-        fps,
-        quality,
-        resolution,
-        bitrate,
-        mic,
-        mic_device,
-        encoder_pref,
-    )
+    off_main(move || {
+        capture::start(target, dir, fps, quality, resolution, bitrate, mic, mic_device, encoder_pref)
+    })
+    .await?
 }
 
 #[tauri::command]
-fn stop_capture() -> Option<String> {
-    capture::stop()
+async fn stop_capture() -> Option<String> {
+    off_main(capture::stop).await.ok().flatten()
 }
 
 #[tauri::command]
@@ -157,7 +157,7 @@ fn capture_status() -> capture::CaptureStatus {
 }
 
 #[tauri::command]
-fn start_replay(
+async fn start_replay(
     app: tauri::AppHandle,
     target: String,
     seconds: u32,
@@ -180,30 +180,33 @@ fn start_replay(
         _ => "We'll be here when you're back",
     }
     .to_string();
-    capture::start_replay(
-        target,
-        dir,
-        seconds,
-        fps,
-        quality,
-        resolution,
-        bitrate,
-        mic,
-        mic_device,
-        encoder_pref,
-        on_retarget,
-        card_text,
-    )
+    off_main(move || {
+        capture::start_replay(
+            target,
+            dir,
+            seconds,
+            fps,
+            quality,
+            resolution,
+            bitrate,
+            mic,
+            mic_device,
+            encoder_pref,
+            on_retarget,
+            card_text,
+        )
+    })
+    .await?
 }
 
 #[tauri::command]
-fn stop_replay() {
-    capture::stop_replay();
+async fn stop_replay() {
+    let _ = off_main(capture::stop_replay).await;
 }
 
 #[tauri::command]
-fn save_replay(source: String) -> Option<String> {
-    capture::save_replay(&source)
+async fn save_replay(source: String) -> Option<String> {
+    off_main(move || capture::save_replay(&source)).await.ok().flatten()
 }
 
 #[tauri::command]

@@ -14,11 +14,16 @@ struct LiveMuxState {
     seq_header: Vec<u8>,
     sys_hdr: Option<(Vec<u8>, u32)>,
     mic_hdr: Option<(Vec<u8>, u32)>,
-    pending: Vec<(Option<AudioRole>, Vec<u8>, i64, i64, bool)>,
+    pending: Vec<(Option<AudioRole>, Bytes, i64, i64, bool)>,
     writing: bool,
     finalized: bool,
     first_pkt_at: Option<Instant>,
     failed: bool,
+    // Continuidad entre segmentos del pipeline (ver new_segment): `shift` se suma a los tiempos
+    // de entrada; `max_end` es el final del último paquete aceptado, ya desplazado.
+    shift: i64,
+    max_end: i64,
+    shift_pending: bool,
 }
 
 pub(super) struct LiveMux {
@@ -73,8 +78,37 @@ impl LiveMux {
                 finalized: false,
                 first_pkt_at: None,
                 failed: false,
+                shift: 0,
+                max_end: i64::MIN,
+                shift_pending: false,
             }),
         })
+    }
+
+    pub(super) fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub(super) fn dims(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    pub(super) fn audio_formats(&self) -> (Option<(u32, u16)>, Option<(u32, u16)>) {
+        (self.sys, self.mic)
+    }
+
+    // El pipeline que alimenta este muxer se reconstruyó (otra ventana del juego, device perdido)
+    // con el mismo tamaño: sus tiempos vuelven a empezar en ~0. El siguiente keyframe se coloca
+    // justo tras lo ya escrito, así la grabación sigue en el mismo archivo sin salto atrás. El
+    // audio que llegue antes de ese keyframe se descarta (menos de un fotograma de hueco).
+    pub(super) fn new_segment(&self) {
+        let mut st = self.st.lock_ok();
+        if st.max_end == i64::MIN {
+            st.base = i64::MIN;
+            st.pending.clear();
+        } else {
+            st.shift_pending = true;
+        }
     }
 
     #[cfg(test)]
@@ -85,6 +119,11 @@ impl LiveMux {
     pub(super) fn set_header_timeout(&self, d: Duration) {
         *self.header_timeout.lock_ok() = d;
     }
+    #[cfg(test)]
+    pub(super) fn max_end(&self) -> i64 {
+        self.st.lock_ok().max_end
+    }
+
     #[cfg(test)]
     pub(super) fn mic_stream_is_none(&self) -> bool {
         self.st.lock_ok().mic_stream.is_none()
@@ -98,11 +137,13 @@ impl LiveMux {
         }
     }
 
-    pub(super) fn push_audio(&self, role: AudioRole, data: Vec<u8>, time: i64, dur: i64) {
+    pub(super) fn push_audio(&self, role: AudioRole, data: Bytes, time: i64, dur: i64) {
         let mut st = self.st.lock_ok();
-        if st.finalized || st.failed {
+        if st.finalized || st.failed || st.shift_pending {
             return;
         }
+        let time = time + st.shift;
+        st.max_end = st.max_end.max(time + dur);
         st.first_pkt_at.get_or_insert_with(Instant::now);
         if st.writing {
             self.write_one(&mut st, Some(role), data, time, dur, false);
@@ -224,7 +265,7 @@ impl LiveMux {
         &self,
         st: &mut LiveMuxState,
         role: Option<AudioRole>,
-        data: Vec<u8>,
+        data: Bytes,
         time: i64,
         dur: i64,
         key: bool,
@@ -300,19 +341,21 @@ impl LiveMux {
     }
 }
 
-impl VideoPacketSink for LiveMux {
-    fn set_seq_header(&self, bytes: Vec<u8>) {
-        let mut st = self.st.lock_ok();
-        if st.seq_header.is_empty() {
-            st.seq_header = bytes;
-            self.try_begin(&mut st);
-        }
-    }
-    fn push_video(&self, data: Vec<u8>, time: i64, dur: i64, key: bool) {
+impl LiveMux {
+    pub(super) fn push_video_bytes(&self, data: Bytes, time: i64, dur: i64, key: bool) {
         let mut st = self.st.lock_ok();
         if st.finalized || st.failed {
             return;
         }
+        if st.shift_pending {
+            if !key {
+                return;
+            }
+            st.shift = st.max_end - time;
+            st.shift_pending = false;
+        }
+        let time = time + st.shift;
+        st.max_end = st.max_end.max(time + dur);
         st.first_pkt_at.get_or_insert_with(Instant::now);
         // El primer keyframe fija la base temporal; antes de él se descarta (un MP4 no puede
         // empezar fuera de un IDR, igual que save_replay).
@@ -331,10 +374,23 @@ impl VideoPacketSink for LiveMux {
     }
 }
 
+impl VideoPacketSink for LiveMux {
+    fn set_seq_header(&self, bytes: Vec<u8>) {
+        let mut st = self.st.lock_ok();
+        if st.seq_header.is_empty() {
+            st.seq_header = bytes;
+            self.try_begin(&mut st);
+        }
+    }
+    fn push_video(&self, data: Vec<u8>, time: i64, dur: i64, key: bool) {
+        self.push_video_bytes(Arc::new(data), time, dur, key);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn mux_replay(
     path: &str,
-    packets: &[(Vec<u8>, i64, i64, bool)],
+    packets: &[(Bytes, i64, i64, bool)],
     seq_header: &[u8],
     width: u32,
     height: u32,
@@ -390,9 +446,20 @@ pub(super) fn mux_replay(
 
     unsafe { writer.BeginWriting()? };
 
+    // El audio se escribe intercalado con el vídeo, cada paquete en su momento. El sink MP4
+    // retiene el vídeo hasta que el audio alcanza su marca temporal: con todo el audio al final
+    // guardaba el replay entero en memoria (otra copia de GB con buffers largos) antes de soltarlo.
     let base = packets[0].1;
+    let mut sys_next = 0usize;
+    let mut mic_next = 0usize;
     let n = packets.len();
     for i in 0..n {
+        if let (Some(stream), Some(track)) = (sys_stream, &sys_audio) {
+            write_audio_until(&writer, stream, track, base, packets[i].1, &mut sys_next)?;
+        }
+        if let (Some(stream), Some(track)) = (mic_stream, &mic_audio) {
+            write_audio_until(&writer, stream, track, base, packets[i].1, &mut mic_next)?;
+        }
         let data = &packets[i].0;
         let time = packets[i].1;
         let key = packets[i].3;
@@ -425,10 +492,10 @@ pub(super) fn mux_replay(
     }
 
     if let (Some(stream), Some(track)) = (sys_stream, &sys_audio) {
-        write_audio_track(&writer, stream, track, base)?;
+        write_audio_until(&writer, stream, track, base, i64::MAX, &mut sys_next)?;
     }
     if let (Some(stream), Some(track)) = (mic_stream, &mic_audio) {
-        write_audio_track(&writer, stream, track, base)?;
+        write_audio_until(&writer, stream, track, base, i64::MAX, &mut mic_next)?;
     }
 
     unsafe { writer.Finalize()? };
@@ -491,16 +558,22 @@ fn add_aac_passthrough_stream(writer: &IMFSinkWriter, track: &AudioMuxTrack) -> 
     Ok(stream)
 }
 
-// Paquetes AAC ya codificados: se rebasan al mismo origen que el vídeo (`base`,
-// el primer paquete de vídeo tras alinear al keyframe) y se descartan los que
-// quedan antes de ese punto, ya que el contenedor no admite timestamps negativos.
-fn write_audio_track(
+// Paquetes AAC ya codificados, desde `next` hasta el primero posterior a `until`: se rebasan al
+// mismo origen que el vídeo (`base`, el primer paquete de vídeo tras alinear al keyframe) y se
+// descartan los que quedan antes de ese punto, ya que el contenedor no admite timestamps negativos.
+fn write_audio_until(
     writer: &IMFSinkWriter,
     stream: u32,
     track: &AudioMuxTrack,
     base: i64,
+    until: i64,
+    next: &mut usize,
 ) -> Result<()> {
-    for (data, time, dur) in &track.packets {
+    while let Some((data, time, dur)) = track.packets.get(*next) {
+        if *time > until {
+            break;
+        }
+        *next += 1;
         if *time < base {
             continue;
         }

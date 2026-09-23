@@ -73,6 +73,8 @@
   let selectedMonitor = $state<string | null>(null);
   let pickerOpen = $state(false);
   let recording = $state(false);
+  // La grabación va colgada del replay (mismo encoder): si el replay se reinicia, se cierra antes.
+  let recordingTapped = false;
   let micOn = $state(captureConfig.mic);
   let audioInputs = $state<AudioInput[]>([]);
   let micInput = $state(captureConfig.micDevice);
@@ -253,7 +255,7 @@
       return;
     }
     try {
-      await invoke('start_capture', {
+      recordingTapped = await invoke<boolean>('start_capture', {
         target,
         fps: captureConfig.fps,
         quality: captureConfig.quality,
@@ -273,6 +275,7 @@
   async function stopRecording() {
     if (!recording) return;
     recording = false;
+    recordingTapped = false;
     try {
       const path = await invoke<string | null>('stop_capture');
       if (path) {
@@ -489,6 +492,7 @@
     lastReplayKey = key;
     (async () => {
       try {
+        if (recording && recordingTapped) await stopRecording();
         await invoke('stop_replay');
         if (key !== 'off') {
           await invoke('start_replay', { target, seconds, fps, quality, resolution, bitrate, mic, micDevice });

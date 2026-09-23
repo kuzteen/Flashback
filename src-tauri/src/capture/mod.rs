@@ -58,7 +58,7 @@ pub fn start(
     _mic: bool,
     _mic_device: String,
     _encoder_pref: String,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     Err("La captura solo está disponible en Windows".into())
 }
 

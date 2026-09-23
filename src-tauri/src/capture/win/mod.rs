@@ -97,7 +97,15 @@ struct Running {
     result: Arc<Mutex<Option<String>>>,
 }
 
-static STATE: Mutex<Option<Running>> = Mutex::new(None);
+// Grabación manual en curso. Con el replay activo sobre el mismo objetivo se engancha a él
+// (Tapped): mismo encoder, sin segunda captura ni segunda codificación, y sigue los rebuilds del
+// replay (otra ventana del juego, device perdido). Sin replay usa su propio pipeline (Own).
+enum Manual {
+    Own(Running),
+    Tapped { buffer: Arc<Mutex<ReplayBuffer>>, started: Instant },
+}
+
+static STATE: Mutex<Option<Manual>> = Mutex::new(None);
 
 // Recuperación de envenenamiento (§4.4): si un hilo del pipeline hace panic mientras
 // sostiene un lock, el Mutex queda envenenado. Sin esto, TODO lock().unwrap() posterior
@@ -188,10 +196,25 @@ pub fn start(
     mic: bool,
     mic_device: String,
     encoder_pref: String,
-) -> std::result::Result<(), String> {
+) -> std::result::Result<bool, String> {
     let mut guard = STATE.lock_ok();
-    if guard.is_some() {
-        return Ok(());
+    if let Some(m) = guard.as_ref() {
+        return Ok(matches!(m, Manual::Tapped { .. }));
+    }
+
+    let replay = REPLAY_STATE
+        .lock_ok()
+        .as_ref()
+        .filter(|r| r.target == target)
+        .map(|r| r.buffer.clone());
+    if let Some(buffer) = replay {
+        // Sin ningún keyframe todavía en el buffer (replay recién armado o juego minimizado desde
+        // el arranque) no hay desde dónde empezar: se cae al pipeline propio.
+        let attached = buffer.lock_ok().attach_recording(&out_dir);
+        if attached.is_some() {
+            *guard = Some(Manual::Tapped { buffer, started: Instant::now() });
+            return Ok(true);
+        }
     }
 
     let fps = clamp_fps(fps);
@@ -220,14 +243,14 @@ pub fn start(
     // de ponerse a recibir frames; así start() puede devolver un fallo real.
     match ready_rx.recv() {
         Ok(Ok(())) => {
-            *guard = Some(Running {
+            *guard = Some(Manual::Own(Running {
                 stop,
                 handle: Some(handle),
                 stats,
                 started: Instant::now(),
                 result,
-            });
-            Ok(())
+            }));
+            Ok(false)
         }
         Ok(Err(e)) => {
             let _ = handle.join();
@@ -239,29 +262,47 @@ pub fn start(
 
 // Devuelve la ruta del MP4 guardado (None si algo falló al finalizar el muxer).
 pub fn stop() -> Option<String> {
-    let running = STATE.lock_ok().take();
-    if let Some(mut running) = running {
-        let (lock, cv) = &*running.stop;
-        *lock.lock_ok() = true;
-        cv.notify_all();
-        if let Some(h) = running.handle.take() {
-            let _ = h.join();
+    let manual = STATE.lock_ok().take();
+    match manual {
+        Some(Manual::Own(mut running)) => {
+            let (lock, cv) = &*running.stop;
+            *lock.lock_ok() = true;
+            cv.notify_all();
+            if let Some(h) = running.handle.take() {
+                let _ = h.join();
+            }
+            running.result.lock_ok().take()
         }
-        return running.result.lock_ok().take();
+        // Se suelta del buffer bajo su lock y se cierra fuera de él: el Finalize del MP4 no debe
+        // frenar al encoder, que sigue alimentando el replay.
+        Some(Manual::Tapped { buffer, .. }) => {
+            let rec = buffer.lock_ok().recording.take();
+            rec.and_then(Recording::finish)
+        }
+        None => None,
     }
-    None
 }
 
 pub fn status() -> CaptureStatus {
     let guard = STATE.lock_ok();
     match guard.as_ref() {
-        Some(r) => CaptureStatus {
+        Some(Manual::Own(r)) => CaptureStatus {
             running: true,
             frames: r.stats.frames.load(Ordering::Relaxed),
             width: r.stats.width.load(Ordering::Relaxed),
             height: r.stats.height.load(Ordering::Relaxed),
             seconds: r.started.elapsed().as_secs_f64(),
         },
+        Some(Manual::Tapped { buffer, started }) => {
+            let b = buffer.lock_ok();
+            CaptureStatus {
+                running: true,
+                frames: 0,
+                width: b.width,
+                height: b.height,
+                seconds: started.elapsed().as_secs_f64(),
+            }
+        }
         None => CaptureStatus::default(),
     }
 }
@@ -334,7 +375,7 @@ fn capture_thread(
     // Orden de parada: cortar primero las fuentes (WGC + audio) para que el flush final de
     // audio vea las colas completas, y luego cerrar el MP4.
     teardown_replay(pipe);
-    *result.lock_ok() = mux.finalize();
+    *result.lock_ok() = finish_mux(&mux);
 
     // Si el pump salió por su cuenta (no por stop del usuario), destraba el hilo puente.
     {
@@ -361,8 +402,12 @@ const CLSID_VIDEO_PROCESSOR_MFT: GUID = GUID::from_u128(0x88753b26_5b24_49bd_b2e
 const ME_TRANSFORM_NEED_INPUT: u32 = 601;
 const ME_TRANSFORM_HAVE_OUTPUT: u32 = 602;
 
+// Datos de un paquete ya codificado, compartidos por referencia: guardar el replay o engancharle
+// una grabación toma los paquetes sin copiar sus bytes (con un buffer de minutos serían GB).
+type Bytes = Arc<Vec<u8>>;
+
 struct Packet {
-    data: Vec<u8>,
+    data: Bytes,
     time: i64,
     dur: i64,
     key: bool,
@@ -393,7 +438,7 @@ impl AudioTrackBuf {
         }
     }
 
-    fn push(&mut self, data: Vec<u8>, time: i64, dur: i64) {
+    fn push(&mut self, data: Bytes, time: i64, dur: i64) {
         self.packets.push_back(Packet { data, time, dur, key: false });
         let Some(latest) = self.packets.back().map(|p| p.time) else {
             return;
@@ -412,7 +457,7 @@ impl AudioTrackBuf {
 // Copia inmutable de una pista de audio del ring buffer, lista para muxear sin
 // mantener el lock de ReplayBuffer mientras se escribe a disco.
 struct AudioMuxTrack {
-    packets: Vec<(Vec<u8>, i64, i64)>,
+    packets: Vec<(Bytes, i64, i64)>,
     sample_rate: u32,
     channels: u16,
     bitrate: u32,
@@ -443,6 +488,9 @@ struct ReplayBuffer {
     window_ns: i64,
     sys_audio: Option<AudioTrackBuf>,
     mic_audio: Option<AudioTrackBuf>,
+    // Grabación manual enganchada al replay: recibe los mismos paquetes que el ring, bajo el
+    // mismo lock, así no hay paquetes perdidos ni repetidos al engancharla o soltarla.
+    recording: Option<Recording>,
 }
 
 impl ReplayBuffer {
@@ -457,6 +505,7 @@ impl ReplayBuffer {
             window_ns: seconds.max(1) as i64 * 10_000_000,
             sys_audio: None,
             mic_audio: None,
+            recording: None,
         }
     }
 
@@ -503,6 +552,10 @@ impl ReplayBuffer {
     }
 
     fn push_audio(&mut self, role: AudioRole, data: Vec<u8>, time: i64, dur: i64) {
+        let data = Arc::new(data);
+        if let Some(rec) = &self.recording {
+            rec.mux.push_audio(role, data.clone(), time, dur);
+        }
         if let Some(t) = self.track_mut(role) {
             t.push(data, time, dur);
         }
@@ -515,14 +568,79 @@ impl ReplayBuffer {
     }
 
     fn set_payload_type(&mut self, role: AudioRole, v: u32) {
-        if let Some(t) = self.track_mut(role) {
+        let header = self.track_mut(role).map(|t| {
             t.payload_type = v;
+            t.user_data.clone()
+        });
+        if let (Some(rec), Some(ud)) = (&self.recording, header) {
+            if !ud.is_empty() {
+                rec.mux.set_audio_header(role, ud, v);
+            }
         }
     }
 
     fn push(&mut self, data: Vec<u8>, time: i64, dur: i64, key: bool) {
+        let data = Arc::new(data);
+        if let Some(rec) = &self.recording {
+            rec.mux.push_video_bytes(data.clone(), time, dur, key);
+        }
         self.packets.push_back(Packet { data, time, dur, key });
         self.trim();
+    }
+
+    fn audio_formats(&self) -> (Option<(u32, u16)>, Option<(u32, u16)>) {
+        let fmt = |t: &Option<AudioTrackBuf>| t.as_ref().map(|t| (t.sample_rate, t.channels));
+        (fmt(&self.sys_audio), fmt(&self.mic_audio))
+    }
+
+    // Engancha una grabación manual al replay. Arranca desde el último keyframe del buffer (hasta
+    // ~1 s antes de pulsar), con sus cabeceras ya conocidas, así empieza al instante y sin esperar
+    // al siguiente keyframe del encoder.
+    fn attach_recording(&mut self, out_dir: &str) -> Option<String> {
+        let start = self.packets.iter().rposition(|p| p.key)?;
+        let (sys, mic) = self.audio_formats();
+        let mux = LiveMux::new(reserve_clip_path(out_dir), self.width, self.height, self.fps, self.bitrate, sys, mic);
+        if !self.seq_header.is_empty() {
+            mux.set_seq_header(self.seq_header.clone());
+        }
+        let from = self.packets[start].time;
+        for (role, track) in [(AudioRole::Sys, &self.sys_audio), (AudioRole::Mic, &self.mic_audio)] {
+            if let Some(t) = track {
+                if !t.user_data.is_empty() {
+                    mux.set_audio_header(role, t.user_data.clone(), t.payload_type);
+                }
+            }
+        }
+        for p in self.packets.iter().skip(start) {
+            mux.push_video_bytes(p.data.clone(), p.time, p.dur, p.key);
+        }
+        for (role, track) in [(AudioRole::Sys, &self.sys_audio), (AudioRole::Mic, &self.mic_audio)] {
+            if let Some(t) = track {
+                for p in t.packets.iter().filter(|p| p.time >= from) {
+                    mux.push_audio(role, p.data.clone(), p.time, p.dur);
+                }
+            }
+        }
+        let path = mux.path().to_string();
+        self.recording = Some(Recording { mux, out_dir: out_dir.to_string(), parts: Vec::new() });
+        Some(path)
+    }
+
+    // Tras reconstruir el pipeline (llamar después de init_audio): con el mismo tamaño y audio la
+    // grabación sigue en su archivo; si cambió, el MP4 no puede cambiar de formato a mitad, así
+    // que se cierra esa parte y sigue en un archivo nuevo.
+    fn recording_segment(&mut self) {
+        let (w, h, fps, bitrate) = (self.width, self.height, self.fps, self.bitrate);
+        let (sys, mic) = self.audio_formats();
+        let Some(rec) = self.recording.as_mut() else { return };
+        if rec.mux.dims() == (w, h) && rec.mux.audio_formats() == (sys, mic) {
+            rec.mux.new_segment();
+            return;
+        }
+        if let Some(path) = finish_mux(&rec.mux) {
+            rec.parts.push(path);
+        }
+        rec.mux = LiveMux::new(reserve_clip_path(&rec.out_dir), w, h, fps, bitrate, sys, mic);
     }
 
     // Mantener acotado el buffer: descartar hasta el último keyframe anterior al
@@ -558,11 +676,39 @@ trait VideoPacketSink: Send + Sync + 'static {
 
 impl VideoPacketSink for Mutex<ReplayBuffer> {
     fn set_seq_header(&self, bytes: Vec<u8>) {
-        self.lock_ok().seq_header = bytes;
+        let mut b = self.lock_ok();
+        if let Some(rec) = &b.recording {
+            rec.mux.set_seq_header(bytes.clone());
+        }
+        b.seq_header = bytes;
     }
     fn push_video(&self, data: Vec<u8>, time: i64, dur: i64, key: bool) {
         self.lock_ok().push(data, time, dur, key);
     }
+}
+
+// Grabación manual que vive colgada del replay. Si un rebuild cambia el formato, las partes ya
+// cerradas quedan en `parts` y se sigue en un archivo nuevo.
+struct Recording {
+    mux: Arc<LiveMux>,
+    out_dir: String,
+    parts: Vec<String>,
+}
+
+impl Recording {
+    fn finish(self) -> Option<String> {
+        finish_mux(&self.mux).or_else(|| self.parts.last().cloned())
+    }
+}
+
+// Cierra el MP4 de una grabación; si no quedó un clip válido (nada grabado o el muxer falló)
+// borra el archivo reservado o a medio escribir, que sin índice no se puede reproducir.
+fn finish_mux(mux: &LiveMux) -> Option<String> {
+    let saved = mux.finalize();
+    if saved.is_none() {
+        let _ = std::fs::remove_file(mux.path());
+    }
+    saved
 }
 
 struct ReplayRunning {
@@ -570,6 +716,7 @@ struct ReplayRunning {
     handle: Option<JoinHandle<()>>,
     buffer: Arc<Mutex<ReplayBuffer>>,
     out_dir: String,
+    target: String,
 }
 
 static REPLAY_STATE: Mutex<Option<ReplayRunning>> = Mutex::new(None);
@@ -643,6 +790,7 @@ pub fn start_replay(
 
     let stop_t = stop.clone();
     let buf_t = buffer.clone();
+    let target_kept = target.clone();
     let handle = std::thread::Builder::new()
         .name("flashback-replay".into())
         .spawn(move || {
@@ -662,6 +810,7 @@ pub fn start_replay(
                 handle: Some(handle),
                 buffer,
                 out_dir,
+                target: target_kept,
             });
             Ok(())
         }
@@ -699,7 +848,9 @@ pub fn save_replay(source: &str) -> Option<String> {
     let (packets, total, seq_header, width, height, fps, bitrate, sys_audio, mic_audio) = {
         let buf = buffer.lock_ok();
         let start = buf.packets.iter().position(|p| p.key);
-        let pkts: Vec<(Vec<u8>, i64, i64, bool)> = match start {
+        // Solo se copian referencias: el lock dura lo mismo con 30 s que con 15 min de buffer y
+        // la RAM no se duplica al guardar.
+        let pkts: Vec<(Bytes, i64, i64, bool)> = match start {
             Some(s) => buf
                 .packets
                 .iter()
@@ -752,7 +903,7 @@ pub fn save_replay(source: &str) -> Option<String> {
         None => None,
     };
 
-    let path = format!("{out_dir}\\{}", clip_filename());
+    let path = reserve_clip_path(&out_dir);
     // save_replay corre en el hilo de Tauri (STA), pero el sink MP4 con AAC crea
     // componentes de Media Foundation que exigen apartamento MTA (sin él, Finalize
     // falla con "clase no registrada"). Se muxea en un hilo propio MTA, mismo patrón
@@ -853,16 +1004,18 @@ fn replay_thread(
                 }
                 run_pump(&pipe, &stop, &video_sink, window_mode);
                 let lost = pipe.device_lost.load(Ordering::SeqCst);
+                let resized = pipe.size_changed.load(Ordering::SeqCst);
                 let retargeted = pipe.retarget.load(Ordering::SeqCst);
                 teardown_replay(pipe);
                 if stop.load(Ordering::SeqCst) {
                     break;
                 }
-                // Modo monitor sin pérdida de device: fin normal (hoy el pump solo retorna por
-                // stop, size_changed o device_lost; en monitor no hay resize, así que es
-                // defensivo). Con el device perdido se reconstruye también en modo monitor: el
-                // build siguiente crea un device nuevo y conserva el ring si el tamaño coincide.
-                if !window_mode && !lost {
+                // En modo monitor el pump solo sale por stop, device perdido o cambio de tamaño, y
+                // un monitor sí cambia de tamaño: un juego a pantalla completa que cambia la
+                // resolución, una tele que se conecta o un cambio en Configuración. Antes eso
+                // terminaba el hilo y el replay quedaba "activo" sin grabar nada; ahora se
+                // reconstruye al tamaño nuevo, igual que con el device perdido.
+                if !window_mode && !lost && !resized {
                     break;
                 }
                 retargeting = retargeted;
@@ -1300,8 +1453,8 @@ fn build_replay(
         }
         None
     };
-    let sys_target = sys_native.and_then(|(r, c)| audio::aac_target_format(r, c));
-    let mic_target = mic_native.and_then(|(r, c)| audio::aac_target_format(r, c));
+    let sys_target = sys_native.map(|(r, c)| audio::aac_target_format(r, c));
+    let mic_target = mic_native.map(|(r, c)| audio::aac_target_format(r, c));
 
     let core = build_pipeline_core(
         stats, item, fps, factor, resolution, bitrate_override, encoder_pref, window_mode,
@@ -1313,6 +1466,7 @@ fn build_replay(
         let mut b = buffer.lock_ok();
         b.begin_segment(out_w, out_h, fps, bitrate);
         b.init_audio(sys_target, mic_target);
+        b.recording_segment();
     }
 
     let mut audio_tracks = Vec::new();
@@ -1380,15 +1534,15 @@ fn build_manual(
         }
         None
     };
-    let sys_target = sys_native.and_then(|(r, c)| audio::aac_target_format(r, c));
-    let mic_target = mic_native.and_then(|(r, c)| audio::aac_target_format(r, c));
+    let sys_target = sys_native.map(|(r, c)| audio::aac_target_format(r, c));
+    let mic_target = mic_native.map(|(r, c)| audio::aac_target_format(r, c));
 
     let core = build_pipeline_core(
         stats, item, fps, factor, resolution, bitrate_override, encoder_pref, false, None, false,
     )?;
     let PipelineCore { mut pipe, out_w, out_h, bitrate, video_base } = core;
 
-    let out_path = format!("{out_dir}\\{}", clip_filename());
+    let out_path = reserve_clip_path(out_dir);
     let mux = LiveMux::new(out_path, out_w, out_h, fps, bitrate, sys_target, mic_target);
 
     let mut audio_tracks = Vec::new();
@@ -1527,7 +1681,7 @@ impl audio::AudioSink for MuxAudioSink {
             return;
         }
         let ts = (time - base).max(0);
-        self.mux.push_audio(self.role, data, ts, dur);
+        self.mux.push_audio(self.role, Arc::new(data), ts, dur);
     }
 
     fn set_user_data(&self, data: Vec<u8>) {
@@ -2527,10 +2681,28 @@ fn clamp_fps(fps: u32) -> u32 {
     fps.clamp(10, 240)
 }
 
+// Techo del bitrate automático. Por encima no se gana nada visible en un clip y el replay lo paga
+// en RAM (a 150 Mbps, un minuto de buffer ya son ~1,1 GB). También deja el pico del VBR (1,75x)
+// por debajo de los 300 Mbps que admite H.264 High en los niveles 5.1/5.2, donde caen 1440p/4K.
+const MAX_AUTO_BITRATE: u32 = 150_000_000;
+
+// FPS que cuentan para el bitrate. Hasta 60, todos; por encima crecen con la raíz: a más FPS cada
+// fotograma se parece más al anterior y el encoder lo aprovecha, así que 240 FPS no necesitan 4
+// veces los bits de 60 (quedan en 2x). Mismo cálculo que effectiveFps() del frontend.
+fn effective_fps(fps: u32) -> f64 {
+    let f = fps as f64;
+    if f <= 60.0 {
+        f
+    } else {
+        60.0 * (f / 60.0).sqrt()
+    }
+}
+
 // Piso de 1 Mbps: solo como red de seguridad para combos extremos (p. ej. 480p/20fps/Bajo);
 // por encima de eso los cuatro niveles de calidad se diferencian en todas las resoluciones.
 fn target_bitrate(width: u32, height: u32, fps: u32, factor: f64) -> u32 {
-    (((width as u64 * height as u64 * fps as u64) as f64 * factor) as u32).max(1_000_000)
+    let bps = (width as u64 * height as u64) as f64 * effective_fps(fps) * factor;
+    (bps as u32).clamp(1_000_000, MAX_AUTO_BITRATE)
 }
 
 // Bitrate final del encoder: el valor personalizado (bps) si el usuario lo fijó
@@ -2733,10 +2905,11 @@ fn variant_bool(val: bool) -> VARIANT {
     v
 }
 
-// Pico de VBR = 1.75x la media: da margen a las escenas complejas sin disparar el
-// tamaño. saturating_mul evita overflow con bitrates muy altos (4K).
+// Pico de VBR = 1.75x la media: da margen a las escenas complejas sin disparar el tamaño. Con
+// un bitrate personalizado muy alto se limita a los 300 Mbps de H.264 High 5.1/5.2, que es lo que
+// admiten los encoders por hardware. u64 evita el overflow de la multiplicación.
 fn peak_bitrate(mean: u32) -> u32 {
-    mean.saturating_mul(7) / 4
+    (mean as u64 * 7 / 4).min(300_000_000) as u32
 }
 
 // Fija la política de calidad: Peak-Constrained VBR (modo 1) con media/pico, CABAC y
@@ -2780,15 +2953,98 @@ fn log_encoder_quality(codec: &ICodecAPI, label: &str, mean_bitrate: u32, gop: u
 fn clip_filename() -> String {
     let st: SYSTEMTIME = unsafe { GetLocalTime() };
     format!(
-        "Flashback_{:04}-{:02}-{:02}_{:02}-{:02}-{:02}.mp4",
+        "Flashback_{:04}-{:02}-{:02}_{:02}-{:02}-{:02}",
         st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond
     )
+}
+
+// Ruta libre para un clip nuevo, reservada creando el archivo vacío en el acto. El nombre solo
+// llega a segundos: dos guardados en el mismo segundo (el atajo pulsado dos veces, o un replay
+// guardado justo al empezar una grabación) se pisaban, porque el muxer abre con
+// DELETE_IF_EXIST. create_new es atómico, así que tampoco hay carrera entre dos hilos.
+fn reserve_clip_path(out_dir: &str) -> String {
+    let stem = clip_filename();
+    for n in 1..1000u32 {
+        let name = if n == 1 { format!("{stem}.mp4") } else { format!("{stem}_{n}.mp4") };
+        let path = format!("{out_dir}\\{name}");
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(_) => return path,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return path,
+        }
+    }
+    format!("{out_dir}\\{stem}.mp4")
 }
 
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn livemux_new_segment_continues_after_what_was_written() {
+        ensure_mf();
+        let path = std::env::temp_dir().join("flashback_livemux_seg.mp4").to_string_lossy().into_owned();
+        let mux = LiveMux::new(path.clone(), 1920, 1080, 30, 4_000_000, None, None);
+        let f = 333_333i64;
+        for i in 0..3 {
+            mux.push_video_bytes(Arc::new(vec![0u8; 8]), i * f, f, i == 0);
+        }
+        assert_eq!(mux.max_end(), 3 * f);
+
+        mux.new_segment();
+        mux.push_video_bytes(Arc::new(vec![0u8; 8]), 0, f, false);
+        assert_eq!(mux.max_end(), 3 * f, "un frame que no es keyframe no abre el segmento");
+        mux.push_video_bytes(Arc::new(vec![0u8; 8]), 0, f, true);
+        mux.push_video_bytes(Arc::new(vec![0u8; 8]), f, f, false);
+        assert_eq!(mux.max_end(), 5 * f, "el segmento nuevo sigue tras lo escrito");
+
+        let _ = mux.finalize();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    fn ring_with(fps: u32, frames: i64, gop: i64) -> ReplayBuffer {
+        let mut buf = ReplayBuffer::new(30, 1920, 1080, fps, 4_000_000);
+        buf.seq_header = vec![0u8; 16];
+        let f = fps_interval(fps);
+        for i in 0..frames {
+            buf.push(vec![0u8; 8], i * f, f, i % gop == 0);
+        }
+        buf
+    }
+
+    // La grabación enganchada arranca en el último keyframe del buffer (hasta ~1 GOP antes de
+    // pulsar) y recibe desde ahí todo lo que llegue al ring. Sin keyframe no se engancha.
+    #[test]
+    fn recording_attaches_from_the_last_keyframe() {
+        ensure_mf();
+        let dir = std::env::temp_dir().join("flashback_attach_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let dir = dir.to_string_lossy().into_owned();
+
+        let mut empty = ReplayBuffer::new(30, 1920, 1080, 30, 4_000_000);
+        empty.push(vec![0u8; 8], 0, 333_333, false);
+        assert!(empty.attach_recording(&dir).is_none());
+
+        let mut buf = ring_with(30, 70, 30); // keyframes en 0, 30 y 60
+        let path = buf.attach_recording(&dir).expect("hay keyframe");
+        let f = fps_interval(30);
+        // Pre-roll: frames 60..69 (10 frames desde el último keyframe).
+        assert_eq!(buf.recording.as_ref().unwrap().mux.max_end(), 70 * f);
+        buf.push(vec![0u8; 8], 70 * f, f, false);
+        assert_eq!(buf.recording.as_ref().unwrap().mux.max_end(), 71 * f);
+
+        // Rebuild con otro tamaño: la parte actual se cierra y sigue en un archivo nuevo.
+        let first = buf.recording.as_ref().unwrap().mux.clone();
+        assert_eq!(first.path(), path);
+        buf.begin_segment(1280, 720, 30, 4_000_000);
+        buf.recording_segment();
+        let rec = buf.recording.take().unwrap();
+        assert!(!Arc::ptr_eq(&rec.mux, &first));
+        assert_eq!(rec.mux.dims(), (1280, 720));
+        let _ = rec.finish();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn clamp_fps_bounds() {
@@ -2897,9 +3153,26 @@ mod tests {
     }
 
     #[test]
+    fn bitrate_grows_slower_above_60_fps_and_has_a_ceiling() {
+        let high = 0.40;
+        // 1080p60 Alto sigue en ~50 Mbps: los niveles están calibrados ahí.
+        let base = target_bitrate(1920, 1080, 60, high);
+        assert!((49_000_000..=50_500_000).contains(&base), "{base}");
+        // 240 FPS cuestan el doble que 60, no el cuádruple.
+        let fast = target_bitrate(1920, 1080, 240, high);
+        assert!((fast as f64 / base as f64 - 2.0).abs() < 0.01, "{fast}");
+        // 4K60 Alto (~200 Mbps sin techo) y 1440p60 Ultra quedan en el techo.
+        assert_eq!(target_bitrate(3840, 2160, 60, high), MAX_AUTO_BITRATE);
+        assert_eq!(target_bitrate(2560, 1440, 60, 1.05), MAX_AUTO_BITRATE);
+        // Un bitrate personalizado no se toca.
+        assert_eq!(resolve_bitrate(3840, 2160, 60, high, 400_000_000), 400_000_000);
+    }
+
+    #[test]
     fn peak_bitrate_is_1_75x() {
         assert_eq!(peak_bitrate(40_000_000), 70_000_000);
         assert_eq!(peak_bitrate(0), 0);
+        assert_eq!(peak_bitrate(400_000_000), 300_000_000);
     }
 
     #[test]
@@ -3019,7 +3292,7 @@ mod tests {
         );
 
         mux.set_audio_header(AudioRole::Sys, vec![0u8; 2], 0);
-        mux.push_audio(AudioRole::Sys, vec![0u8; 16], 0, 213_333);
+        mux.push_audio(AudioRole::Sys, Arc::new(vec![0u8; 16]), 0, 213_333);
         assert!(mux.is_writing(), "con vídeo + cabecera de audio debe estar escribiendo");
 
         let _ = mux.finalize(); // no se asegura un MP4 válido con datos falsos
