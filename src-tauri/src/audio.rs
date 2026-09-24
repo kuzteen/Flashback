@@ -313,7 +313,10 @@ fn run_track(
     let (rate, dst_ch) = aac_target_format(sample_rate, channels);
     let mut aac = match encoding {
         Encoding::Aac(bitrate) => match build_aac_encoder(rate, dst_ch, bitrate) {
-            Ok(enc) => Some(enc),
+            Ok(mut enc) => {
+                announce_header(&mut enc, sink);
+                Some(enc)
+            }
             Err(e) => {
                 eprintln!("audio: el encoder AAC rechazó el formato (rate={rate} ch={dst_ch} bitrate={bitrate}): {e:?}");
                 return Err(e);
@@ -615,6 +618,21 @@ fn build_aac_encoder(sample_rate: u32, channels: u16, bitrate: u32) -> Result<Aa
     })
 }
 
+// AudioSpecificConfig y framing del AAC. El tipo de salida ya lo lleva desde que se fija, así que
+// se anuncia al crear el encoder: el loopback no entrega nada mientras no suena audio, y esperar a
+// la primera salida dejaba la pista de sistema sin cabecera (y fuera del clip) si se empezaba en
+// silencio. La primera salida queda como respaldo por si algún encoder solo lo expone entonces.
+fn announce_header(enc: &mut AacEncoder, sink: &Arc<dyn AudioSink>) {
+    if enc.user_data_sent {
+        return;
+    }
+    let Ok(mt) = (unsafe { enc.mft.GetOutputCurrentType(0) }) else { return };
+    let Some(ud) = blob(&mt, &MF_MT_USER_DATA) else { return };
+    sink.set_user_data(ud);
+    sink.set_payload_type(unsafe { mt.GetUINT32(&MF_MT_AAC_PAYLOAD_TYPE) }.unwrap_or(0));
+    enc.user_data_sent = true;
+}
+
 fn enum_aac_encoder() -> Result<Option<IMFActivate>> {
     let info = MFT_REGISTER_TYPE_INFO {
         guidMajorType: MFMediaType_Audio,
@@ -701,17 +719,7 @@ fn drain_aac(enc: &mut AacEncoder, sink: &Arc<dyn AudioSink>) {
             Err(_) => break,
         }
 
-        if !enc.user_data_sent {
-            if let Ok(mt) = unsafe { enc.mft.GetOutputCurrentType(0) } {
-                if let Some(ud) = blob(&mt, &MF_MT_USER_DATA) {
-                    sink.set_user_data(ud);
-                    let payload_type =
-                        unsafe { mt.GetUINT32(&MF_MT_AAC_PAYLOAD_TYPE) }.unwrap_or(0);
-                    sink.set_payload_type(payload_type);
-                    enc.user_data_sent = true;
-                }
-            }
-        }
+        announce_header(enc, sink);
 
         if let Some(sample) = taken {
             if let Some((data, time, dur)) = read_sample(&sample) {
@@ -744,5 +752,45 @@ fn blob(mt: &IMFMediaType, key: &GUID) -> Option<Vec<u8>> {
         let mut v = vec![0u8; size as usize];
         mt.GetBlob(key, &mut v, None).ok()?;
         Some(v)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct Headers {
+        user_data: Mutex<Option<Vec<u8>>>,
+        payload_type: Mutex<Option<u32>>,
+    }
+
+    impl AudioSink for Headers {
+        fn push(&self, _data: Vec<u8>, _time: i64, _dur: i64) {}
+        fn set_user_data(&self, data: Vec<u8>) {
+            *self.user_data.lock().unwrap() = Some(data);
+        }
+        fn set_payload_type(&self, v: u32) {
+            *self.payload_type.lock().unwrap() = Some(v);
+        }
+    }
+
+    // El loopback no entrega nada mientras no suena audio: la cabecera AAC tiene que conocerse
+    // sin esperar a la primera salida del encoder, o la pista de sistema se descarta del clip.
+    #[test]
+    fn a_new_aac_encoder_announces_its_header_before_any_audio() {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            MFStartup(MF_VERSION, MFSTARTUP_FULL).unwrap();
+        }
+        let headers = Arc::new(Headers::default());
+        let sink: Arc<dyn AudioSink> = headers.clone();
+        let mut enc = build_aac_encoder(48_000, 2, 160_000).unwrap();
+        announce_header(&mut enc, &sink);
+        let ud = headers.user_data.lock().unwrap().clone().expect("sin cabecera AAC");
+        assert!(ud.len() > 12, "user data de {} bytes", ud.len());
+        assert_eq!(*headers.payload_type.lock().unwrap(), Some(0));
+        assert!(enc.user_data_sent);
     }
 }
