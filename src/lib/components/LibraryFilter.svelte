@@ -3,7 +3,7 @@
   import Icon from '$lib/components/Icon.svelte';
   import { isScreenSource, sameFilter, displaySource, type Clip, type LibraryFilter } from '$lib/clips';
   import { isFavorite } from '$lib/library.svelte';
-  import { groupCover } from '$lib/source-badge';
+  import { groupCover, initial } from '$lib/source-badge';
   import { t } from '$lib/i18n.svelte';
 
   let { clips, selected = $bindable() }: { clips: Clip[]; selected: LibraryFilter[] } = $props();
@@ -46,11 +46,6 @@
 
   function clearAll() {
     selected = [];
-  }
-
-  function initials(name: string): string {
-    const parts = name.replace(/[^a-zA-Z0-9 ]/g, '').split(/\s+/).filter(Boolean);
-    return parts.slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
   }
 
   $effect(() => {
@@ -100,7 +95,7 @@
         {#each games as g (g)}
           <button class="item" class:on={isOn({ kind: 'source', value: g })} onclick={() => toggle({ kind: 'source', value: g })} role="menuitemcheckbox" aria-checked={isOn({ kind: 'source', value: g })}>
             <span class="lead logo">
-              {#if logos[g] ?? groupCover(clips, g)}<img src={logos[g] ?? groupCover(clips, g)} alt="" />{:else}<span class="ini mono">{initials(g)}</span>{/if}
+              {#if logos[g] ?? groupCover(clips, g)}<img src={logos[g] ?? groupCover(clips, g)} alt="" />{:else}<span class="ini mono">{initial(g)}</span>{/if}
             </span>
             <span class="txt">{g}</span>
             <span class="chk"><Icon name="check" size={13} sw={2.2} /></span>

@@ -2,8 +2,8 @@
   import Icon from './Icon.svelte';
   import { menu } from '$lib/menu.svelte';
   import { formatDuration, isScreenSource, displaySource } from '$lib/clips';
-  import { gameIcon, ensureGameIcon, initials } from '$lib/artwork.svelte';
-  import { groupCover } from '$lib/source-badge';
+  import { gameIcon, ensureGameIcon } from '$lib/artwork.svelte';
+  import { groupCover, initial } from '$lib/source-badge';
   import { playlistClips, deletePlaylist, openPlaylistEdit, type Playlist } from '$lib/playlists.svelte';
   import { confirmDeletePlaylist } from '$lib/confirm.svelte';
   import { t } from '$lib/i18n.svelte';
@@ -154,7 +154,7 @@
             {:else if gameIcon(g.source) ?? groupCover(clips, g.source)}
               <img src={gameIcon(g.source) ?? groupCover(clips, g.source)} alt="" draggable="false" />
             {:else}
-              <span class="ini mono">{initials(g.source)}</span>
+              <span class="ini mono">{initial(g.source)}</span>
             {/if}
             {#if last}
               <span class="more mono">+{overflow}</span>

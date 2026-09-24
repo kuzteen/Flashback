@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { gameOverride, groupCover, sourceBadge } from './source-badge';
+import { gameOverride, groupCover, initial, sourceBadge } from './source-badge';
 
 describe('sourceBadge', () => {
   it('a custom cover wins over everything', () => {
@@ -48,5 +48,15 @@ describe('groupCover', () => {
   it('is null when no clip of that game has a cover', () => {
     const clips = [clip('Mi juego', 1, null), clip('Otro', 2, 'x.png')];
     expect(groupCover(clips, 'Mi juego')).toBeNull();
+  });
+});
+
+describe('initial', () => {
+  it('is the first letter or digit, uppercased', () => {
+    expect(initial('mi partida')).toBe('M');
+    expect(initial('  (beta) juego')).toBe('B');
+    expect(initial('ñandú')).toBe('Ñ');
+    expect(initial('7 days')).toBe('7');
+    expect(initial('***')).toBe('?');
   });
 });

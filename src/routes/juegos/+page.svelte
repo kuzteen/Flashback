@@ -3,17 +3,13 @@
   import Icon from '$lib/components/Icon.svelte';
   import { type SeenGame, gameSettings, loadDisabledGames, toggleGameDisabled, fetchSeenGames } from '$lib/games.svelte';
   import { t } from '$lib/i18n.svelte';
+  import { initial } from '$lib/source-badge';
 
   type Detected = { name: string; steam_appid: number | null };
 
   let seenGames = $state<SeenGame[]>([]);
   let currentGame = $state<Detected | null>(null);
   let logos = $state<Record<string, string | null>>({});
-
-  function initials(name: string): string {
-    const parts = name.replace(/[^a-zA-Z0-9 ]/g, '').split(/\s+/).filter(Boolean);
-    return parts.slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
-  }
 
   function lastSeenLabel(ts: number): string {
     const diff = Math.floor(Date.now() / 1000 - ts);
@@ -87,7 +83,7 @@
             {#if logos[logoKey(currentGame.name, currentGame.steam_appid)]}
               <img src={logos[logoKey(currentGame.name, currentGame.steam_appid)]} alt={currentGame.name} />
             {:else}
-              {initials(currentGame.name)}
+              <span class="ini">{initial(currentGame.name)}</span>
             {/if}
           </span>
           <div class="game-info">
@@ -125,7 +121,7 @@
           {@const disabled = gameSettings.isDisabled(g.name)}
           <div class="game-row" class:cap-off={disabled}>
             <span class="game-ico mono">
-              {#if logo}<img src={logo} alt={g.name} />{:else}{initials(g.name)}{/if}
+              {#if logo}<img src={logo} alt={g.name} />{:else}<span class="ini">{initial(g.name)}</span>{/if}
             </span>
             <div class="game-info">
               <span class="game-name">{g.name}</span>
@@ -224,10 +220,15 @@
     flex-shrink: 0;
     font-size: 14px;
     font-weight: 600;
-    letter-spacing: 0.02em;
     color: var(--text-2);
     border-radius: 10px;
     overflow: hidden;
+  }
+  /* Recortada a la altura de la mayúscula para que quede en el centro óptico del hueco. */
+  .ini {
+    display: block;
+    line-height: 1;
+    text-box: trim-both cap alphabetic;
   }
   .game-ico img {
     width: 100%;

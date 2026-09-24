@@ -16,7 +16,7 @@ export function sourceBadge(source: string, cover: string | null, icon: string |
   if (!name) return { kind: 'imported' };
   if (isScreenSource(name)) return { kind: 'screen' };
   if (icon) return { kind: 'game', src: icon };
-  return { kind: 'initial', letter: name[0].toUpperCase() };
+  return { kind: 'initial', letter: initial(name) };
 }
 
 // Juego a guardar al editar un clip: elegir otra vez el detectado (o dejarlo vacío) no es un
@@ -40,4 +40,10 @@ export function groupCover(
     if (!best || at > best.at) best = { src: c.coverSrc, at };
   }
   return best?.src ?? null;
+}
+
+// Letra de un juego sin imagen: la primera letra o cifra del nombre (saltando símbolos), en
+// mayúscula. Una sola en toda la app: tarjetas, filtro, playlists y página de juegos.
+export function initial(name: string): string {
+  return name.match(/[\p{L}\p{N}]/u)?.[0].toUpperCase() ?? '?';
 }

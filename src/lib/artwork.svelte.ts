@@ -34,11 +34,3 @@ export function ensureGameHero(name: string) {
     .then((url) => (heroes[name] = url ?? null))
     .catch(() => (heroes[name] = null));
 }
-
-export function initials(name: string): string {
-  const parts = name
-    .replace(/[^a-zA-Z0-9 ]/g, '')
-    .split(/\s+/)
-    .filter(Boolean);
-  return parts.slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
-}
