@@ -34,3 +34,21 @@ export function ensureGameHero(name: string) {
     .then((url) => (heroes[name] = url ?? null))
     .catch(() => (heroes[name] = null));
 }
+
+// Iconos ligeros del buscador de "Editar clip" (solo Discord, 64 px), en su propia caché: los
+// resultados que no se eligen no deben llenar la de iconos normales. Si el juego ya tiene su
+// icono normal cargado, se usa ese.
+const searchIcons = $state<Record<string, string | null>>({});
+const searchAsked = new Set<string>();
+
+export function searchIcon(name: string): string | null {
+  return icons[name] ?? searchIcons[name] ?? null;
+}
+
+export function ensureSearchIcon(name: string) {
+  if (name in icons || searchAsked.has(name)) return;
+  searchAsked.add(name);
+  invoke<string | null>('search_icon', { name })
+    .then((url) => (searchIcons[name] = url ?? null))
+    .catch(() => (searchIcons[name] = null));
+}

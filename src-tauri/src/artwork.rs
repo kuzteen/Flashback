@@ -418,3 +418,72 @@ async fn name_icon(client: &reqwest::Client, app: &tauri::AppHandle, name: &str)
     let art_url = best_art(client, &key, game_id).await?;
     download(client, &art_url).await
 }
+
+// Iconos del buscador de "Editar clip": solo el de Discord a 64 px (se ven a 20) y en su propia
+// carpeta. Nada de Steam ni SteamGridDB, que son las descargas pesadas: aquí se muestran docenas
+// de juegos que casi nunca se eligen. El que se elige lo pide luego la tarjeta con game_icon y
+// entra en la caché normal; los demás caducan (ver prune_search_cache).
+pub async fn search_icon(app: &tauri::AppHandle, name: &str) -> Option<String> {
+    let cache = app.path().app_cache_dir().ok()?;
+    let main = cache.join("artwork").join(format!("art-{}", slug(name)));
+    if let Some(bytes) = std::fs::read(&main).ok().filter(|b| !b.is_empty()) {
+        return Some(to_data_url(&bytes));
+    }
+    let dir = search_cache_dir(app)?;
+    let path = dir.join(slug(name));
+    if let Some(bytes) = std::fs::read(&path).ok().filter(|b| !b.is_empty()) {
+        return Some(to_data_url(&bytes));
+    }
+    let url = crate::detect::art_for(app, name).await?.icon_url?;
+    let bytes = download(&reqwest::Client::new(), &format!("{url}?size=64")).await?;
+    if bytes.is_empty() {
+        return None;
+    }
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(&path, &bytes);
+    Some(to_data_url(&bytes))
+}
+
+pub fn search_cache_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    Some(app.path().app_cache_dir().ok()?.join("artwork-search"))
+}
+
+pub fn prune_search_cache(dir: &std::path::Path, max_age: std::time::Duration) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| now.duration_since(t).ok())
+            .is_some_and(|age| age > max_age);
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+#[cfg(test)]
+mod search_cache_tests {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn old_search_icons_are_pruned_and_recent_ones_kept() {
+        let dir = std::env::temp_dir().join(format!("fb_search_icons_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let old = dir.join("viejo");
+        let new = dir.join("nuevo");
+        std::fs::write(&old, b"x").unwrap();
+        std::fs::write(&new, b"x").unwrap();
+        let week_ago = SystemTime::now() - Duration::from_secs(8 * 24 * 3600);
+        std::fs::File::options().write(true).open(&old).unwrap().set_modified(week_ago).unwrap();
+        prune_search_cache(&dir, Duration::from_secs(7 * 24 * 3600));
+        let (old_left, new_left) = (old.exists(), new.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!old_left, "el icono de hace 8 días se borra");
+        assert!(new_left, "el reciente se queda");
+    }
+}

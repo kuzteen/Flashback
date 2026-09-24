@@ -21,6 +21,9 @@
   let gameText = $state('');
   let gameValue = $state('');
   let gameTouched = $state(false);
+  // El valor viene de la lista, de lo detectado o de lo guardado, no de algo a medio escribir:
+  // solo entonces la vista previa pide el icono normal del juego.
+  let gamePicked = $state(true);
   let results = $state<string[]>([]);
   let listOpen = $state(false);
   let active = $state(-1);
@@ -41,6 +44,7 @@
       gameValue = src;
       gameText = src ? displaySource(src) : '';
       gameTouched = false;
+      gamePicked = true;
       results = [];
       listOpen = false;
       active = -1;
@@ -56,6 +60,7 @@
   const exactHit = $derived(results.some((r) => r.toLowerCase() === gameText.trim().toLowerCase()));
   const customOption = $derived(gameText.trim() && !exactHit ? gameText.trim() : null);
   const options = $derived([...results, ...(customOption ? [customOption] : [])]);
+  const previewLookup = $derived(gamePicked ? 'full' : exactHit ? 'search' : 'none');
 
   function focusSelect(node: HTMLInputElement) {
     node.focus();
@@ -66,6 +71,7 @@
     gameText = (e.currentTarget as HTMLInputElement).value;
     gameValue = gameText;
     gameTouched = true;
+    gamePicked = false;
     listOpen = true;
     active = -1;
     clearTimeout(searchTimer);
@@ -86,6 +92,7 @@
     gameText = game;
     gameValue = game;
     gameTouched = true;
+    gamePicked = true;
     listOpen = false;
     active = -1;
   }
@@ -95,6 +102,7 @@
     gameValue = detected;
     gameText = detected ? displaySource(detected) : '';
     gameTouched = true;
+    gamePicked = true;
     listOpen = false;
   }
 
@@ -140,13 +148,13 @@
   oncancel={closeClipEdit}
 >
   {#snippet placeholder()}
-    <SourceIcon source={previewSource} size={96} />
+    <SourceIcon source={previewSource} size={96} lookup={previewLookup} />
   {/snippet}
   {#snippet fields()}
     <div class="game">
       <label class="field">
         <span class="notch">{t('clipEdit.game')}</span>
-        <span class="game-ico"><SourceIcon source={previewSource} size={18} /></span>
+        <span class="game-ico"><SourceIcon source={previewSource} size={18} lookup={previewLookup} /></span>
         <input
           class="game-input"
           style:padding-left="40px"
@@ -175,7 +183,7 @@
               onmousedown={(e) => e.preventDefault()}
               onclick={() => pick(option)}
             >
-              <SourceIcon source={option} size={20} />
+              <SourceIcon source={option} size={20} lookup={i === results.length ? 'none' : 'search'} />
               <span class="result-name">
                 {i === results.length ? t('clipEdit.useCustom', { name: option }) : option}
               </span>

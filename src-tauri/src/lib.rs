@@ -532,6 +532,11 @@ async fn search_games(app: tauri::AppHandle, query: String) -> Vec<String> {
 }
 
 #[tauri::command]
+async fn search_icon(app: tauri::AppHandle, name: String) -> Option<String> {
+    artwork::search_icon(&app, &name).await
+}
+
+#[tauri::command]
 fn set_clip_game(app: tauri::AppHandle, paths: Vec<String>, game: Option<String>) -> Result<(), String> {
     clipmeta::set_game(&clipmeta_index(&app)?, &paths, game.as_deref())
 }
@@ -803,7 +808,13 @@ pub fn run() {
             discord::init(app.handle().clone(), config::get_discord_rpc(app.handle()));
             // Temporales de compartir: se purgan en segundo plano para no retrasar el arranque.
             let share_dir = share::dir(app.handle());
-            std::thread::spawn(move || share::cleanup(&share_dir));
+            let search_icons = artwork::search_cache_dir(app.handle());
+            std::thread::spawn(move || {
+                share::cleanup(&share_dir);
+                if let Some(dir) = search_icons {
+                    artwork::prune_search_cache(&dir, std::time::Duration::from_secs(7 * 24 * 3600));
+                }
+            });
             // Arranque con el sistema: el instalador escribe la clave Run con `--autostart`.
             // En ese caso la app abre directamente en la bandeja (el replay se arma solo en
             // el webview oculto). En un arranque normal la ventana nace oculta (visible:false
@@ -901,6 +912,7 @@ pub fn run() {
             share_prepare,
             share_cancel,
             search_games,
+            search_icon,
             set_clip_game,
             set_clip_cover,
             clear_clip_cover,

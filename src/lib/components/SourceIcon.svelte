@@ -1,19 +1,32 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
-  import { ensureGameIcon, gameIcon } from '$lib/artwork.svelte';
+  import { ensureGameIcon, ensureSearchIcon, gameIcon, searchIcon } from '$lib/artwork.svelte';
   import { isScreenSource } from '$lib/screen-source';
   import { sourceBadge } from '$lib/source-badge';
 
   // Imagen del origen de un clip: portada propia, icono del juego, inicial de un nombre
   // inventado, pantalla o importado (ver sourceBadge). La misma en la tarjeta y en "Editar clip".
-  let { source, cover = null, size = 16 }: { source: string; cover?: string | null; size?: number } = $props();
+  // lookup: 'full' pide el icono normal (con sus respaldos pesados, cacheado para siempre);
+  // 'search' solo el ligero del buscador; 'none' no pide nada (un nombre a medio escribir o
+  // inventado: pedirlo con cada tecla buscaría "v", "va", "val"…).
+  let {
+    source,
+    cover = null,
+    size = 16,
+    lookup = 'full'
+  }: { source: string; cover?: string | null; size?: number; lookup?: 'full' | 'search' | 'none' } = $props();
+
+  const name = $derived(source.trim());
+  const wantsIcon = $derived(!!name && !isScreenSource(name) && lookup !== 'none');
 
   $effect(() => {
-    const name = source.trim();
-    if (name && !isScreenSource(name)) ensureGameIcon(name);
+    if (!wantsIcon) return;
+    if (lookup === 'search') ensureSearchIcon(name);
+    else ensureGameIcon(name);
   });
 
-  const badge = $derived(sourceBadge(source, cover, gameIcon(source.trim())));
+  const icon = $derived(!wantsIcon ? null : lookup === 'search' ? searchIcon(name) : gameIcon(name));
+  const badge = $derived(sourceBadge(source, cover, icon));
 </script>
 
 {#if badge.kind === 'cover' || badge.kind === 'game'}
