@@ -95,6 +95,7 @@ struct Running {
     stats: Arc<Stats>,
     started: Instant,
     result: Arc<Mutex<Option<String>>>,
+    source: String,
 }
 
 // Grabación manual en curso. Con el replay activo sobre el mismo objetivo se engancha a él
@@ -102,7 +103,7 @@ struct Running {
 // replay (otra ventana del juego, device perdido). Sin replay usa su propio pipeline (Own).
 enum Manual {
     Own(Running),
-    Tapped { buffer: Arc<Mutex<ReplayBuffer>>, started: Instant },
+    Tapped { buffer: Arc<Mutex<ReplayBuffer>>, started: Instant, source: String },
 }
 
 static STATE: Mutex<Option<Manual>> = Mutex::new(None);
@@ -201,6 +202,8 @@ pub fn start(
     if let Some(m) = guard.as_ref() {
         return Ok(matches!(m, Manual::Tapped { .. }));
     }
+    // Se fija al empezar: si el juego se cierra antes de parar, el clip sigue siendo suyo.
+    let source = super::source_label(Some(&target));
 
     let replay = REPLAY_STATE
         .lock_ok()
@@ -212,7 +215,7 @@ pub fn start(
         // el arranque) no hay desde dónde empezar: se cae al pipeline propio.
         let attached = buffer.lock_ok().attach_recording(&out_dir);
         if attached.is_some() {
-            *guard = Some(Manual::Tapped { buffer, started: Instant::now() });
+            *guard = Some(Manual::Tapped { buffer, started: Instant::now(), source });
             return Ok(true);
         }
     }
@@ -249,6 +252,7 @@ pub fn start(
                 stats,
                 started: Instant::now(),
                 result,
+                source,
             }));
             Ok(false)
         }
@@ -271,13 +275,21 @@ pub fn stop() -> Option<String> {
             if let Some(h) = running.handle.take() {
                 let _ = h.join();
             }
-            running.result.lock_ok().take()
+            let path = running.result.lock_ok().take();
+            super::tag_source(path.as_deref(), &running.source);
+            path
         }
         // Se suelta del buffer bajo su lock y se cierra fuera de él: el Finalize del MP4 no debe
         // frenar al encoder, que sigue alimentando el replay.
-        Some(Manual::Tapped { buffer, .. }) => {
-            let rec = buffer.lock_ok().recording.take();
-            rec.and_then(Recording::finish)
+        Some(Manual::Tapped { buffer, source, .. }) => {
+            let rec = buffer.lock_ok().recording.take()?;
+            let mut paths = rec.parts.clone();
+            let path = rec.finish();
+            if let Some(p) = path.as_ref().filter(|p| !paths.contains(p)) {
+                paths.push(p.clone());
+            }
+            super::tag_source(paths.iter().map(String::as_str), &source);
+            path
         }
         None => None,
     }
@@ -293,7 +305,7 @@ pub fn status() -> CaptureStatus {
             height: r.stats.height.load(Ordering::Relaxed),
             seconds: r.started.elapsed().as_secs_f64(),
         },
-        Some(Manual::Tapped { buffer, started }) => {
+        Some(Manual::Tapped { buffer, started, .. }) => {
             let b = buffer.lock_ok();
             CaptureStatus {
                 running: true,

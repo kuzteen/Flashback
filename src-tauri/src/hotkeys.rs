@@ -93,20 +93,6 @@ fn toast(app: &AppHandle, kind: &str, body: String) {
 #[cfg(not(target_os = "windows"))]
 fn toast(_app: &AppHandle, _kind: &str, _body: String) {}
 
-// Etiqueta del origen del clip: el juego en modo Aplicación o la pantalla grabada.
-fn source_label() -> String {
-    match crate::capture::replay_target().as_deref() {
-        Some("window") => crate::detect::current_game().map(|g| g.name).unwrap_or_default(),
-        // Mismo texto que la etiqueta del selector ("Pantalla N", N de \.\DISPLAYN), sin
-        // listar monitores: eso fotografía cada pantalla y no pinta nada en pleno guardado.
-        Some(id) => match id.rsplit_once("DISPLAY").and_then(|(_, n)| n.parse::<u32>().ok()) {
-            Some(n) => format!("Pantalla {n}"),
-            None => "Pantalla".into(),
-        },
-        None => String::new(),
-    }
-}
-
 fn save_clip(app: &AppHandle) {
     let es = spanish(app);
     if !crate::capture::replay_active() {
@@ -121,7 +107,7 @@ fn save_clip(app: &AppHandle) {
         toast(app, "info", msg.into());
         return;
     }
-    match crate::capture::save_replay(&source_label()) {
+    match crate::capture::save_replay(&crate::capture::source_label(crate::capture::replay_target().as_deref())) {
         Some(path) => {
             play_saved_sound(*SOUND_GAIN.lock().unwrap_or_else(|e| e.into_inner()));
             toast(app, "saved", if es { "Clip guardado" } else { "Clip saved" }.into());

@@ -108,3 +108,60 @@ pub fn replay_target() -> Option<String> {
 
 #[cfg(target_os = "windows")]
 mod win;
+
+// Etiqueta del origen del clip: el juego en modo Aplicación o la pantalla grabada. Mismo texto
+// que la etiqueta del selector ("Pantalla N", N de \.\DISPLAYN), sin listar monitores: eso
+// fotografía cada pantalla y no pinta nada en pleno guardado.
+pub fn source_label(target: Option<&str>) -> String {
+    match target {
+        Some("window") => crate::detect::current_game().map(|g| g.name).unwrap_or_default(),
+        Some(id) => match id.rsplit_once("DISPLAY").and_then(|(_, n)| n.parse::<u32>().ok()) {
+            Some(n) => format!("Pantalla {n}"),
+            None => "Pantalla".into(),
+        },
+        None => String::new(),
+    }
+}
+
+// Graba el origen en cada archivo de la grabación (varias partes si cambió el tamaño a mitad).
+pub fn tag_source<'a>(paths: impl IntoIterator<Item = &'a str>, source: &str) {
+    if source.is_empty() {
+        return;
+    }
+    for p in paths {
+        let _ = crate::library::write_embedded_source(std::path::Path::new(p), source);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn screens_are_labelled_by_their_display_number() {
+        assert_eq!(source_label(Some(r"\.\DISPLAY2")), "Pantalla 2");
+        assert_eq!(source_label(Some("otra-cosa")), "Pantalla");
+        assert_eq!(source_label(None), "");
+    }
+
+    #[test]
+    fn every_part_of_a_recording_gets_the_source() {
+        let dir = std::env::temp_dir().join(format!("fb_tag_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let parts: Vec<String> = ["a.mp4", "b.mp4"]
+            .iter()
+            .map(|n| {
+                let p = dir.join(n);
+                std::fs::write(&p, b"\x00\x00\x00\x08ftyp").unwrap();
+                p.to_string_lossy().into_owned()
+            })
+            .collect();
+        tag_source(parts.iter().map(String::as_str), "VALORANT");
+        for p in &parts {
+            let got = crate::library::read_embedded_source(std::path::Path::new(p));
+            assert_eq!(got.as_deref(), Some("VALORANT"), "{p}");
+        }
+        tag_source(parts.iter().map(String::as_str), "");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
