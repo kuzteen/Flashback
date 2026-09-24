@@ -3,6 +3,7 @@
   import Icon from '$lib/components/Icon.svelte';
   import { isScreenSource, sameFilter, displaySource, type Clip, type LibraryFilter } from '$lib/clips';
   import { isFavorite } from '$lib/library.svelte';
+  import { groupCover } from '$lib/source-badge';
   import { t } from '$lib/i18n.svelte';
 
   let { clips, selected = $bindable() }: { clips: Clip[]; selected: LibraryFilter[] } = $props();
@@ -99,7 +100,7 @@
         {#each games as g (g)}
           <button class="item" class:on={isOn({ kind: 'source', value: g })} onclick={() => toggle({ kind: 'source', value: g })} role="menuitemcheckbox" aria-checked={isOn({ kind: 'source', value: g })}>
             <span class="lead logo">
-              {#if logos[g]}<img src={logos[g]} alt="" />{:else}<span class="ini mono">{initials(g)}</span>{/if}
+              {#if logos[g] ?? groupCover(clips, g)}<img src={logos[g] ?? groupCover(clips, g)} alt="" />{:else}<span class="ini mono">{initials(g)}</span>{/if}
             </span>
             <span class="txt">{g}</span>
             <span class="chk"><Icon name="check" size={13} sw={2.2} /></span>

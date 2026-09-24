@@ -26,3 +26,18 @@ export function gameOverride(chosen: string, detected: string): string | null {
   if (!name || name.toLowerCase() === detected.trim().toLowerCase()) return null;
   return name;
 }
+
+// Imagen de un juego como grupo (filtros, tarjetas de playlist) cuando no tiene icono oficial,
+// como un nombre inventado: la portada propia del clip más reciente de ese juego.
+export function groupCover(
+  clips: { source: string; coverSrc?: string | null; createdAt: Date }[],
+  source: string
+): string | null {
+  let best: { src: string; at: number } | null = null;
+  for (const c of clips) {
+    if (c.source !== source || !c.coverSrc) continue;
+    const at = c.createdAt.getTime();
+    if (!best || at > best.at) best = { src: c.coverSrc, at };
+  }
+  return best?.src ?? null;
+}
