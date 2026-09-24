@@ -327,10 +327,10 @@ async fn share_prepare(
     if !path.is_file() {
         return Err("El archivo ya no existe".into());
     }
-    let duration = library::mp4_duration_secs(&path).unwrap_or(0.0);
+    let duration = library::clip_duration_secs(&path).unwrap_or(0.0);
     let corner = watermark.then(|| config::get_watermark_corner(&app));
 
-    if target_bytes.is_none() && corner.is_none() && share::is_identity(&edit, duration) {
+    if target_bytes.is_none() && corner.is_none() && share::shares_original(&path, &edit, duration) {
         return Ok(src);
     }
 

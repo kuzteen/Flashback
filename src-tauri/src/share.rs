@@ -81,6 +81,12 @@ fn scaled_width(src_w: u32, src_h: u32, height: u32) -> u32 {
 
 // La edición identidad (un solo tramo que cubre el clip entero, sin silenciar ni bajar faders) no
 // cambia nada del archivo, así que recodificarla solo perdería calidad y tiempo.
+// Un clip sin tocar se comparte tal cual solo si ya es MP4: es lo que previsualizan Discord,
+// WhatsApp y compañía. Un MOV, MKV o WebM se pasa a MP4 (sin recodificar si es H.264).
+pub fn shares_original(path: &Path, edit: &ClipEdit, duration_s: f64) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp4")) && is_identity(edit, duration_s)
+}
+
 pub fn is_identity(edit: &ClipEdit, duration_s: f64) -> bool {
     if edit.format != crate::reframe::OutputFormat::Horizontal {
         return false;
@@ -154,6 +160,16 @@ pub fn cleanup(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_an_untouched_mp4_is_shared_as_is() {
+        let whole = edit(0.0, 10_000.0);
+        assert!(shares_original(Path::new("a.mp4"), &whole, 10.0));
+        assert!(shares_original(Path::new("a.MP4"), &whole, 10.0));
+        assert!(!shares_original(Path::new("a.mkv"), &whole, 10.0));
+        assert!(!shares_original(Path::new("a.mov"), &whole, 10.0));
+        assert!(!shares_original(Path::new("a.mp4"), &edit(0.0, 5_000.0), 10.0));
+    }
 
     fn edit(start: f64, end: f64) -> ClipEdit {
         ClipEdit {

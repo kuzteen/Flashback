@@ -643,6 +643,47 @@ mod win {
         height: u32,
         fps: u32,
         bitrate: u32,
+        // Solo el H.264 se puede copiar tal cual al MP4; VP9/AV1 (MKV, WebM) se recodifican.
+        h264: bool,
+    }
+
+    // Fotogramas por segundo según la separación real entre fotogramas (mediana, para ignorar
+    // huecos sueltos). Los tiempos pueden llegar en orden de decodificación si hay B-frames.
+    fn fps_from_times(times: &mut [i64]) -> Option<u32> {
+        if times.len() < 3 {
+            return None;
+        }
+        times.sort_unstable();
+        let mut deltas: Vec<i64> = times.windows(2).map(|w| w[1] - w[0]).filter(|d| *d > 0).collect();
+        if deltas.is_empty() {
+            return None;
+        }
+        deltas.sort_unstable();
+        let median = deltas[deltas.len() / 2];
+        Some(((10_000_000.0 / median as f64).round() as u32).max(1))
+    }
+
+    // Tiempos de los primeros fotogramas: solo demux, sin decodificar ni recorrer el archivo.
+    fn first_frame_times(reader: &IMFSourceReader, idx: u32) -> Vec<i64> {
+        let mut times = Vec::new();
+        unsafe {
+            if reader.SetStreamSelection(ALL_STREAMS, false).is_err() || reader.SetStreamSelection(idx, true).is_err() {
+                return times;
+            }
+        }
+        while times.len() < 32 {
+            let mut flags = 0u32;
+            let mut sample: Option<IMFSample> = None;
+            if unsafe { reader.ReadSample(idx, 0, None, Some(&mut flags), None, Some(&mut sample)) }.is_err()
+                || flags & ENDOFSTREAM != 0
+            {
+                break;
+            }
+            if let Some(t) = sample.and_then(|s| unsafe { s.GetSampleTime() }.ok()) {
+                times.push(t);
+            }
+        }
+        times
     }
 
     fn read_video_meta(path: &str) -> Result<VideoMeta> {
@@ -655,7 +696,11 @@ mod win {
         let fps_packed = unsafe { mt.GetUINT64(&MF_MT_FRAME_RATE) }.unwrap_or(pack2(30, 1));
         let fps_n = (fps_packed >> 32) as u32;
         let fps_d = (fps_packed & 0xFFFFFFFF) as u32;
-        let fps = if fps_d == 0 { 30 } else { fps_n / fps_d };
+        // El MF_MT_FRAME_RATE de la fuente Matroska no es fiable (un MKV/WebM de 30 fps se anuncia
+        // como 15,00002) y recodificar a esa cadencia tiraba la mitad de los fotogramas: manda la
+        // separación medida, con el valor declarado como respaldo.
+        let declared_fps = if fps_d == 0 { 30 } else { (fps_n as f64 / fps_d as f64).round() as u32 };
+        let fps = fps_from_times(&mut first_frame_times(&reader, v_idx)).unwrap_or(declared_fps);
         // Bitrate objetivo al recodificar. MF casi nunca expone MF_MT_AVG_BITRATE en un MP4, así
         // que se mide del propio fichero (tamaño/duración) en vez de aplicar un suelo sintético
         // por resolución: aquel suelo imponía 15 Mbps en 1080p60 y 66 Mbps en 1440p144 aunque el
@@ -675,6 +720,7 @@ mod win {
             height: h,
             fps: fps.max(1),
             bitrate: bitrate.clamp(500_000, 120_000_000),
+            h264: unsafe { mt.GetGUID(&MF_MT_SUBTYPE) }.is_ok_and(|g| g == MFVideoFormat_H264),
         })
     }
 
@@ -684,7 +730,7 @@ mod win {
     fn measured_bitrate(path: &str) -> Option<u32> {
         let p = std::path::Path::new(path);
         let len = std::fs::metadata(p).ok()?.len();
-        let secs = crate::library::mp4_duration_secs(p)?;
+        let secs = crate::library::clip_duration_secs(p)?;
         if secs <= 0.1 {
             return None;
         }
@@ -1018,7 +1064,8 @@ mod win {
         // cortes caen en keyframe. El audio no condiciona la decisión: recodificarlo cuesta una
         // fracción de lo que cuesta el vídeo, así que cabe dentro del camino sin recodificar.
         let graded = !edit.look.clamped().is_neutral();
-        let can_pass = watermark.is_none()
+        let can_pass = meta.h264
+            && watermark.is_none()
             && !vertical
             && !graded
             && bitrate.is_none()
@@ -1990,6 +2037,56 @@ mod win {
                 keyframes: keyframes.to_vec(),
                 in_order: true,
             }
+        }
+
+        fn export_fixture(name: &str) -> crate::mp4mux::mf_tests::Read {
+            let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name);
+            let dst = std::env::temp_dir().join(format!("fb_export_{}_{name}.mp4", std::process::id()));
+            let r = export_clip(
+                src.to_string_lossy().into_owned(),
+                dst.to_string_lossy().into_owned(),
+                edit(&[(0.0, 1500.0)]),
+                None,
+                None,
+                None,
+                None,
+                |_| {},
+            );
+            let read = r.map(|_| crate::mp4mux::mf_tests::read(&dst));
+            let _ = std::fs::remove_file(&dst);
+            read.unwrap_or_else(|e| panic!("{name}: {e}"))
+        }
+
+        #[test]
+        fn a_webm_with_vp9_and_opus_exports_with_sound() {
+            let r = export_fixture("tiny.webm");
+            assert!(r.video >= 44, "vídeo {} de 45", r.video);
+            assert!(r.audio > 0, "sin audio");
+        }
+
+        #[test]
+        fn a_mov_exports_with_sound() {
+            let r = export_fixture("tiny.mov");
+            assert!(r.video >= 44, "vídeo {} de 45", r.video);
+            assert!(r.audio > 0, "sin audio");
+        }
+
+        #[test]
+        fn an_mkv_with_h264_and_aac_exports_with_sound() {
+            let r = export_fixture("tiny.mkv");
+            assert!(r.video >= 44, "vídeo {} de 45", r.video);
+            assert!(r.audio > 0, "sin audio");
+        }
+
+        #[test]
+        fn fps_comes_from_the_real_frame_spacing() {
+            let mut b_frames: Vec<i64> = [0, 667, 333, 2000, 1333, 1000, 1667].iter().map(|ms| ms * 1000).collect();
+            assert_eq!(fps_from_times(&mut b_frames), Some(30));
+            let mut ntsc: Vec<i64> = (0..20).map(|i| i * 417_083).collect();
+            assert_eq!(fps_from_times(&mut ntsc), Some(24));
+            let mut sixty: Vec<i64> = (0..20).map(|i| i * 166_667).collect();
+            assert_eq!(fps_from_times(&mut sixty), Some(60));
+            assert_eq!(fps_from_times(&mut [0, 333_333]), None);
         }
 
         #[test]

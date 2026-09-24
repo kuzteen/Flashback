@@ -47,5 +47,6 @@ CLAUDE.md
 *.mp4
 *.mkv
 *.mov
+!/src-tauri/tests/fixtures/*
 
 /latest.json

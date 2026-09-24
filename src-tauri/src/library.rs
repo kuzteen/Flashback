@@ -32,11 +32,7 @@ fn scan_dir(dir: &Path, out: &mut Vec<ClipInfo>) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        let is_mp4 = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("mp4"));
-        if !is_mp4 {
+        if !is_clip(&path) {
             continue;
         }
         let Ok(meta) = entry.metadata() else { continue };
@@ -66,7 +62,7 @@ fn scan_dir(dir: &Path, out: &mut Vec<ClipInfo>) {
             path: path.to_string_lossy().into_owned(),
             size_bytes: meta.len(),
             modified_ms,
-            duration_sec: mp4_duration_secs(&path).unwrap_or(0.0),
+            duration_sec: clip_duration_secs(&path).unwrap_or(0.0),
             source,
         });
     }
@@ -88,7 +84,8 @@ pub fn rename_clip(path: &str, new_name: &str, edit_index: &Path) -> Result<Stri
     if name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) {
         return Err("El nombre contiene caracteres no válidos".into());
     }
-    let new_mp4 = parent.join(format!("{name}.mp4"));
+    let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
+    let new_mp4 = parent.join(format!("{name}.{ext}"));
     if new_mp4 == p {
         return Ok(path.to_string());
     }
@@ -177,6 +174,107 @@ fn read_u64(f: &mut File) -> Option<u64> {
     let mut b = [0u8; 8];
     f.read_exact(&mut b).ok()?;
     Some(u64::from_be_bytes(b))
+}
+
+// Contenedores que la biblioteca muestra: los que reproduce el WebView2 de la interfaz y decodifica
+// Media Foundation en el editor (medido con H.264/VP9/AV1 + AAC/Opus). AVI y WMV no entran: el
+// reproductor de la interfaz no los abre.
+const CLIP_EXTENSIONS: [&str; 5] = ["mp4", "mov", "m4v", "mkv", "webm"];
+
+fn extension(path: &Path) -> String {
+    path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase()
+}
+
+pub fn is_clip(path: &Path) -> bool {
+    CLIP_EXTENSIONS.contains(&extension(path).as_str())
+}
+
+fn is_matroska(path: &Path) -> bool {
+    matches!(extension(path).as_str(), "mkv" | "webm")
+}
+
+pub fn clip_duration_secs(path: &Path) -> Option<f64> {
+    if is_matroska(path) {
+        matroska_duration_secs(path)
+    } else {
+        mp4_duration_secs(path)
+    }
+}
+
+const EBML_SEGMENT: u64 = 0x1853_8067;
+const EBML_INFO: u64 = 0x1549_A966;
+const EBML_TIMECODE_SCALE: u64 = 0x2A_D7B1;
+const EBML_DURATION: u64 = 0x4489;
+// El `Info` de un Matroska va al principio del `Segment` (tras el `SeekHead`): basta leer la
+// cabecera del archivo, sin recorrerlo.
+const MATROSKA_HEAD: u64 = 256 * 1024;
+
+fn matroska_duration_secs(path: &Path) -> Option<f64> {
+    let mut head = Vec::new();
+    File::open(path).ok()?.take(MATROSKA_HEAD).read_to_end(&mut head).ok()?;
+    let mut pos = 0;
+    let mut end = head.len();
+    while let Some((id, data, size)) = ebml_element(&head, pos, end) {
+        let data_end = size.map_or(end, |s| (data + s).min(end));
+        match id {
+            EBML_SEGMENT => {
+                pos = data;
+                end = data_end;
+            }
+            EBML_INFO => return matroska_info_duration(&head[data..data_end]),
+            _ => {
+                size?;
+                pos = data_end;
+            }
+        }
+    }
+    None
+}
+
+fn matroska_info_duration(info: &[u8]) -> Option<f64> {
+    let mut scale = 1_000_000u64;
+    let mut duration = None;
+    let mut pos = 0;
+    while let Some((id, data, size)) = ebml_element(info, pos, info.len()) {
+        let body = info.get(data..data + size?)?;
+        match id {
+            EBML_TIMECODE_SCALE => scale = body.iter().fold(0, |v, b| (v << 8) | *b as u64),
+            EBML_DURATION => {
+                duration = match body.len() {
+                    4 => Some(f32::from_be_bytes(body.try_into().ok()?) as f64),
+                    8 => Some(f64::from_be_bytes(body.try_into().ok()?)),
+                    _ => None,
+                }
+            }
+            _ => {}
+        }
+        pos = data + body.len();
+    }
+    Some(duration? * scale as f64 / 1e9)
+}
+
+// (id, inicio de los datos, tamaño) del elemento EBML en `pos`; tamaño None = desconocido.
+fn ebml_element(d: &[u8], pos: usize, end: usize) -> Option<(u64, usize, Option<usize>)> {
+    if pos >= end {
+        return None;
+    }
+    let (id, id_len) = ebml_vint(d, pos, true)?;
+    let (size, size_len) = ebml_vint(d, pos + id_len, false)?;
+    let unknown = size == (1u64 << (7 * size_len)) - 1;
+    Some((id, pos + id_len + size_len, (!unknown).then_some(size as usize)))
+}
+
+fn ebml_vint(d: &[u8], at: usize, keep_marker: bool) -> Option<(u64, usize)> {
+    let first = *d.get(at)?;
+    let len = first.leading_zeros() as usize + 1;
+    if len > 8 {
+        return None;
+    }
+    let mut v = if keep_marker { first as u64 } else { (first as u32 & (0xFF >> len)) as u64 };
+    for i in 1..len {
+        v = (v << 8) | *d.get(at + i)? as u64;
+    }
+    Some((v, len))
 }
 
 // Duración leyendo el árbol de cajas ISO-BMFF: se recorren las cajas de nivel
@@ -335,7 +433,9 @@ const FB_META_UUID: [u8; 16] = [
 // Origen del clip (juego/monitor): primero el metadato embebido en el MP4; si no está (clip
 // antiguo), el sidecar `.clip.json` heredado.
 pub fn clip_source(path: &Path) -> Option<String> {
-    read_embedded_source(path).or_else(|| legacy_source(path))
+    // La caja propia solo existe en los MP4/MOV que escribe Flashback; un Matroska no es ISO-BMFF.
+    let embedded = if is_matroska(path) { None } else { read_embedded_source(path) };
+    embedded.or_else(|| legacy_source(path))
 }
 
 pub fn read_embedded_source(path: &Path) -> Option<String> {
@@ -453,6 +553,43 @@ mod tests {
         std::fs::remove_file(&p).ok();
         let d = d.unwrap();
         assert!((d - 1.0).abs() < 0.01, "duración {d}");
+    }
+
+    fn fixture(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+    }
+
+    #[test]
+    fn library_lists_other_containers_too() {
+        let dir = std::env::temp_dir().join(format!("fb_formats_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["a.mov", "b.M4V", "c.mkv", "d.webm", "e.mp4", "f.avi", "g.txt"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let mut ids: Vec<String> = list_clips(vec![dir.clone()]).into_iter().map(|c| c.id).collect();
+        ids.sort();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(ids, ["a.mov", "b.M4V", "c.mkv", "d.webm", "e.mp4"]);
+    }
+
+    #[test]
+    fn duration_of_other_containers() {
+        for name in ["tiny.mkv", "tiny.webm", "tiny.mov"] {
+            let d = clip_duration_secs(&fixture(name)).unwrap_or(0.0);
+            assert!((d - 1.5).abs() < 0.1, "{name}: {d}");
+        }
+    }
+
+    #[test]
+    fn renaming_keeps_the_extension() {
+        let dir = std::env::temp_dir().join(format!("fb_rename_ext_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("viejo.mkv");
+        std::fs::write(&p, b"x").unwrap();
+        let index = dir.join("edits.json");
+        let new = rename_clip(&p.to_string_lossy(), "nuevo", &index).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(new.ends_with("nuevo.mkv"), "{new}");
     }
 
     #[test]

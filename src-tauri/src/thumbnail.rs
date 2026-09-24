@@ -445,3 +445,23 @@ mod win {
         (hi as u64) << 32 | lo as u64
     }
 }
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    // La biblioteca muestra MKV y WebM además de MP4/MOV: sus miniaturas y la tira del editor
+    // salen del mismo decodificador por GPU, sin nada específico del contenedor.
+    #[test]
+    fn thumbnails_and_filmstrip_for_every_container() {
+        for name in ["tiny.mkv", "tiny.webm", "tiny.mov"] {
+            let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name);
+            let src = src.to_string_lossy().into_owned();
+            let dst = std::env::temp_dir().join(format!("fb_thumb_{}_{name}.jpg", std::process::id()));
+            let r = super::generate(src.clone(), dst.to_string_lossy().into_owned(), 320);
+            let size = std::fs::metadata(&dst).map(|m| m.len()).unwrap_or(0);
+            let _ = std::fs::remove_file(&dst);
+            assert!(r.is_ok() && size > 0, "{name}: miniatura {r:?} ({size} bytes)");
+            let strip = super::filmstrip(src, 48, 4).unwrap_or_else(|e| panic!("{name}: tira {e}"));
+            assert!(!strip.into_bytes().is_empty(), "{name}: tira vacía");
+        }
+    }
+}
