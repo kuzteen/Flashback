@@ -42,6 +42,7 @@ type EditorState = {
   micPeaks: number[] | null;
   mixPeaks: number[] | null;
   exporting: boolean;
+  exportCancelling: boolean;
   exportProgress: number;
   edit: EditState;
   // Bloque seleccionado: destino de quitar, desactivar y de los tiradores de recorte.
@@ -66,6 +67,7 @@ function blank(): EditorState {
     micPeaks: null,
     mixPeaks: null,
     exporting: false,
+    exportCancelling: false,
     exportProgress: 0,
     edit: initialState(0),
     active: 0,
@@ -251,18 +253,21 @@ export async function persistEdit() {
   }
 }
 
-export async function exportClip(): Promise<string | undefined> {
+export type ExportFormat = 'mp4' | 'mov';
+
+export async function exportClip(format: ExportFormat): Promise<string | undefined> {
   const clip = editorState.clip;
   if (!clip?.path) return;
   const s = toSaved(snapshot(), true);
   if (s.segments.length === 0) throw new Error('No hay bloques activos para exportar');
   editorState.exporting = true;
+  editorState.exportCancelling = false;
   editorState.exportProgress = 0;
   const unlisten = await listen<number>('export-progress', (e) => {
     editorState.exportProgress = e.payload;
   });
   try {
-    const dst = await invoke<string>('edit_dest', { src: clip.path });
+    const dst = await invoke<string>('edit_dest', { src: clip.path, format });
     await invoke('export_clip', { src: clip.path, dst, edit: { segments: s.segments, mixer: s.mixer, format: s.format ?? DEFAULT_FORMAT, look: s.look } });
     return dst;
   } finally {
@@ -306,4 +311,10 @@ export async function navigateClip(dir: 1 | -1): Promise<void> {
 export function closeEditor() {
   resetAll();
   clearFilmstrip();
+}
+
+export function cancelExport() {
+  if (!editorState.exporting || editorState.exportCancelling) return;
+  editorState.exportCancelling = true;
+  invoke('export_cancel').catch(() => {});
 }

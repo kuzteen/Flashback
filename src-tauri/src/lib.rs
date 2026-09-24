@@ -113,16 +113,6 @@ fn set_watermark(app: tauri::AppHandle, on: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn get_export_format(app: tauri::AppHandle) -> String {
-    config::get_export_format(&app)
-}
-
-#[tauri::command]
-fn set_export_format(app: tauri::AppHandle, format: String) -> Result<(), String> {
-    config::set_export_format(&app, &format)
-}
-
-#[tauri::command]
 fn get_watermark_corner(app: tauri::AppHandle) -> String {
     config::get_watermark_corner(&app)
 }
@@ -301,6 +291,17 @@ async fn clip_fps(path: String) -> Result<u32, String> {
         .map_err(|e| format!("Error interno: {e}"))?
 }
 
+// Export del editor en curso: el botón de cancelar lo aborta y el backend borra el archivo a medias.
+static EXPORT_CANCEL: std::sync::Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>> =
+    std::sync::Mutex::new(None);
+
+#[tauri::command]
+fn export_cancel() {
+    if let Some(flag) = EXPORT_CANCEL.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 #[tauri::command]
 async fn export_clip(
     app: tauri::AppHandle,
@@ -311,8 +312,10 @@ async fn export_clip(
     use tauri::Emitter;
     // Marca de agua: solo si está activada. Se hornea únicamente aquí (export), nunca en captura.
     let watermark = config::get_watermark(&app).then(|| config::get_watermark_corner(&app));
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    *EXPORT_CANCEL.lock().unwrap_or_else(|e| e.into_inner()) = Some(cancel.clone());
     tokio::task::spawn_blocking(move || {
-        editor::export_clip(src, dst, edit, watermark, None, None, None, move |p: f32| {
+        editor::export_clip(src, dst, edit, watermark, None, None, Some(cancel), move |p: f32| {
             let _ = app.emit("export-progress", p);
         })
     })
@@ -650,15 +653,19 @@ async fn pick_folder() -> Result<Option<String>, String> {
 
 // Destino de exportación: los clips editados van a su carpeta dedicada, no junto al original.
 #[tauri::command]
-fn edit_dest(app: tauri::AppHandle, src: String) -> String {
+fn edit_dest(app: tauri::AppHandle, src: String, format: String) -> String {
     let stem = std::path::Path::new(&src)
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("clip");
-    let ext = config::get_export_format(&app);
-    free_path(&config::clips_edit_dir(&app), &format!("{stem}_edit"), &ext)
+    free_path(&config::clips_edit_dir(&app), &format!("{stem}_edit"), export_extension(&format))
         .to_string_lossy()
         .into_owned()
+}
+
+// Formato elegido al exportar: MOV si se pide, MP4 en cualquier otro caso.
+fn export_extension(format: &str) -> &'static str {
+    if format.eq_ignore_ascii_case("mov") { "mov" } else { "mp4" }
 }
 
 // Primer nombre libre (`x.mp4`, `x_2.mp4`, …): exportar otra vez el mismo clip no debe pisar el
@@ -838,13 +845,12 @@ pub fn run() {
             export_clip,
             share_prepare,
             share_cancel,
+            export_cancel,
             start_file_drag,
             get_watermark,
             set_watermark,
             get_watermark_corner,
             set_watermark_corner,
-            get_export_format,
-            set_export_format,
             rename_clip,
             delete_clip,
             delete_clips,
@@ -887,6 +893,9 @@ mod tests {
         std::fs::write(dir.join("a_edit_2.mp4"), b"").unwrap();
         assert_eq!(super::free_path(&dir, "a_edit", "mp4"), dir.join("a_edit_3.mp4"));
         assert_eq!(super::free_path(&dir, "a_edit", "mov"), dir.join("a_edit.mov"));
+        assert_eq!(super::export_extension("MOV"), "mov");
+        assert_eq!(super::export_extension("mp4"), "mp4");
+        assert_eq!(super::export_extension("avi"), "mp4");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

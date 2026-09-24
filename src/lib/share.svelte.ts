@@ -18,7 +18,7 @@ export type ShareEdit = { segments: SavedSegment[]; mixer: MixerState; format?: 
 const MB = 1024 * 1024;
 
 // Debe coincidir con editor::CANCELLED en el backend.
-const CANCELLED = 'export-cancelled';
+export const CANCELLED = 'export-cancelled';
 
 export const SIZE_PRESETS = [10, 50, 100] as const;
 

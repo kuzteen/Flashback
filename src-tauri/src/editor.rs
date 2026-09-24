@@ -2096,6 +2096,27 @@ mod win {
         }
 
         #[test]
+        fn a_cancelled_export_leaves_no_file() {
+            let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tiny.webm");
+            let dst = std::env::temp_dir().join(format!("fb_export_{}_cancel.mp4", std::process::id()));
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let r = export_clip(
+                src.to_string_lossy().into_owned(),
+                dst.to_string_lossy().into_owned(),
+                edit(&[(0.0, 1500.0)]),
+                None,
+                None,
+                None,
+                Some(cancel),
+                |_| {},
+            );
+            let exists = dst.exists();
+            let _ = std::fs::remove_file(&dst);
+            assert_eq!(r, Err(super::super::CANCELLED.to_string()));
+            assert!(!exists);
+        }
+
+        #[test]
         fn a_mov_exports_with_sound() {
             let r = export_fixture("tiny.mov");
             assert!(r.video >= 44, "vídeo {} de 45", r.video);

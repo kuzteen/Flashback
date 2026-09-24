@@ -1,6 +1,6 @@
 <script lang="ts">
   import Icon from '../Icon.svelte';
-  import { closeEditor, editorState, persistEdit } from '$lib/editor-state.svelte';
+  import { cancelExport, closeEditor, editorState, persistEdit } from '$lib/editor-state.svelte';
   import { matchShortcut } from '$lib/shortcuts';
   import { shareState } from '$lib/share.svelte';
   import { t } from '$lib/i18n.svelte';
@@ -138,7 +138,12 @@
         <div class="export-bar">
           <div class="export-fill" style:width="{Math.max(2, Math.round(editorState.exportProgress * 100))}%"></div>
         </div>
-        <div class="export-pct mono">{Math.round(editorState.exportProgress * 100)}%</div>
+        <div class="export-foot">
+          <span class="export-pct mono">{Math.round(editorState.exportProgress * 100)}%</span>
+          <button class="export-cancel" onclick={cancelExport} disabled={editorState.exportCancelling}>
+            {editorState.exportCancelling ? t('ed.cancelling') : t('ed.cancelExport')}
+          </button>
+        </div>
       </div>
     </div>
   {/if}
@@ -336,9 +341,31 @@
     background: var(--accent);
     transition: width 0.2s ease;
   }
+  .export-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
   .export-pct {
     font-size: 12px;
     color: var(--text-2);
-    text-align: right;
+  }
+  .export-cancel {
+    height: 30px;
+    padding: 0 12px;
+    font-size: 12.5px;
+    color: var(--text-1);
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-sm);
+    transition: color 0.14s ease, background 0.14s ease;
+  }
+  .export-cancel:hover:not(:disabled) {
+    color: var(--text-0);
+    background: var(--bg-2);
+  }
+  .export-cancel:disabled {
+    opacity: 0.6;
   }
 </style>

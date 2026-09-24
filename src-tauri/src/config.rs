@@ -209,20 +209,6 @@ pub fn set_watermark(app: &tauri::AppHandle, on: bool) -> Result<(), String> {
     write_setting(app, "watermark", serde_json::json!(on))
 }
 
-// Contenedor de los clips exportados desde el editor: "mp4" (por defecto) o "mov". Compartir
-// siempre entrega MP4.
-pub fn get_export_format(app: &tauri::AppHandle) -> String {
-    normalize_export_format(&read_setting(app, "export_format").unwrap_or_default()).into()
-}
-
-pub fn set_export_format(app: &tauri::AppHandle, format: &str) -> Result<(), String> {
-    write_setting(app, "export_format", serde_json::json!(normalize_export_format(format)))
-}
-
-fn normalize_export_format(format: &str) -> &'static str {
-    if format.eq_ignore_ascii_case("mov") { "mov" } else { "mp4" }
-}
-
 pub fn get_watermark_corner(app: &tauri::AppHandle) -> String {
     read_setting(app, "watermark_corner").unwrap_or_else(|| "br".into())
 }
