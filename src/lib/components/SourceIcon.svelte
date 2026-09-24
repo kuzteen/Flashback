@@ -20,7 +20,7 @@
   <img class="ico" src={badge.src} alt="" draggable="false" style:width="{size}px" style:height="{size}px" />
 {:else if badge.kind === 'initial'}
   <span class="initial" style:width="{size}px" style:height="{size}px" style:font-size="{Math.round(size * 0.58)}px">
-    {badge.letter}
+    <span class="letter">{badge.letter}</span>
   </span>
 {:else if badge.kind === 'screen'}
   <Icon name="monitor-fill" size={size - 1} sw={1.8} />
@@ -45,5 +45,12 @@
     color: var(--text-0);
     background: var(--bg-3);
     border-radius: 25%;
+  }
+  /* Recortada a la altura de la mayúscula, como la duración de las tarjetas: centrar la caja
+     del texto dejaría la letra baja por el hueco que la fuente reserva a los descendentes. */
+  .letter {
+    display: block;
+    line-height: 1;
+    text-box: trim-both cap alphabetic;
   }
 </style>

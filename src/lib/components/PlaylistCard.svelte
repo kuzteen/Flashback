@@ -335,10 +335,13 @@
     object-fit: cover;
     display: block;
   }
+  /* Recorte a la altura de la mayúscula para que las iniciales queden en el centro óptico. */
   .ini {
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.02em;
+    line-height: 1;
+    text-box: trim-both cap alphabetic;
     color: var(--text-2);
   }
   /* Se atenúa la ilustración, no el hueco: el número va encima y tiene que quedar legible. */

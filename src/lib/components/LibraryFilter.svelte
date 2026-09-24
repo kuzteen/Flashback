@@ -213,9 +213,12 @@
     height: 100%;
     object-fit: cover;
   }
+  /* Recorte a la altura de la mayúscula para que las iniciales queden en el centro óptico. */
   .ini {
     font-size: 10px;
     font-weight: 600;
+    line-height: 1;
+    text-box: trim-both cap alphabetic;
     color: var(--text-1);
   }
   .txt {
