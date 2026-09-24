@@ -2,26 +2,26 @@
   import { untrack } from 'svelte';
   import Icon from './Icon.svelte';
   import PlaylistPicker from './PlaylistPicker.svelte';
+  import SourceIcon from './SourceIcon.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { goto } from '$app/navigation';
   import { revealItemInDir } from '@tauri-apps/plugin-opener';
   import { menu } from '$lib/menu.svelte';
-  import { formatDuration, formatRelative, displaySource, isScreenSource, type Clip } from '$lib/clips';
-  import { gameIcon, ensureGameIcon } from '$lib/artwork.svelte';
+  import { formatDuration, formatRelative, displaySource, type Clip } from '$lib/clips';
+  import { openClipEdit } from '$lib/clip-edit.svelte';
   import {
     isFavorite,
     toggleFavorite,
     requestThumb,
     cachedThumb,
     refreshLibrary,
-    renameFavorite,
     removeFavorite
   } from '$lib/library.svelte';
   import { openEditor } from '$lib/editor-state.svelte';
   import { openShare } from '$lib/share.svelte';
   import { selected, isSelected, pick } from '$lib/selection.svelte';
   import { confirmDelete } from '$lib/confirm.svelte';
-  import { playlistsWith, rekeyPlaylistClip } from '$lib/playlists.svelte';
+  import { playlistsWith } from '$lib/playlists.svelte';
   import { t } from '$lib/i18n.svelte';
 
   // fresh solo lo enciende la vista de playlist: en la biblioteca no hay "añadido" que marcar.
@@ -224,10 +224,6 @@
     el.style.visibility = 'visible';
   });
 
-  // La caché de iconos es la misma que usan las playlists: si ya se pidió, no hay IPC nuevo.
-  $effect(() => {
-    if (clip.source && !isScreenSource(clip.source)) ensureGameIcon(clip.source);
-  });
 
   function toggleMenu(e: MouseEvent) {
     e.stopPropagation();
@@ -235,9 +231,9 @@
     menu.openId = open ? null : clip.id;
   }
 
-  // El clic derecho abre el mismo menú que los tres puntos, pero en la punta del cursor. Sobre el
-  // campo de renombrar se deja pasar para no perder el copiar/pegar nativo, igual que hace el
-  // guard global del layout.
+  // El clic derecho abre el mismo menú que los tres puntos, pero en la punta del cursor. Sobre un
+  // campo de texto se deja pasar para no perder el copiar/pegar nativo, igual que hace el guard
+  // global del layout.
   function onContextMenu(e: MouseEvent) {
     if ((e.target as HTMLElement).closest('input, textarea, [contenteditable="true"]')) return;
     e.preventDefault();
@@ -291,36 +287,10 @@
     toggleFavorite(clip.id);
   }
 
-  let renaming = $state(false);
-  let renameValue = $state('');
-
-  function startRename(e: MouseEvent) {
+  function editClip(e: MouseEvent) {
     e.stopPropagation();
     menu.openId = null;
-    renameValue = clip.title;
-    renaming = true;
-  }
-
-  async function commitRename() {
-    if (!renaming) return;
-    renaming = false;
-    const name = renameValue.trim();
-    if (!name || name === clip.title) return;
-    try {
-      const newPath = await invoke<string>('rename_clip', { path: clip.path, newName: name });
-      const newId = newPath.split(/[\\/]/).pop() ?? clip.id;
-      renameFavorite(clip.id, newId);
-      const oldPath = clip.path;
-      await refreshLibrary();
-      rekeyPlaylistClip(oldPath, newPath);
-    } catch (err) {
-      console.error('rename_clip', err);
-    }
-  }
-
-  function focusSelect(node: HTMLInputElement) {
-    node.focus();
-    node.select();
+    openClipEdit([clip.path]);
   }
 
   async function openLocation(e: MouseEvent) {
@@ -448,11 +418,7 @@
     <div class="info">
       {#if clip.source}
         <span class="src label">
-          {#if isScreenSource(clip.source)}
-            <Icon name="monitor-fill" size={15} sw={1.8} />
-          {:else if gameIcon(clip.source)}
-            <img class="src-ico" src={gameIcon(clip.source)} alt="" draggable="false" />
-          {/if}
+          <SourceIcon source={clip.source} cover={clip.coverSrc ?? null} size={compact ? 14 : 16} />
           <span class="src-name">{displaySource(clip.source)}</span>
         </span>
       {:else}
@@ -466,20 +432,6 @@
 
       <h3 class="title">{clip.title}</h3>
 
-      {#if renaming}
-        <input
-          class="title-edit"
-          bind:value={renameValue}
-          use:focusSelect
-          onclick={(e) => e.stopPropagation()}
-          onkeydown={(e) => {
-            e.stopPropagation();
-            if (e.key === 'Enter') commitRename();
-            else if (e.key === 'Escape') renaming = false;
-          }}
-          onblur={commitRename}
-        />
-      {/if}
 
       <span class="when mono">
         <Icon name="clock" size={13} sw={2} />{formatRelative(clip.createdAt)}
@@ -547,7 +499,7 @@
             {t('pl.addTo')}
             <Icon name="chevron-down" size={13} sw={2.2} />
           </button>
-          <button role="menuitem" onclick={startRename}><Icon name="rename" size={16} sw={2} /> {t('card.rename')}</button>
+          <button role="menuitem" onclick={editClip}><Icon name="rename" size={16} sw={2} /> {t('card.editClip')}</button>
           <button role="menuitem" onclick={openLocation}><Icon name="folder-open" size={16} sw={2} /> {t('card.openLocation')}</button>
           <div class="sep"></div>
           <button role="menuitem" class="danger" onclick={deleteClip}><Icon name="trash" size={16} sw={2} /> {t('card.delete')}</button>
@@ -882,14 +834,6 @@
     white-space: nowrap;
     text-overflow: ellipsis;
   }
-  .src-ico {
-    flex: none;
-    width: 16px;
-    height: 16px;
-    object-fit: cover;
-    border-radius: 4px;
-    display: block;
-  }
   .title {
     font-family: var(--font-display);
     font-size: 16px;
@@ -899,28 +843,6 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-  /* El campo flota sobre el título en vez de sustituirlo: ocupando sitio en la rejilla, su
-     borde y su relleno estiraban la fila y la tarjeta crecía 8 px al renombrar. Las filas 1fr de
-     arriba y abajo son iguales, así que el centro de .info es el centro de la fila del título.
-     Los -6 px laterales compensan el relleno para que el texto no se desplace al aparecer. */
-  .title-edit {
-    position: absolute;
-    left: -6px;
-    right: -6px;
-    top: 50%;
-    transform: translateY(-50%);
-    min-width: 0;
-    font-family: var(--font-display);
-    font-size: 16px;
-    font-weight: 560;
-    line-height: 1.2;
-    color: var(--text-0);
-    background: var(--bg-0);
-    border: 1px solid var(--accent);
-    border-radius: 5px;
-    padding: 3px 6px;
-    outline: none;
   }
 
   .actions {
@@ -1101,12 +1023,7 @@
     padding-bottom: 5px;
     font-size: 11.5px;
   }
-  .compact .src-ico {
-    width: 14px;
-    height: 14px;
-  }
-  .compact .title,
-  .compact .title-edit {
+  .compact .title {
     font-size: 14.5px;
   }
   .compact .when {

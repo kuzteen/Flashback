@@ -5,6 +5,10 @@ export type Clip = {
   id: string;
   title: string;
   source: string;
+  // Lo que detectó la captura; `source` es el juego efectivo (el editado a mano si lo hay).
+  detected: string;
+  // Portada puesta a mano en "Editar clip".
+  coverSrc?: string | null;
   durationSec: number;
   sizeBytes: number;
   createdAt: Date;
@@ -52,11 +56,7 @@ export function formatRelative(date: Date): string {
   return t('time.daysAgo', { n: d });
 }
 
-// Las capturas de pantalla guardan el origen como "Pantalla N"; cualquier otro origen es un
-// juego. Es la misma convención con la que el backend rellena el `source` al capturar.
-export function isScreenSource(source: string): boolean {
-  return /^(?:pantalla|screen)\b/i.test(source.trim());
-}
+export { isScreenSource } from './screen-source';
 
 // El `source` de las pantallas se persiste canónico ("Pantalla N", el label del backend), pero se
 // muestra en el idioma activo. Localiza cada tramo (un source puede unir varios con " · ");

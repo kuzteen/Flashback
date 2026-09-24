@@ -9,6 +9,9 @@ type RawClip = {
   modified_ms: number;
   duration_sec: number;
   source: string;
+  detected: string;
+  cover: string | null;
+  cover_ms: number;
 };
 
 const FAV_KEY = 'flashback.favorites';
@@ -90,6 +93,8 @@ function toClip(r: RawClip, withEdits: Set<string>): Clip {
     id: r.id,
     title: r.name,
     source: r.source,
+    detected: r.detected,
+    coverSrc: r.cover ? `${convertFileSrc(r.cover)}?v=${r.cover_ms}` : null,
     durationSec: r.duration_sec,
     sizeBytes: r.size_bytes,
     createdAt: new Date(r.modified_ms),

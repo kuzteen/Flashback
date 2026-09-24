@@ -18,6 +18,7 @@
   import ShareDialog from '$lib/components/ShareDialog.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import PlaylistDialog from '$lib/components/PlaylistDialog.svelte';
+  import ClipEditDialog from '$lib/components/ClipEditDialog.svelte';
   import { editorState, closeEditor } from '$lib/editor-state.svelte';
   import {
     captureConfig,
@@ -856,6 +857,7 @@
 <ShareDialog />
 <ConfirmDialog />
 <PlaylistDialog />
+<ClipEditDialog />
 
 {#if updater.popupOpen && updater.info}
   <div class="upd-overlay" role="presentation" onclick={closeUpdatePopup}>

@@ -12,6 +12,7 @@
   import { selected, clearSelection, selectAll, pruneSelection } from '$lib/selection.svelte';
   import { confirmDelete, confirmState } from '$lib/confirm.svelte';
   import { shareState } from '$lib/share.svelte';
+  import { clipEdit, openClipEdit } from '$lib/clip-edit.svelte';
   import { removeFavorite } from '$lib/library.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { t } from '$lib/i18n.svelte';
@@ -43,7 +44,7 @@
   function onKey(e: KeyboardEvent) {
     // Con un modal delante las teclas son suyas: Supr abriría una segunda confirmación encima de
     // la primera, y Escape cerraría los dos a la vez.
-    if (editorState.clip || shareState.clip || confirmState.req) return;
+    if (editorState.clip || shareState.clip || confirmState.req || clipEdit.paths.length) return;
     const el = e.target as HTMLElement | null;
     const typing =
       !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
@@ -205,6 +206,10 @@
       <Icon name={allSelected ? 'check' : 'minus'} size={14} sw={2.8} />
     </button>
     <span class="selcount mono">{t('sel.count', { n: String(selected.size) })}</span>
+    <button class="selbtn" onclick={() => openClipEdit(selectedPaths)}>
+      <Icon name="rename" size={16} sw={2} />
+      {t('sel.edit')}
+    </button>
     <div class="pl-dd" bind:this={plEl}>
       <button class="selbtn" class:on={plOpen} onclick={() => (plOpen = !plOpen)}>
         <Icon name="folder-plus" size={16} />
