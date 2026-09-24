@@ -287,7 +287,6 @@
   .slot.off:hover .tip {
     opacity: 1;
     visibility: visible;
-    transition-delay: 0.25s;
   }
 
   /* El borde discontinuo es la señal de "esto se arrastra"; al pasar por encima se vuelve sólido
