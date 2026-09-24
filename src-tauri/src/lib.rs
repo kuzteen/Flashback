@@ -11,6 +11,7 @@ mod hotkeys;
 mod edits;
 mod library;
 mod look;
+mod mp4mux;
 mod playlists;
 mod reframe;
 mod share;
