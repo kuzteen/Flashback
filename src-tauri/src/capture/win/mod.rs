@@ -599,7 +599,7 @@ impl ReplayBuffer {
     fn attach_recording(&mut self, out_dir: &str) -> Option<String> {
         let start = self.packets.iter().rposition(|p| p.key)?;
         let (sys, mic) = self.audio_formats();
-        let mux = LiveMux::new(reserve_clip_path(out_dir), self.width, self.height, self.fps, self.bitrate, sys, mic);
+        let mux = LiveMux::new(reserve_clip_path(out_dir), self.width, self.height, sys, mic);
         if !self.seq_header.is_empty() {
             mux.set_seq_header(self.seq_header.clone());
         }
@@ -630,7 +630,7 @@ impl ReplayBuffer {
     // grabación sigue en su archivo; si cambió, el MP4 no puede cambiar de formato a mitad, así
     // que se cierra esa parte y sigue en un archivo nuevo.
     fn recording_segment(&mut self) {
-        let (w, h, fps, bitrate) = (self.width, self.height, self.fps, self.bitrate);
+        let (w, h) = (self.width, self.height);
         let (sys, mic) = self.audio_formats();
         let Some(rec) = self.recording.as_mut() else { return };
         if rec.mux.dims() == (w, h) && rec.mux.audio_formats() == (sys, mic) {
@@ -640,7 +640,7 @@ impl ReplayBuffer {
         if let Some(path) = finish_mux(&rec.mux) {
             rec.parts.push(path);
         }
-        rec.mux = LiveMux::new(reserve_clip_path(&rec.out_dir), w, h, fps, bitrate, sys, mic);
+        rec.mux = LiveMux::new(reserve_clip_path(&rec.out_dir), w, h, sys, mic);
     }
 
     // Mantener acotado el buffer: descartar hasta el último keyframe anterior al
@@ -850,7 +850,7 @@ pub fn save_replay(source: &str) -> Option<String> {
         (r.buffer.clone(), r.out_dir.clone())
     };
 
-    let (packets, total, seq_header, width, height, fps, bitrate, sys_audio, mic_audio) = {
+    let (packets, total, seq_header, width, height, sys_audio, mic_audio) = {
         let buf = buffer.lock_ok();
         let start = buf.packets.iter().position(|p| p.key);
         // Solo se copian referencias: el lock dura lo mismo con 30 s que con 15 min de buffer y
@@ -870,8 +870,6 @@ pub fn save_replay(source: &str) -> Option<String> {
             buf.seq_header.clone(),
             buf.width,
             buf.height,
-            buf.fps,
-            buf.bitrate,
             buf.sys_audio.as_ref().map(AudioMuxTrack::from),
             buf.mic_audio.as_ref().map(AudioMuxTrack::from),
         )
@@ -887,9 +885,8 @@ pub fn save_replay(source: &str) -> Option<String> {
         return None;
     }
 
-    // El sink MP4 necesita el AudioSpecificConfig (user_data) de cada pista AAC para
-    // escribir el `esds`; sin él, Finalize falla con MF_E_SINK_HEADERS_NOT_FOUND. Si una
-    // pista no llegó a producir ese config (p. ej. el encoder AAC no pudo con el formato
+    // El MP4 necesita el AudioSpecificConfig (user_data) de cada pista AAC para escribir el
+    // `esds`. Si una pista no llegó a producir ese config (p. ej. el encoder AAC no pudo con el formato
     // del dispositivo) se omite, y el replay se guarda solo con vídeo en vez de fallar.
     let sys_audio = match sys_audio {
         Some(t) if !t.user_data.is_empty() && !t.packets.is_empty() => Some(t),
@@ -909,41 +906,17 @@ pub fn save_replay(source: &str) -> Option<String> {
     };
 
     let path = reserve_clip_path(&out_dir);
-    // save_replay corre en el hilo de Tauri (STA), pero el sink MP4 con AAC crea
-    // componentes de Media Foundation que exigen apartamento MTA (sin él, Finalize
-    // falla con "clase no registrada"). Se muxea en un hilo propio MTA, mismo patrón
-    // que los hilos de captura.
-    let path_t = path.clone();
-    let muxed = std::thread::spawn(move || {
-        unsafe {
-            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-        }
-        let r = mux_replay(
-            &path_t, &packets, &seq_header, width, height, fps, bitrate, sys_audio,
-            mic_audio,
-        )
-        .map_err(|e| format!("{e:?}"));
-        unsafe { CoUninitialize() };
-        r
-    })
-    .join();
-
-    match muxed {
-        Ok(Ok(())) => {
+    match mux_replay(&path, &packets, &seq_header, width, height, sys_audio, mic_audio) {
+        Ok(()) => {
             if !source.is_empty() {
                 let _ = crate::library::write_embedded_source(std::path::Path::new(&path), source);
             }
             Some(path)
         }
-        Ok(Err(e)) => {
-            eprintln!("save_replay: fallo al muxear el MP4: {e}");
-            // Finalize falló: el archivo a medio escribir quedaría corrupto en la
-            // biblioteca, así que lo borramos.
-            let _ = std::fs::remove_file(&path);
-            None
-        }
-        Err(_) => {
-            eprintln!("save_replay: el hilo de muxado terminó inesperadamente");
+        Err(e) => {
+            eprintln!("save_replay: fallo al escribir el MP4: {e}");
+            // Un MP4 a medio escribir con el índice delante apuntaría a datos que no están:
+            // se borra para no dejar un clip roto en la biblioteca.
             let _ = std::fs::remove_file(&path);
             None
         }
@@ -1545,10 +1518,10 @@ fn build_manual(
     let core = build_pipeline_core(
         stats, item, fps, factor, resolution, bitrate_override, encoder_pref, false, None, false,
     )?;
-    let PipelineCore { mut pipe, out_w, out_h, bitrate, video_base } = core;
+    let PipelineCore { mut pipe, out_w, out_h, video_base, .. } = core;
 
     let out_path = reserve_clip_path(out_dir);
-    let mux = LiveMux::new(out_path, out_w, out_h, fps, bitrate, sys_target, mic_target);
+    let mux = LiveMux::new(out_path, out_w, out_h, sys_target, mic_target);
 
     let mut audio_tracks = Vec::new();
     if let (Some((rate, ch)), Some((_, dst_ch))) = (sys_native, sys_target) {
@@ -3017,7 +2990,7 @@ mod tests {
     fn livemux_new_segment_continues_after_what_was_written() {
         ensure_mf();
         let path = std::env::temp_dir().join("flashback_livemux_seg.mp4").to_string_lossy().into_owned();
-        let mux = LiveMux::new(path.clone(), 1920, 1080, 30, 4_000_000, None, None);
+        let mux = LiveMux::new(path.clone(), 1920, 1080, None, None);
         let f = 333_333i64;
         for i in 0..3 {
             mux.push_video_bytes(Arc::new(vec![0u8; 8]), i * f, f, i == 0);
@@ -3037,7 +3010,7 @@ mod tests {
 
     fn ring_with(fps: u32, frames: i64, gop: i64) -> ReplayBuffer {
         let mut buf = ReplayBuffer::new(30, 1920, 1080, fps, 4_000_000);
-        buf.seq_header = vec![0u8; 16];
+        buf.seq_header = TEST_SEQ.to_vec();
         let f = fps_interval(fps);
         for i in 0..frames {
             buf.push(vec![0u8; 8], i * f, f, i % gop == 0);
@@ -3313,9 +3286,17 @@ mod tests {
         );
     }
 
-    // El muxer en directo no debe abrir el SinkWriter hasta tener las cabeceras de vídeo Y de
-    // cada pista de audio esperada. (La validez del MP4 con bitstream H.264/AAC real la cubre
-    // la verificación manual; aquí, con paquetes sintéticos, solo se prueba el handshake.)
+    const TEST_SEQ: [u8; 16] = [0, 0, 0, 1, 0x67, 0x4D, 0x00, 0x1F, 0x95, 0xA8, 0, 0, 0, 1, 0x68, 0xEE];
+
+    fn test_audio_header() -> Vec<u8> {
+        let mut ud = vec![0u8; 12];
+        ud.extend_from_slice(&[0x11, 0x90]);
+        ud
+    }
+
+    // El muxer en directo no debe abrir el archivo hasta tener las cabeceras de vídeo Y de cada
+    // pista de audio esperada. Con paquetes sintéticos solo se prueba el handshake; la validez
+    // del MP4 la cubre livemux_writes_a_playable_file con bitstream real.
     #[test]
     fn livemux_waits_for_headers_before_writing() {
         ensure_mf();
@@ -3324,16 +3305,16 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         let _ = std::fs::remove_file(&path);
-        let mux = LiveMux::new(path.clone(), 1920, 1080, 30, 4_000_000, Some((48_000, 2)), None);
+        let mux = LiveMux::new(path.clone(), 1920, 1080, Some((48_000, 2)), None);
 
-        mux.set_seq_header(vec![0u8; 32]);
+        mux.set_seq_header(TEST_SEQ.to_vec());
         mux.push_video(vec![0u8; 64], 0, 333_333, true);
         assert!(
             !mux.is_writing(),
             "no debe arrancar sin la cabecera de la pista de audio esperada"
         );
 
-        mux.set_audio_header(AudioRole::Sys, vec![0u8; 2], 0);
+        mux.set_audio_header(AudioRole::Sys, test_audio_header(), 0);
         mux.push_audio(AudioRole::Sys, Arc::new(vec![0u8; 16]), 0, 213_333);
         assert!(mux.is_writing(), "con vídeo + cabecera de audio debe estar escribiendo");
 
@@ -3355,22 +3336,20 @@ mod tests {
             path.clone(),
             1920,
             1080,
-            30,
-            4_000_000,
             Some((48_000, 2)),
             Some((48_000, 1)),
         );
         mux.set_header_timeout(Duration::from_millis(0));
 
-        mux.set_seq_header(vec![0u8; 32]);
-        mux.set_audio_header(AudioRole::Sys, vec![0u8; 2], 0);
+        mux.set_seq_header(TEST_SEQ.to_vec());
+        mux.set_audio_header(AudioRole::Sys, test_audio_header(), 0);
         mux.push_video(vec![0u8; 64], 0, 333_333, true);
         assert!(
             mux.is_writing(),
             "con timeout vencido debe arrancar descartando el micrófono"
         );
         // El micrófono sin cabecera quedó descartado: no debe existir su stream.
-        assert!(mux.mic_stream_is_none());
+        assert!(mux.mic_track_is_none());
 
         let _ = mux.finalize();
         let _ = std::fs::remove_file(&path);
@@ -3381,7 +3360,31 @@ mod tests {
     fn livemux_no_video_returns_none() {
         ensure_mf();
         let mux =
-            LiveMux::new("nonexistent.mp4".into(), 1920, 1080, 30, 4_000_000, Some((48_000, 2)), None);
+            LiveMux::new("nonexistent.mp4".into(), 1920, 1080, Some((48_000, 2)), None);
         assert_eq!(mux.finalize(), None);
+    }
+
+    #[test]
+    fn livemux_writes_a_playable_file() {
+        let m = crate::mp4mux::mf_tests::media(0);
+        let path = std::env::temp_dir()
+            .join(format!("flashback_livemux_real_{}.mp4", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        let mux = LiveMux::new(path.clone(), 128, 72, Some((48_000, 2)), None);
+        mux.set_seq_header(m.seq.clone());
+        mux.set_audio_header(AudioRole::Sys, test_audio_header(), 0);
+        let mut audio = m.audio.iter().peekable();
+        for (data, time, key) in &m.video {
+            while let Some((a, at)) = audio.next_if(|(_, at)| at <= time) {
+                mux.push_audio(AudioRole::Sys, Arc::new(a.clone()), *at, 213_333);
+            }
+            mux.push_video_bytes(Arc::new(data.clone()), *time, 333_333, *key);
+        }
+        assert_eq!(mux.finalize(), Some(path.clone()));
+        let read = crate::mp4mux::mf_tests::read(std::path::Path::new(&path));
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(read.video, 30);
+        assert!(read.audio > 20);
     }
 }

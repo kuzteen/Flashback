@@ -1,15 +1,30 @@
+use std::fs::{File, OpenOptions};
+use std::io::BufWriter;
+
 use super::*;
+use crate::mp4mux::hybrid::Hybrid;
+use crate::mp4mux::{progressive, Packet, Track};
+
+const WRITE_BUFFER: usize = 1 << 20;
+
+struct MuxSample {
+    track: usize,
+    data: Bytes,
+    time: i64,
+    dur: i64,
+    key: bool,
+}
 
 // Muxer en directo de la grabación manual: recibe paquetes ya codificados (H.264 + AAC) del
-// pipeline compartido y los escribe a un MP4 en passthrough al vuelo (a diferencia del replay,
-// que los guarda en RAM y muxea al final). Un stream passthrough necesita sus cabeceras al
-// declararse (SPS/PPS del vídeo, AudioSpecificConfig de cada pista), que solo se conocen tras
-// el primer paquete de cada fuente: por eso hay un handshake que bufferea hasta tenerlas.
+// pipeline compartido y los escribe como MP4 híbrido (ver mp4mux::hybrid). Las pistas necesitan
+// sus cabeceras al declararse (SPS/PPS del vídeo, AudioSpecificConfig de cada pista), que solo se
+// conocen tras el primer paquete de cada fuente: por eso hay un handshake que bufferea hasta
+// tenerlas. El disco lo toca un hilo propio; aquí solo se encolan referencias a los paquetes.
 struct LiveMuxState {
-    writer: Option<IMFSinkWriter>,
-    video_stream: u32,
-    sys_stream: Option<u32>,
-    mic_stream: Option<u32>,
+    tx: Option<mpsc::Sender<MuxSample>>,
+    worker: Option<JoinHandle<bool>>,
+    sys_track: Option<usize>,
+    mic_track: Option<usize>,
     base: i64,
     seq_header: Vec<u8>,
     sys_hdr: Option<(Vec<u8>, u32)>,
@@ -30,8 +45,6 @@ pub(super) struct LiveMux {
     path: String,
     width: u32,
     height: u32,
-    fps: u32,
-    bitrate: u32,
     // Pistas de audio esperadas (sample_rate, canales) del AAC ya downmezclado; None = ausente.
     sys: Option<(u32, u16)>,
     mic: Option<(u32, u16)>,
@@ -39,19 +52,11 @@ pub(super) struct LiveMux {
     st: Mutex<LiveMuxState>,
 }
 
-// El IMFSinkWriter (COM, !Send/!Sync) vive dentro de `st`; todo acceso pasa por ese Mutex, que
-// serializa las llamadas del worker de vídeo y de los hilos de audio. Mismo patrón que
-// ReplayPipeline y el antiguo Encoder de la grabación manual.
-unsafe impl Send for LiveMux {}
-unsafe impl Sync for LiveMux {}
-
 impl LiveMux {
     pub(super) fn new(
         path: String,
         width: u32,
         height: u32,
-        fps: u32,
-        bitrate: u32,
         sys: Option<(u32, u16)>,
         mic: Option<(u32, u16)>,
     ) -> Arc<LiveMux> {
@@ -59,16 +64,14 @@ impl LiveMux {
             path,
             width,
             height,
-            fps,
-            bitrate,
             sys,
             mic,
             header_timeout: Mutex::new(Duration::from_millis(1000)),
             st: Mutex::new(LiveMuxState {
-                writer: None,
-                video_stream: 0,
-                sys_stream: None,
-                mic_stream: None,
+                tx: None,
+                worker: None,
+                sys_track: None,
+                mic_track: None,
                 base: i64::MIN,
                 seq_header: Vec::new(),
                 sys_hdr: None,
@@ -125,8 +128,8 @@ impl LiveMux {
     }
 
     #[cfg(test)]
-    pub(super) fn mic_stream_is_none(&self) -> bool {
-        self.st.lock_ok().mic_stream.is_none()
+    pub(super) fn mic_track_is_none(&self) -> bool {
+        self.st.lock_ok().mic_track.is_none()
     }
 
     pub(super) fn set_audio_header(&self, role: AudioRole, user_data: Vec<u8>, payload_type: u32) {
@@ -168,14 +171,36 @@ impl LiveMux {
         st.first_pkt_at.map(|t| t.elapsed() >= timeout).unwrap_or(false)
     }
 
-    // Intenta abrir el SinkWriter y volcar lo pendiente. Requiere base (primer keyframe) y
+    // Arranca el hilo de escritura y vuelca lo pendiente. Requiere base (primer keyframe) y
     // headers_ready().
     fn try_begin(&self, st: &mut LiveMuxState) {
         if st.writing || st.failed || st.base == i64::MIN || !self.headers_ready(st) {
             return;
         }
-        match self.open_writer(st) {
-            Ok(()) => {
+        let Some(video) = Track::h264(self.width, self.height, &st.seq_header) else {
+            eprintln!("grabación manual: cabecera de vídeo sin SPS/PPS; no se puede abrir el MP4");
+            st.failed = true;
+            st.pending.clear();
+            return;
+        };
+        let mut tracks = vec![video];
+        st.sys_track = audio_track(self.sys, &st.sys_hdr).map(|t| {
+            tracks.push(t);
+            tracks.len() - 1
+        });
+        st.mic_track = audio_track(self.mic, &st.mic_hdr).map(|t| {
+            tracks.push(t);
+            tracks.len() - 1
+        });
+        let (tx, rx) = mpsc::channel();
+        let path = self.path.clone();
+        match std::thread::Builder::new()
+            .name("flashback-mux".into())
+            .spawn(move || write_hybrid(&path, tracks, rx))
+        {
+            Ok(worker) => {
+                st.tx = Some(tx);
+                st.worker = Some(worker);
                 st.writing = true;
                 let pending = std::mem::take(&mut st.pending);
                 for (role, data, time, dur, key) in pending {
@@ -183,84 +208,15 @@ impl LiveMux {
                 }
             }
             Err(e) => {
-                eprintln!("grabación manual: no se pudo abrir el muxer en directo: {e:?}");
+                eprintln!("grabación manual: no se pudo crear el hilo del muxer: {e}");
                 st.failed = true;
                 st.pending.clear();
             }
         }
     }
 
-    // Crea el SinkWriter passthrough (faststart) y declara los streams disponibles.
-    fn open_writer(&self, st: &mut LiveMuxState) -> Result<()> {
-        let url = HSTRING::from(self.path.as_str());
-        let byte_stream = unsafe {
-            MFCreateFile(
-                MF_ACCESSMODE_READWRITE,
-                MF_OPENMODE_DELETE_IF_EXIST,
-                MF_FILEFLAGS_NONE,
-                &url,
-            )?
-        };
-        if let Ok(bs_attr) = byte_stream.cast::<IMFAttributes>() {
-            unsafe {
-                let _ = bs_attr.SetUINT32(&MF_MPEG4SINK_MOOV_BEFORE_MDAT, 1);
-            }
-        }
-        let attrs = unsafe {
-            let mut a: Option<IMFAttributes> = None;
-            MFCreateAttributes(&mut a, 2)?;
-            let a = a.ok_or_else(null_out)?;
-            a.SetUINT32(&MF_SINK_WRITER_DISABLE_THROTTLING, 1)?;
-            a.SetGUID(&MF_TRANSCODE_CONTAINERTYPE, &MFTranscodeContainerType_MPEG4)?;
-            a
-        };
-        let writer = unsafe { MFCreateSinkWriterFromURL(PCWSTR::null(), &byte_stream, &attrs)? };
-
-        let video_stream = add_h264_passthrough_stream(
-            &writer,
-            &st.seq_header,
-            self.width,
-            self.height,
-            self.fps,
-            self.bitrate,
-        )?;
-
-        // Sistema primero (pista de audio por defecto). Solo se declaran las que tienen cabecera.
-        let mut sys_stream = None;
-        if let (Some((rate, ch)), Some((ud, pt))) = (self.sys, st.sys_hdr.clone()) {
-            let track = AudioMuxTrack {
-                packets: Vec::new(),
-                sample_rate: rate,
-                channels: ch,
-                bitrate: aac_bitrate(ch),
-                user_data: ud,
-                payload_type: pt,
-            };
-            sys_stream = Some(add_aac_passthrough_stream(&writer, &track)?);
-        }
-        let mut mic_stream = None;
-        if let (Some((rate, ch)), Some((ud, pt))) = (self.mic, st.mic_hdr.clone()) {
-            let track = AudioMuxTrack {
-                packets: Vec::new(),
-                sample_rate: rate,
-                channels: ch,
-                bitrate: aac_bitrate(ch),
-                user_data: ud,
-                payload_type: pt,
-            };
-            mic_stream = Some(add_aac_passthrough_stream(&writer, &track)?);
-        }
-
-        unsafe { writer.BeginWriting()? };
-        st.writer = Some(writer);
-        st.video_stream = video_stream;
-        st.sys_stream = sys_stream;
-        st.mic_stream = mic_stream;
-        Ok(())
-    }
-
-    // Escribe un sample rebasado a `base`. role=None => vídeo. Descarta audio con time < base
-    // (el contenedor no admite timestamps negativos), igual que el muxer del replay.
+    // Encola un paquete rebasado a `base`. role=None => vídeo. Descarta lo anterior a la base
+    // (el contenedor no admite tiempos negativos), igual que el muxer del replay.
     fn write_one(
         &self,
         st: &mut LiveMuxState,
@@ -270,75 +226,105 @@ impl LiveMux {
         dur: i64,
         key: bool,
     ) {
-        let Some(writer) = st.writer.clone() else {
-            return;
-        };
         let ts = time - st.base;
         if ts < 0 {
             return;
         }
-        let stream = match role {
-            None => st.video_stream,
-            Some(AudioRole::Sys) => match st.sys_stream {
-                Some(s) => s,
+        let track = match role {
+            None => 0,
+            Some(AudioRole::Sys) => match st.sys_track {
+                Some(t) => t,
                 None => return,
             },
-            Some(AudioRole::Mic) => match st.mic_stream {
-                Some(s) => s,
+            Some(AudioRole::Mic) => match st.mic_track {
+                Some(t) => t,
                 None => return,
             },
         };
-        let Ok(mf_buf) = (unsafe { MFCreateMemoryBuffer(data.len() as u32) }) else {
-            return;
-        };
-        let ok = unsafe {
-            let mut ptr: *mut u8 = std::ptr::null_mut();
-            if mf_buf.Lock(&mut ptr, None, None).is_err() {
-                false
-            } else {
-                std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
-                let _ = mf_buf.Unlock();
-                mf_buf.SetCurrentLength(data.len() as u32).is_ok()
-            }
-        };
-        if !ok {
-            return;
-        }
-        let Ok(sample) = (unsafe { MFCreateSample() }) else {
-            return;
-        };
-        unsafe {
-            let _ = sample.AddBuffer(&mf_buf);
-            let _ = sample.SetSampleTime(ts);
-            let _ = sample.SetSampleDuration(dur);
-            if role.is_none() && key {
-                let _ = sample.SetUINT32(&MFSampleExtension_CleanPoint, 1);
-            }
-            if writer.WriteSample(stream, &sample).is_err() && !st.failed {
-                st.failed = true;
-                eprintln!("grabación manual: WriteSample falló; se detiene el muxer en directo");
-            }
+        let Some(tx) = &st.tx else { return };
+        if tx.send(MuxSample { track, data, time: ts, dur, key }).is_err() && !st.failed {
+            st.failed = true;
+            eprintln!("grabación manual: el hilo del muxer terminó; se deja de escribir");
         }
     }
 
+    // Cierra el archivo y devuelve su ruta si quedó un MP4 reproducible (completo, o recortado al
+    // último fragmento si falló una escritura).
     pub(super) fn finalize(&self) -> Option<String> {
-        let mut st = self.st.lock_ok();
-        if st.finalized {
-            return None;
-        }
-        st.finalized = true;
-        let writer = st.writer.take()?;
-        if st.failed {
-            return None;
-        }
-        match unsafe { writer.Finalize() } {
-            Ok(()) => Some(self.path.clone()),
-            Err(e) => {
-                eprintln!("grabación manual: Finalize del muxer falló: {e:?}");
+        let worker = {
+            let mut st = self.st.lock_ok();
+            if st.finalized {
+                return None;
+            }
+            st.finalized = true;
+            st.tx = None;
+            st.worker.take()?
+        };
+        match worker.join() {
+            Ok(true) => Some(self.path.clone()),
+            Ok(false) => None,
+            Err(_) => {
+                eprintln!("grabación manual: el hilo del muxer terminó con un panic");
                 None
             }
         }
     }
+}
+
+fn audio_track(format: Option<(u32, u16)>, hdr: &Option<(Vec<u8>, u32)>) -> Option<Track> {
+    let (rate, ch) = format?;
+    let (ud, payload_type) = hdr.as_ref()?;
+    // El muxer escribe AAC crudo; el encoder se elige con payload 0 (ver build_aac_encoder).
+    if *payload_type != 0 {
+        eprintln!("grabación manual: pista AAC con framing {payload_type}; se omite");
+        return None;
+    }
+    let track = Track::aac(rate, ch, aac_bitrate(ch), ud);
+    if track.is_none() {
+        eprintln!("grabación manual: pista AAC sin AudioSpecificConfig ({} bytes); se omite", ud.len());
+    }
+    track
+}
+
+// Hilo de escritura de la grabación manual. Devuelve si el archivo quedó reproducible.
+fn write_hybrid(path: &str, tracks: Vec<Track>, rx: mpsc::Receiver<MuxSample>) -> bool {
+    let file = match OpenOptions::new().read(true).write(true).create(true).truncate(true).open(path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("grabación manual: no se pudo crear {path}: {e}");
+            return false;
+        }
+    };
+    let mut mux = match Hybrid::new(BufWriter::with_capacity(WRITE_BUFFER, file), tracks) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("grabación manual: no se pudo escribir la cabecera del MP4: {e}");
+            return false;
+        }
+    };
+    let mut ok = true;
+    for s in rx.iter() {
+        if let Err(e) = mux.push(s.track, s.data, s.time, s.dur, s.key) {
+            eprintln!("grabación manual: fallo al escribir: {e}");
+            ok = false;
+            break;
+        }
+    }
+    if ok {
+        match mux.finish() {
+            Ok(()) => return true,
+            Err(e) => eprintln!("grabación manual: no se pudo cerrar el MP4: {e}"),
+        }
+    }
+    keep_written(mux)
+}
+
+// Tras un fallo (p. ej. disco lleno) se conserva lo escrito hasta el último fragmento completo,
+// que ya es un MP4 fragmentado reproducible. Sin ningún fragmento no hay nada que conservar.
+fn keep_written(mux: Hybrid<BufWriter<File>>) -> bool {
+    let (committed, fragments) = (mux.committed_len(), mux.fragments());
+    let (file, _) = mux.into_writer().into_parts();
+    fragments > 0 && file.set_len(committed).is_ok()
 }
 
 impl LiveMux {
@@ -387,211 +373,44 @@ impl VideoPacketSink for LiveMux {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+// Guarda el replay con el índice delante (mp4mux::progressive). Los paquetes ya están en RAM y
+// se escriben sin copiarlos; el audio anterior al primer keyframe se descarta.
 pub(super) fn mux_replay(
     path: &str,
     packets: &[(Bytes, i64, i64, bool)],
     seq_header: &[u8],
     width: u32,
     height: u32,
-    fps: u32,
-    bitrate: u32,
     sys_audio: Option<AudioMuxTrack>,
     mic_audio: Option<AudioMuxTrack>,
-) -> Result<()> {
-    ensure_mf();
-    let url = HSTRING::from(path);
-
-    // Byte stream propio (seekable) para pedir faststart: el sink de MPEG-4 escribe
-    // el `moov` (índice) ANTES del `mdat`, así el reproductor empieza al instante en
-    // vez de escanear el archivo entero al abrir (lo que daba ~10 s en negro). El
-    // atributo MF_MPEG4SINK_MOOV_BEFORE_MDAT se lee del byte stream.
-    let byte_stream = unsafe {
-        MFCreateFile(
-            MF_ACCESSMODE_READWRITE,
-            MF_OPENMODE_DELETE_IF_EXIST,
-            MF_FILEFLAGS_NONE,
-            &url,
-        )?
-    };
-    if let Ok(bs_attr) = byte_stream.cast::<IMFAttributes>() {
-        unsafe {
-            let _ = bs_attr.SetUINT32(&MF_MPEG4SINK_MOOV_BEFORE_MDAT, 1);
-        }
-    }
-
-    let attrs = unsafe {
-        let mut a: Option<IMFAttributes> = None;
-        MFCreateAttributes(&mut a, 2)?;
-        let a = a.ok_or_else(null_out)?;
-        a.SetUINT32(&MF_SINK_WRITER_DISABLE_THROTTLING, 1)?;
-        // Sin URL no se infiere el contenedor: hay que decirlo explícitamente.
-        a.SetGUID(&MF_TRANSCODE_CONTAINERTYPE, &MFTranscodeContainerType_MPEG4)?;
-        a
-    };
-    let writer =
-        unsafe { MFCreateSinkWriterFromURL(PCWSTR::null(), &byte_stream, &attrs)? };
-
-    let stream = add_h264_passthrough_stream(&writer, seq_header, width, height, fps, bitrate)?;
-
-    // Sys se declara primero para que sea la pista de audio por defecto.
-    let sys_stream = sys_audio
-        .as_ref()
-        .map(|t| add_aac_passthrough_stream(&writer, t))
-        .transpose()?;
-    let mic_stream = mic_audio
-        .as_ref()
-        .map(|t| add_aac_passthrough_stream(&writer, t))
-        .transpose()?;
-
-    unsafe { writer.BeginWriting()? };
-
-    // El audio se escribe intercalado con el vídeo, cada paquete en su momento. El sink MP4
-    // retiene el vídeo hasta que el audio alcanza su marca temporal: con todo el audio al final
-    // guardaba el replay entero en memoria (otra copia de GB con buffers largos) antes de soltarlo.
+) -> std::io::Result<()> {
+    let video = Track::h264(width, height, seq_header).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "cabecera de vídeo sin SPS/PPS")
+    })?;
     let base = packets[0].1;
-    let mut sys_next = 0usize;
-    let mut mic_next = 0usize;
-    let n = packets.len();
-    for i in 0..n {
-        if let (Some(stream), Some(track)) = (sys_stream, &sys_audio) {
-            write_audio_until(&writer, stream, track, base, packets[i].1, &mut sys_next)?;
-        }
-        if let (Some(stream), Some(track)) = (mic_stream, &mic_audio) {
-            write_audio_until(&writer, stream, track, base, packets[i].1, &mut mic_next)?;
-        }
-        let data = &packets[i].0;
-        let time = packets[i].1;
-        let key = packets[i].3;
-        // Duración = salto al siguiente frame (captura VFR: WGC no manda duplicados,
-        // así que el ritmo real lo marcan los timestamps). El último usa un valor
-        // nominal de 1/60 s. De aquí sale la duración correcta del MP4.
-        let dur = if i + 1 < n {
-            (packets[i + 1].1 - time).max(1)
-        } else {
-            166_667
-        };
-        let mf_buf = unsafe { MFCreateMemoryBuffer(data.len() as u32)? };
-        unsafe {
-            let mut ptr: *mut u8 = std::ptr::null_mut();
-            mf_buf.Lock(&mut ptr, None, None)?;
-            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
-            mf_buf.Unlock()?;
-            mf_buf.SetCurrentLength(data.len() as u32)?;
-        }
-        let sample = unsafe { MFCreateSample()? };
-        unsafe {
-            sample.AddBuffer(&mf_buf)?;
-            sample.SetSampleTime(time - base)?;
-            sample.SetSampleDuration(dur)?;
-            if key {
-                sample.SetUINT32(&MFSampleExtension_CleanPoint, 1)?;
-            }
-            writer.WriteSample(stream, &sample)?;
-        }
-    }
-
-    if let (Some(stream), Some(track)) = (sys_stream, &sys_audio) {
-        write_audio_until(&writer, stream, track, base, i64::MAX, &mut sys_next)?;
-    }
-    if let (Some(stream), Some(track)) = (mic_stream, &mic_audio) {
-        write_audio_until(&writer, stream, track, base, i64::MAX, &mut mic_next)?;
-    }
-
-    unsafe { writer.Finalize()? };
-    Ok(())
-}
-
-// Declara el stream de vídeo en passthrough (entrada == salida, H.264 ya codificado). El
-// SPS/PPS viaja en MF_MT_MPEG_SEQUENCE_HEADER para que el sink MP4 escriba el `avcC`.
-fn add_h264_passthrough_stream(
-    writer: &IMFSinkWriter,
-    seq_header: &[u8],
-    width: u32,
-    height: u32,
-    fps: u32,
-    bitrate: u32,
-) -> Result<u32> {
-    let h264 = unsafe { MFCreateMediaType()? };
-    unsafe {
-        h264.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-        h264.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
-        h264.SetUINT32(&MF_MT_AVG_BITRATE, bitrate)?;
-        h264.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
-        h264.SetUINT64(&MF_MT_FRAME_SIZE, pack2(width, height))?;
-        h264.SetUINT64(&MF_MT_FRAME_RATE, pack2(fps, 1))?;
-        h264.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pack2(1, 1))?;
-        if !seq_header.is_empty() {
-            h264.SetBlob(&MF_MT_MPEG_SEQUENCE_HEADER, seq_header)?;
-        }
-    }
-    let stream = unsafe { writer.AddStream(&h264)? };
-    unsafe { writer.SetInputMediaType(stream, &h264, None)? };
-    Ok(stream)
-}
-
-// Declara un stream de audio en passthrough (entrada == salida, AAC ya codificado):
-// mismo idioma que el H.264 de vídeo arriba. El AudioSpecificConfig (MF_MT_USER_DATA)
-// viaja en el tipo para que el demuxer/reproductor sepa decodificar el AAC crudo.
-fn add_aac_passthrough_stream(writer: &IMFSinkWriter, track: &AudioMuxTrack) -> Result<u32> {
-    let media_type = unsafe { MFCreateMediaType()? };
-    unsafe {
-        media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
-        media_type.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_AAC)?;
-        media_type.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, track.sample_rate)?;
-        media_type.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, track.channels as u32)?;
-        media_type.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)?;
-        // El tipo AAC debe llevar el byte-rate de AUDIO (no MF_MT_AVG_BITRATE, que es de
-        // vídeo): sin él, el sink MP4 no forma un tipo AAC completo y Finalize falla con
-        // MF_E_SINK_HEADERS_NOT_FOUND. Es el mismo atributo que usa add_aac_stream (la
-        // ruta de grabación manual, que sí funciona).
-        media_type.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, track.bitrate / 8)?;
-        // Debe coincidir con el framing real emitido por el encoder (ver build_aac_encoder):
-        // si no, el sink MP4 genera un `esds` que el decodificador rechaza al reproducir.
-        media_type.SetUINT32(&MF_MT_AAC_PAYLOAD_TYPE, track.payload_type)?;
-        if !track.user_data.is_empty() {
-            media_type.SetBlob(&MF_MT_USER_DATA, &track.user_data)?;
-        }
-    }
-    let stream = unsafe { writer.AddStream(&media_type)? };
-    unsafe { writer.SetInputMediaType(stream, &media_type, None)? };
-    Ok(stream)
-}
-
-// Paquetes AAC ya codificados, desde `next` hasta el primero posterior a `until`: se rebasan al
-// mismo origen que el vídeo (`base`, el primer paquete de vídeo tras alinear al keyframe) y se
-// descartan los que quedan antes de ese punto, ya que el contenedor no admite timestamps negativos.
-fn write_audio_until(
-    writer: &IMFSinkWriter,
-    stream: u32,
-    track: &AudioMuxTrack,
-    base: i64,
-    until: i64,
-    next: &mut usize,
-) -> Result<()> {
-    while let Some((data, time, dur)) = track.packets.get(*next) {
-        if *time > until {
-            break;
-        }
-        *next += 1;
-        if *time < base {
+    let mut tracks = vec![video];
+    let mut samples = vec![packets
+        .iter()
+        .map(|(data, time, dur, key)| Packet { data, time: time - base, dur: *dur, key: *key })
+        .collect::<Vec<_>>()];
+    for audio in [&sys_audio, &mic_audio].into_iter().flatten() {
+        if audio.payload_type != 0 {
             continue;
         }
-        let mf_buf = unsafe { MFCreateMemoryBuffer(data.len() as u32)? };
-        unsafe {
-            let mut ptr: *mut u8 = std::ptr::null_mut();
-            mf_buf.Lock(&mut ptr, None, None)?;
-            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
-            mf_buf.Unlock()?;
-            mf_buf.SetCurrentLength(data.len() as u32)?;
-        }
-        let sample = unsafe { MFCreateSample()? };
-        unsafe {
-            sample.AddBuffer(&mf_buf)?;
-            sample.SetSampleTime(time - base)?;
-            sample.SetSampleDuration(*dur)?;
-            writer.WriteSample(stream, &sample)?;
-        }
+        let Some(track) = Track::aac(audio.sample_rate, audio.channels, audio.bitrate, &audio.user_data)
+        else {
+            continue;
+        };
+        tracks.push(track);
+        samples.push(
+            audio
+                .packets
+                .iter()
+                .filter(|(_, time, _)| *time >= base)
+                .map(|(data, time, dur)| Packet { data, time: time - base, dur: *dur, key: true })
+                .collect(),
+        );
     }
-    Ok(())
+    let mut w = BufWriter::with_capacity(WRITE_BUFFER, File::create(path)?);
+    progressive::write(&mut w, &tracks, &samples)
 }

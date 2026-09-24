@@ -186,53 +186,132 @@ pub fn mp4_duration_secs(path: &Path) -> Option<f64> {
     let mut f = File::open(path).ok()?;
     let file_len = f.metadata().ok()?.len();
     let mut pos = 0u64;
-    while pos + 8 <= file_len {
-        f.seek(SeekFrom::Start(pos)).ok()?;
-        let size32 = read_u32(&mut f)?;
-        let mut typ = [0u8; 4];
-        f.read_exact(&mut typ).ok()?;
-        let (box_size, header) = box_extent(&mut f, size32, pos, file_len)?;
+    while let Some((typ, body, end)) = next_box(&mut f, pos, file_len) {
         if &typ == b"moov" {
-            return find_mvhd(&mut f, pos + header, pos + box_size);
+            let mvhd = find_child(&mut f, body, end, b"mvhd")?;
+            let (timescale, duration) = header_times(&mut f, mvhd)?;
+            // Grabación que no llegó a cerrarse (cierre inesperado): MP4 fragmentado cuyo `moov`
+            // no sabe la duración; se suma la de los fragmentos.
+            if duration == 0 && find_child(&mut f, body, end, b"mvex").is_some() {
+                return fragmented_duration(&mut f, body, end, file_len);
+            }
+            return (timescale > 0).then(|| duration as f64 / timescale as f64);
         }
-        if box_size < header {
-            break;
-        }
-        pos += box_size;
+        pos = end;
     }
     None
 }
 
-fn find_mvhd(f: &mut File, start: u64, end: u64) -> Option<f64> {
+// Siguiente caja en `pos`: (tipo, inicio del cuerpo, fin de la caja).
+fn next_box(f: &mut File, pos: u64, end: u64) -> Option<([u8; 4], u64, u64)> {
+    if pos + 8 > end {
+        return None;
+    }
+    f.seek(SeekFrom::Start(pos)).ok()?;
+    let size32 = read_u32(f)?;
+    let mut typ = [0u8; 4];
+    f.read_exact(&mut typ).ok()?;
+    let (box_size, header) = box_extent(f, size32, pos, end)?;
+    (box_size >= header).then_some((typ, pos + header, pos + box_size))
+}
+
+fn find_child(f: &mut File, start: u64, end: u64, want: &[u8; 4]) -> Option<(u64, u64)> {
     let mut pos = start;
-    while pos + 8 <= end {
-        f.seek(SeekFrom::Start(pos)).ok()?;
-        let size32 = read_u32(f)?;
-        let mut typ = [0u8; 4];
-        f.read_exact(&mut typ).ok()?;
-        let (box_size, header) = box_extent(f, size32, pos, end)?;
-        if &typ == b"mvhd" {
-            f.seek(SeekFrom::Start(pos + header)).ok()?;
-            let mut version_flags = [0u8; 4];
-            f.read_exact(&mut version_flags).ok()?;
-            let (timescale, duration) = if version_flags[0] == 1 {
-                f.seek(SeekFrom::Current(16)).ok()?; // creation(8) + modification(8)
-                (read_u32(f)? as u64, read_u64(f)?)
-            } else {
-                f.seek(SeekFrom::Current(8)).ok()?; // creation(4) + modification(4)
-                (read_u32(f)? as u64, read_u32(f)? as u64)
-            };
-            if timescale == 0 {
-                return None;
-            }
-            return Some(duration as f64 / timescale as f64);
+    while let Some((typ, body, box_end)) = next_box(f, pos, end) {
+        if &typ == want {
+            return Some((body, box_end));
         }
-        if box_size < header {
-            break;
-        }
-        pos += box_size;
+        pos = box_end;
     }
     None
+}
+
+// (timescale, duration) de un `mvhd` o `mdhd`, que comparten disposición.
+fn header_times(f: &mut File, (body, _): (u64, u64)) -> Option<(u64, u64)> {
+    f.seek(SeekFrom::Start(body)).ok()?;
+    let mut version_flags = [0u8; 4];
+    f.read_exact(&mut version_flags).ok()?;
+    if version_flags[0] == 1 {
+        f.seek(SeekFrom::Current(16)).ok()?; // creation(8) + modification(8)
+        Some((read_u32(f)? as u64, read_u64(f)?))
+    } else {
+        f.seek(SeekFrom::Current(8)).ok()?; // creation(4) + modification(4)
+        Some((read_u32(f)? as u64, read_u32(f)? as u64))
+    }
+}
+
+// Fin de la primera pista (el vídeo) según sus fragmentos: `tfdt` + duraciones del `trun`.
+fn fragmented_duration(f: &mut File, moov: u64, moov_end: u64, file_len: u64) -> Option<f64> {
+    let (trak, trak_end) = find_child(f, moov, moov_end, b"trak")?;
+    let (tkhd, _) = find_child(f, trak, trak_end, b"tkhd")?;
+    f.seek(SeekFrom::Start(tkhd)).ok()?;
+    let v1 = read_u32(f)? >> 24 == 1;
+    f.seek(SeekFrom::Current(if v1 { 16 } else { 8 })).ok()?;
+    let track_id = read_u32(f)?;
+    let (mdia, mdia_end) = find_child(f, trak, trak_end, b"mdia")?;
+    let mdhd = find_child(f, mdia, mdia_end, b"mdhd")?;
+    let (timescale, _) = header_times(f, mdhd)?;
+    if timescale == 0 {
+        return None;
+    }
+
+    let mut end_ticks = 0u64;
+    let mut pos = moov_end;
+    while let Some((typ, body, box_end)) = next_box(f, pos, file_len) {
+        if &typ == b"moof" {
+            let mut t = body;
+            while let Some((ttyp, tbody, tend)) = next_box(f, t, box_end) {
+                if &ttyp == b"traf" {
+                    if let Some(end) = traf_end(f, tbody, tend, track_id) {
+                        end_ticks = end_ticks.max(end);
+                    }
+                }
+                t = tend;
+            }
+        }
+        pos = box_end;
+    }
+    Some(end_ticks as f64 / timescale as f64)
+}
+
+fn traf_end(f: &mut File, start: u64, end: u64, track_id: u32) -> Option<u64> {
+    let read_body = |f: &mut File, (body, box_end): (u64, u64)| -> Option<Vec<u8>> {
+        f.seek(SeekFrom::Start(body)).ok()?;
+        let mut v = vec![0u8; (box_end - body) as usize];
+        f.read_exact(&mut v).ok()?;
+        Some(v)
+    };
+    let be32 = |d: &[u8], at: usize| -> Option<u32> { Some(u32::from_be_bytes(d.get(at..at + 4)?.try_into().ok()?)) };
+
+    let at = find_child(f, start, end, b"tfhd")?;
+    let tfhd = read_body(f, at)?;
+    if be32(&tfhd, 4)? != track_id {
+        return None;
+    }
+    let tfhd_flags = be32(&tfhd, 0)? & 0xFF_FFFF;
+    let dur_at = 8 + if tfhd_flags & 0x1 != 0 { 8 } else { 0 } + if tfhd_flags & 0x2 != 0 { 4 } else { 0 };
+    let default_dur = if tfhd_flags & 0x8 != 0 { be32(&tfhd, dur_at)? } else { 0 };
+
+    let at = find_child(f, start, end, b"tfdt")?;
+    let tfdt = read_body(f, at)?;
+    let base = if tfdt[0] == 1 {
+        u64::from_be_bytes(tfdt.get(4..12)?.try_into().ok()?)
+    } else {
+        be32(&tfdt, 4)? as u64
+    };
+
+    let at = find_child(f, start, end, b"trun")?;
+    let trun = read_body(f, at)?;
+    let flags = be32(&trun, 0)? & 0xFF_FFFF;
+    let count = be32(&trun, 4)? as usize;
+    let mut at = 8 + if flags & 0x1 != 0 { 4 } else { 0 } + if flags & 0x4 != 0 { 4 } else { 0 };
+    let per_sample = [0x100, 0x200, 0x400, 0x800].iter().filter(|b| flags & **b != 0).count() * 4;
+    let mut total = 0u64;
+    for _ in 0..count {
+        total += if flags & 0x100 != 0 { be32(&trun, at)? } else { default_dur } as u64;
+        at += per_sample;
+    }
+    Some(base + total)
 }
 
 // Resuelve el tamaño real de una caja y su cabecera: tamaño 1 = largesize de 64
@@ -339,6 +418,41 @@ mod tests {
         assert!(ids.contains(&"two.mp4".to_string()));
 
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    fn recording(name: &str, finish: bool) -> PathBuf {
+        use crate::mp4mux::{hybrid::Hybrid, Track};
+        let seq = [0, 0, 0, 1, 0x67, 0x4D, 0x00, 0x1F, 0x95, 0xA8, 0, 0, 0, 1, 0x68, 0xEE];
+        let p = std::env::temp_dir().join(format!("fb_dur_{name}_{}.mp4", std::process::id()));
+        let f = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&p).unwrap();
+        let mut h = Hybrid::new(std::io::BufWriter::new(f), vec![Track::h264(64, 64, &seq).unwrap()]).unwrap();
+        for i in 0..30i64 {
+            let key = i % 10 == 0;
+            let data = vec![0, 0, 0, 1, if key { 0x65 } else { 0x41 }, 0xAA];
+            h.push(0, std::sync::Arc::new(data), i * 333_333, 333_333, key).unwrap();
+        }
+        if finish {
+            h.finish().unwrap();
+        }
+        p
+    }
+
+    #[test]
+    fn duration_of_an_unfinished_recording_comes_from_its_fragments() {
+        let p = recording("open", false);
+        let d = mp4_duration_secs(&p);
+        std::fs::remove_file(&p).ok();
+        let d = d.unwrap();
+        assert!((d - 20.0 / 30.0).abs() < 0.01, "duración {d}");
+    }
+
+    #[test]
+    fn duration_of_a_finished_recording_comes_from_its_index() {
+        let p = recording("done", true);
+        let d = mp4_duration_secs(&p);
+        std::fs::remove_file(&p).ok();
+        let d = d.unwrap();
+        assert!((d - 1.0).abs() < 0.01, "duración {d}");
     }
 
     #[test]
