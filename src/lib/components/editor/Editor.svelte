@@ -422,10 +422,13 @@
   .export-stage {
     color: var(--text-2);
   }
+  /* Mismas medidas que los botones de tamaño del diálogo de compartir (84 x 36). */
   .export-cancel {
-    height: 32px;
-    padding: 0 18px;
+    width: 84px;
+    height: 36px;
+    padding: 0;
     font-size: 12.5px;
+    white-space: nowrap;
     color: var(--text-1);
     background: var(--surface);
     border: 1px solid var(--line-strong);
@@ -441,9 +444,9 @@
   }
   .export-actions {
     display: grid;
-    grid-template-columns: repeat(2, 112px);
+    grid-template-columns: repeat(2, 84px);
     justify-content: center;
-    gap: 10px;
+    gap: 6px;
   }
   .export-pct {
     display: inline-flex;
