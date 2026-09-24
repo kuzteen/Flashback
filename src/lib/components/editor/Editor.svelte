@@ -4,6 +4,8 @@
   import { matchShortcut } from '$lib/shortcuts';
   import { shareState } from '$lib/share.svelte';
   import { t } from '$lib/i18n.svelte';
+  import { exportStage } from '$lib/export-stage';
+  import { fade } from 'svelte/transition';
   import { runAction } from './actions';
   import { playback } from './playback.svelte';
   import { ui } from './ui.svelte';
@@ -135,15 +137,20 @@
     <div class="export-backdrop">
       <div class="export-card">
         <div class="export-title">{t('ed.exportingClip')}</div>
-        <div class="export-bar">
-          <div class="export-fill" style:width="{Math.max(2, Math.round(editorState.exportProgress * 100))}%"></div>
+        <div class="export-progress">
+          <div class="export-bar">
+            <div class="export-fill" style:width="{Math.max(2, Math.round(editorState.exportProgress * 100))}%"></div>
+          </div>
+          <div class="export-status">
+            {#key exportStage(editorState.exportProgress)}
+              <span class="export-stage" in:fade={{ duration: 180 }}>{t(exportStage(editorState.exportProgress))}…</span>
+            {/key}
+            <span class="export-pct mono">{Math.round(editorState.exportProgress * 100)}%</span>
+          </div>
         </div>
-        <div class="export-foot">
-          <span class="export-pct mono">{Math.round(editorState.exportProgress * 100)}%</span>
-          <button class="export-cancel" onclick={cancelExport} disabled={editorState.exportCancelling}>
-            {editorState.exportCancelling ? t('ed.cancelling') : t('ed.cancelExport')}
-          </button>
-        </div>
+        <button class="export-cancel" onclick={cancelExport} disabled={editorState.exportCancelling}>
+          {editorState.exportCancelling ? t('ed.cancelling') : t('ed.cancelExport')}
+        </button>
       </div>
     </div>
   {/if}
@@ -316,19 +323,30 @@
     background: var(--scrim);
   }
   .export-card {
-    width: 320px;
-    padding: 20px 22px;
+    width: 360px;
+    padding: 28px 28px 24px;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    align-items: center;
+    gap: 22px;
+    text-align: center;
     background: var(--bg-1);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
     box-shadow: var(--shadow-dialog);
   }
   .export-title {
-    font-size: 13.5px;
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
     color: var(--text-0);
+  }
+  .export-progress {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
   }
   .export-bar {
     height: 6px;
@@ -341,19 +359,22 @@
     background: var(--accent);
     transition: width 0.2s ease;
   }
-  .export-foot {
+  .export-status {
     display: flex;
-    align-items: center;
+    align-items: baseline;
     justify-content: space-between;
     gap: 12px;
-  }
-  .export-pct {
     font-size: 12px;
+  }
+  .export-stage {
     color: var(--text-2);
   }
+  .export-pct {
+    color: var(--text-1);
+  }
   .export-cancel {
-    height: 30px;
-    padding: 0 12px;
+    height: 32px;
+    padding: 0 18px;
     font-size: 12.5px;
     color: var(--text-1);
     background: var(--surface);
