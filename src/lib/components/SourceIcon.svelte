@@ -42,6 +42,10 @@
     font-family: var(--font-display);
     font-weight: 700;
     line-height: 1;
+    /* En la tarjeta va dentro de .label, que espacia las letras 0.14em: heredado, ese espacio
+       se añade tras la letra, ensancha su caja por la derecha y la desplaza medio píxel a la
+       izquierda al centrarla. */
+    letter-spacing: 0;
     color: var(--text-0);
     background: var(--bg-3);
     border-radius: 25%;
