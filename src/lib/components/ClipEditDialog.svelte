@@ -185,7 +185,7 @@
       {/if}
       {#if canRevert}
         <button type="button" class="revert" onclick={revert}>
-          {t('clipEdit.revert', { name: detected ? displaySource(detected) : t('card.imported') })}
+          {t('clipEdit.revert')}
         </button>
       {/if}
     </div>
