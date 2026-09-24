@@ -283,6 +283,43 @@ fn art_from_list(bytes: &[u8], name: &str) -> Option<ListArt> {
     })
 }
 
+// Buscador del diálogo de editar clip: por niveles (nombre exacto, empieza por, empieza una
+// palabra, lo contiene) y alfabético dentro de cada uno. La lista de Discord repite nombres
+// (una entrada por ejecutable), así que se deduplica.
+fn rank_games<'a>(names: impl Iterator<Item = &'a str>, query: &str, limit: usize) -> Vec<String> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return Vec::new();
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut hits: Vec<(u8, String, &str)> = Vec::new();
+    for name in names {
+        let lower = name.to_lowercase();
+        if !seen.insert(lower.clone()) {
+            continue;
+        }
+        let tier = if lower == q {
+            0
+        } else if lower.starts_with(&q) {
+            1
+        } else if lower.split(|c: char| !c.is_alphanumeric()).any(|w| w.starts_with(&q)) {
+            2
+        } else if lower.contains(&q) {
+            3
+        } else {
+            continue;
+        };
+        hits.push((tier, lower, name));
+    }
+    hits.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    hits.into_iter().take(limit).map(|(_, _, n)| n.to_string()).collect()
+}
+
+pub async fn search_games(app: &tauri::AppHandle, query: &str) -> Vec<String> {
+    let Some(map) = ensure_map(app).await else { return Vec::new() };
+    rank_games(map.values().map(|g| g.name.as_str()), query, 12)
+}
+
 pub async fn detect_game(app: &tauri::AppHandle) -> Option<DetectedGame> {
     let map = ensure_map(app).await?;
     let game = detect_with(&map)?;
@@ -594,6 +631,27 @@ fn running_processes() -> Vec<(u32, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const GAMES: [&str; 7] = ["Overwatch 2", "VALORANT", "Valheim", "Hollow Knight", "Knights of Valor", "Overwatch 2", "Rocket League"];
+
+    #[test]
+    fn exact_then_prefix_then_word_then_contains() {
+        let hits = rank_games(GAMES.iter().copied(), "val", 10);
+        assert_eq!(hits, ["Valheim", "VALORANT", "Knights of Valor"]);
+        assert_eq!(rank_games(GAMES.iter().copied(), "valorant", 10), ["VALORANT"]);
+    }
+
+    #[test]
+    fn names_are_unique_and_limited() {
+        assert_eq!(rank_games(GAMES.iter().copied(), "over", 10), ["Overwatch 2"]);
+        assert_eq!(rank_games(GAMES.iter().copied(), "o", 2).len(), 2);
+        assert!(rank_games(GAMES.iter().copied(), "   ", 10).is_empty());
+    }
+
+    #[test]
+    fn knight_matches_the_word_before_the_middle() {
+        assert_eq!(rank_games(GAMES.iter().copied(), "knight", 10), ["Knights of Valor", "Hollow Knight"]);
+    }
 
     // Recorte con la forma real de la lista de Discord. La primera entrada lleva el `"id": null`
     // que trae de verdad (18 entradas lo tienen, battlenet sobre todo) y va la primera a

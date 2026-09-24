@@ -2,6 +2,7 @@ mod artwork;
 #[cfg(target_os = "windows")]
 mod audio;
 mod capture;
+mod clipmeta;
 mod config;
 mod detect;
 mod discord;
@@ -314,13 +315,16 @@ async fn export_clip(
     let watermark = config::get_watermark(&app).then(|| config::get_watermark_corner(&app));
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     *EXPORT_CANCEL.lock().unwrap_or_else(|e| e.into_inner()) = Some(cancel.clone());
+    let meta = (clipmeta_index(&app)?, clip_covers_dir(&app)?, src.clone(), dst.clone());
     tokio::task::spawn_blocking(move || {
         editor::export_clip(src, dst, edit, watermark, None, None, Some(cancel), move |p: f32| {
             let _ = app.emit("export-progress", p);
         })
     })
     .await
-    .map_err(|e| format!("Error interno: {e}"))?
+    .map_err(|e| format!("Error interno: {e}"))??;
+    let (index, covers, src, dst) = meta;
+    clipmeta::inherit(&index, &covers, &src, &dst)
 }
 
 // Decide qué archivo se arrastra al compartir. El camino rápido —clip sin cortes, sin preset de
@@ -492,6 +496,7 @@ async fn capture_frame(app: tauri::AppHandle, path: String, time_ms: f64) -> Res
 fn rename_clip(app: tauri::AppHandle, path: String, new_name: String) -> Result<String, String> {
     let new_path = library::rename_clip(&path, &new_name, &edit_index(&app)?)?;
     playlists::rekey(&playlist_index(&app)?, &path, &new_path);
+    clipmeta::rekey(&clipmeta_index(&app)?, &path, &new_path);
     Ok(new_path)
 }
 
@@ -504,7 +509,54 @@ fn delete_clip(app: tauri::AppHandle, path: String) -> Result<(), String> {
 fn delete_clips(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
     library::delete_clips(&paths, &edit_index(&app)?)?;
     playlists::forget(&playlist_index(&app)?, &paths);
+    clipmeta::forget(&clipmeta_index(&app)?, &paths);
     Ok(())
+}
+
+fn app_data(app: &tauri::AppHandle, name: &str) -> Result<std::path::PathBuf, String> {
+    use tauri::Manager;
+    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join(name))
+}
+
+fn clipmeta_index(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    app_data(app, "clipmeta.json")
+}
+
+fn clip_covers_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    app_data(app, "clip-covers")
+}
+
+#[tauri::command]
+async fn search_games(app: tauri::AppHandle, query: String) -> Vec<String> {
+    detect::search_games(&app, &query).await
+}
+
+#[tauri::command]
+fn set_clip_game(app: tauri::AppHandle, paths: Vec<String>, game: Option<String>) -> Result<(), String> {
+    clipmeta::set_game(&clipmeta_index(&app)?, &paths, game.as_deref())
+}
+
+#[tauri::command]
+// Igual que la portada de playlist: el PNG va como cuerpo binario. Las rutas viajan en una
+// cabecera codificada (JSON + encodeURIComponent) porque un nombre de clip puede llevar
+// caracteres que una cabecera HTTP no admite.
+fn set_clip_cover(app: tauri::AppHandle, request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("La portada tiene que llegar como bytes".into());
+    };
+    let raw = request
+        .headers()
+        .get("x-clip-paths")
+        .and_then(|v| v.to_str().ok())
+        .ok_or("Faltan las rutas de los clips")?;
+    let json = urlencoding::decode(raw).map_err(|e| e.to_string())?;
+    let paths: Vec<String> = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    clipmeta::set_cover(&clipmeta_index(&app)?, &clip_covers_dir(&app)?, &paths, bytes)
+}
+
+#[tauri::command]
+fn clear_clip_cover(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
+    clipmeta::clear_cover(&clipmeta_index(&app)?, &paths)
 }
 
 fn playlist_index(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
@@ -610,7 +662,10 @@ fn playlist_mark_seen(app: tauri::AppHandle, id: String, path: String) -> Result
 
 #[tauri::command]
 fn list_clips(app: tauri::AppHandle) -> Vec<library::ClipInfo> {
-    let clips = library::list_clips(config::library_dirs(&app));
+    let mut clips = library::list_clips(config::library_dirs(&app));
+    if let Ok(index) = clipmeta_index(&app) {
+        library::apply_meta(&mut clips, &clipmeta::all(&index));
+    }
     if !clips.is_empty() {
         let paths: Vec<String> = clips.iter().map(|c| c.path.clone()).collect();
         std::thread::spawn(move || prune_thumbs(&app, &paths));
@@ -845,6 +900,10 @@ pub fn run() {
             export_clip,
             share_prepare,
             share_cancel,
+            search_games,
+            set_clip_game,
+            set_clip_cover,
+            clear_clip_cover,
             export_cancel,
             start_file_drag,
             get_watermark,

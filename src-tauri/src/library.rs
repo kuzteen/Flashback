@@ -11,7 +11,11 @@ pub struct ClipInfo {
     pub size_bytes: u64,
     pub modified_ms: i64,
     pub duration_sec: f64,
+    // Juego efectivo: el elegido a mano si lo hay, si no el detectado al clipear (`detected`).
     pub source: String,
+    pub detected: String,
+    pub cover: Option<String>,
+    pub cover_ms: u64,
 }
 
 pub fn list_clips(dirs: Vec<PathBuf>) -> Vec<ClipInfo> {
@@ -63,8 +67,22 @@ fn scan_dir(dir: &Path, out: &mut Vec<ClipInfo>) {
             size_bytes: meta.len(),
             modified_ms,
             duration_sec: clip_duration_secs(&path).unwrap_or(0.0),
+            detected: source.clone(),
             source,
+            cover: None,
+            cover_ms: 0,
         });
+    }
+}
+
+pub fn apply_meta(clips: &mut [ClipInfo], meta: &crate::clipmeta::Index) {
+    for c in clips {
+        let Some(m) = meta.get(&c.path) else { continue };
+        if let Some(game) = &m.game {
+            c.source = game.clone();
+        }
+        c.cover = m.cover.clone();
+        c.cover_ms = m.cover_ms;
     }
 }
 
@@ -590,6 +608,30 @@ mod tests {
         let new = rename_clip(&p.to_string_lossy(), "nuevo", &index).unwrap();
         std::fs::remove_dir_all(&dir).ok();
         assert!(new.ends_with("nuevo.mkv"), "{new}");
+    }
+
+    #[test]
+    fn edited_game_and_cover_override_the_detected_source() {
+        let clip = |path: &str| ClipInfo {
+            id: path.into(),
+            name: path.into(),
+            path: path.into(),
+            size_bytes: 0,
+            modified_ms: 0,
+            duration_sec: 0.0,
+            source: "Pantalla 1".into(),
+            detected: "Pantalla 1".into(),
+            cover: None,
+            cover_ms: 0,
+        };
+        let mut clips = vec![clip("a.mp4"), clip("b.mp4"), clip("c.mp4")];
+        let mut meta = crate::clipmeta::Index::new();
+        meta.insert("a.mp4".into(), crate::clipmeta::ClipMeta { game: Some("VALORANT".into()), cover: None, cover_ms: 0 });
+        meta.insert("b.mp4".into(), crate::clipmeta::ClipMeta { game: None, cover: Some("x.png".into()), cover_ms: 7 });
+        apply_meta(&mut clips, &meta);
+        assert_eq!((clips[0].source.as_str(), clips[0].detected.as_str()), ("VALORANT", "Pantalla 1"));
+        assert_eq!((clips[1].source.as_str(), clips[1].cover.as_deref(), clips[1].cover_ms), ("Pantalla 1", Some("x.png"), 7));
+        assert_eq!((clips[2].source.as_str(), clips[2].cover.as_deref()), ("Pantalla 1", None));
     }
 
     #[test]
