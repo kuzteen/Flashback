@@ -941,6 +941,18 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    // La interfaz pinta estas carpetas con convertFileSrc: si no están en el ámbito del protocolo
+    // asset, Tauri bloquea la petición y la imagen sale vacía sin ningún error visible.
+    #[test]
+    fn cover_folders_are_in_the_asset_scope() {
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let scope = &conf["app"]["security"]["assetProtocol"]["scope"];
+        let scope: Vec<&str> = scope.as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+        for dir in ["playlist-covers", "clip-covers"] {
+            assert!(scope.contains(&format!("$APPDATA/{dir}/*").as_str()), "{dir} fuera del ámbito");
+        }
+    }
+
     #[test]
     fn a_repeated_export_gets_the_next_free_name() {
         let dir = std::env::temp_dir().join("flashback_free_path");

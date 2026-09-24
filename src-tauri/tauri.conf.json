@@ -32,7 +32,8 @@
           "$APPDATA/thumbs/*",
           "$APPDATA/audio/*",
           "$APPDATA/screenshots/*",
-          "$APPDATA/playlist-covers/*"
+          "$APPDATA/playlist-covers/*",
+          "$APPDATA/clip-covers/*"
         ]
       }
     }
