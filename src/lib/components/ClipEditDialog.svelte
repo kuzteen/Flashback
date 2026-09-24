@@ -254,13 +254,21 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* Encajado en el borde inferior derecho del campo, como la etiqueta del borde superior: fuera
+     del flujo, así aparecer o desaparecer no mueve el campo del nombre. El fondo va al revés que
+     el de la etiqueta (campo arriba, diálogo abajo) para cortar el borde. */
   .revert {
-    margin-top: 8px;
-    padding: 0;
-    font-size: 12px;
+    position: absolute;
+    right: 9px;
+    bottom: 0;
+    transform: translateY(50%);
+    padding: 0 4px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.2;
     color: var(--text-2);
-    text-decoration: underline;
-    text-underline-offset: 2px;
+    background: linear-gradient(to bottom, var(--bg-0) 50%, var(--bg-1) 50%);
+    transition: color 0.14s ease;
   }
   .revert:hover {
     color: var(--text-0);
