@@ -86,13 +86,13 @@
       bind:this={cardEl}
     >
       <header class="head">
-        <h2 class="title">{t('share.title')}</h2>
+        <h2 class="modal-title">{t('share.title')}</h2>
         <button class="close" aria-label={t('share.close')} onclick={closeShare}>
           <Icon name="close" size={16} sw={2} />
         </button>
       </header>
 
-      <p class="label">{t('share.sizeLabel')}</p>
+      <p class="label section">{t('share.sizeLabel')}</p>
       <div class="sizes" role="group" aria-label={t('share.sizeLabel')}>
         <button class="size" class:on={shareState.preset === null} onclick={() => selectPreset(null)}>
           {t('share.original')}
@@ -112,7 +112,7 @@
       </div>
 
       <div class="pitch">
-        <span class="pitch-title">{t('share.dragTitle')}</span>
+        <span class="label section">{t('share.dragTitle')}</span>
         <span class="pitch-sub">{t('share.dragHint')}</span>
       </div>
 
@@ -193,14 +193,6 @@
     position: relative;
     margin-bottom: 18px;
   }
-  .title {
-    font-family: var(--font-mono);
-    font-size: 12.5px;
-    font-weight: 600;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    color: var(--text-0);
-  }
   .close {
     position: absolute;
     right: -4px;
@@ -218,7 +210,8 @@
     background: var(--bg-3);
   }
 
-  .label {
+  /* Encabezado de cada bloque del diálogo (tamaño y arrastre): mismo estilo para los dos. */
+  .section {
     margin-bottom: 8px;
     font-size: 12.5px;
     text-align: center;
@@ -299,12 +292,9 @@
     align-items: center;
     gap: 3px;
     margin-bottom: 14px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
     text-align: center;
-  }
-  .pitch-title {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text-0);
   }
   .pitch-sub {
     font-size: 12px;

@@ -133,6 +133,17 @@ a {
   font-feature-settings: 'tnum' 1, 'zero' 1;
 }
 
+/* Título de todos los modales (compartir, confirmar, playlist, exportar, actualizar): un solo
+   estilo para que se lean igual. */
+.modal-title {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-0);
+}
+
 .label {
   font-family: var(--font-mono);
   font-size: 10.5px;

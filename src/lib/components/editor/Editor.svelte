@@ -179,7 +179,7 @@
     {@const done = editorState.exportDone}
     <div class="export-backdrop">
       <div class="export-card" bind:this={exportCard} role="dialog" aria-modal="true" aria-labelledby="export-title">
-        <div class="export-title" id="export-title">{done ? t('ed.exportDone') : t('ed.exportingClip')}</div>
+        <div class="modal-title" id="export-title">{done ? t('ed.exportDone') : t('ed.exportingClip')}</div>
         <div class="export-progress">
           <div class="export-bar">
             <div class="export-fill" style:width="{Math.max(2, Math.round(editorState.exportProgress * 100))}%"></div>
@@ -391,13 +391,6 @@
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
     box-shadow: var(--shadow-dialog);
-  }
-  .export-title {
-    font-size: 12.5px;
-    font-weight: 600;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--text-0);
   }
   .export-progress {
     width: 100%;

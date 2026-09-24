@@ -262,7 +262,7 @@
     }}
   >
     <div class="card" role="dialog" aria-modal="true" aria-label={t(creating ? 'pl.new' : 'pl.edit')}>
-      <h2 class="title">
+      <h2 class="modal-title title">
         {cropUrl ? t('pl.cropTitle') : t(creating ? 'pl.new' : 'pl.edit')}
       </h2>
 
@@ -445,12 +445,6 @@
 
   .title {
     text-align: center;
-    font-family: var(--font-mono);
-    font-size: 12.5px;
-    font-weight: 600;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    color: var(--text-0);
   }
 
   /* Alturas fijas y no derivadas: la portada mide exactamente lo que el nombre, el hueco y la

@@ -31,7 +31,7 @@
     }}
   >
     <div class="card" role="alertdialog" aria-modal="true" aria-label={req.title}>
-      <h2 class="title">{req.title}</h2>
+      <h2 class="modal-title">{req.title}</h2>
       <p class="message">{req.message}</p>
       {#if req.hint}<p class="hint">{req.hint}</p>{/if}
       <div class="actions">
@@ -80,14 +80,6 @@
     }
   }
 
-  .title {
-    font-family: var(--font-mono);
-    font-size: 12.5px;
-    font-weight: 600;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    color: var(--text-0);
-  }
   .message {
     margin-top: 12px;
     font-size: 13.5px;

@@ -865,7 +865,7 @@
       aria-modal="true"
       onclick={(e) => e.stopPropagation()}
     >
-      <h2 class="upd-title">{t('upd.title')}</h2>
+      <h2 class="modal-title">{t('upd.title')}</h2>
       <p class="upd-ver">{t('upd.version', { v: updater.info.version })}</p>
       {#if updater.info.notes}<p class="upd-notes">{updater.info.notes}</p>{/if}
       {#if updater.installing}
@@ -1778,11 +1778,6 @@
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
     box-shadow: var(--shadow-dialog);
-  }
-  .upd-title {
-    font-size: 17px;
-    font-weight: 640;
-    color: var(--text-0);
   }
   .upd-ver {
     font-size: 13px;
