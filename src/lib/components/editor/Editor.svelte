@@ -194,7 +194,7 @@
             {/if}
             <span class="export-pct mono" class:done>
               {#if done}<span class="export-check" in:fade={{ duration: 180 }}><Icon name="check" size={13} sw={2.4} /></span>{/if}
-              {Math.round(editorState.exportProgress * 100)}%
+              <span class="pct-num">{Math.round(editorState.exportProgress * 100)}%</span>
             </span>
           </div>
         </div>
@@ -451,6 +451,12 @@
     gap: 5px;
     flex: none;
     color: var(--text-1);
+  }
+  /* Mismo recorte que la duración de las tarjetas: sin él, el hueco de ascendentes/descendentes
+     de la fuente deja los números un poco altos respecto al check. */
+  .pct-num {
+    line-height: 1;
+    text-box: trim-both cap alphabetic;
   }
   .export-pct.done {
     color: var(--text-0);
