@@ -201,6 +201,7 @@
     color: var(--text-2);
   }
   .logo {
+    justify-content: center;
     width: 18px;
     height: 18px;
     border-radius: 5px;
