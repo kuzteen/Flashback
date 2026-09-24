@@ -1,6 +1,6 @@
 <script lang="ts">
   import Icon from '../Icon.svelte';
-  import { cancelExport, closeEditor, editorState, persistEdit } from '$lib/editor-state.svelte';
+  import { cancelExport, closeEditor, dismissExport, editorState, persistEdit, viewExport } from '$lib/editor-state.svelte';
   import { matchShortcut } from '$lib/shortcuts';
   import { shareState } from '$lib/share.svelte';
   import { t } from '$lib/i18n.svelte';
@@ -53,10 +53,26 @@
     closeEditor();
   }
 
+  const fileName = (path: string) => path.split(/[/\\]/).pop() ?? path;
+
+  async function onViewExport() {
+    playback.pause();
+    if (!(await viewExport())) dismissExport();
+  }
+
   function onKey(e: KeyboardEvent) {
     // Con el diálogo de compartir delante el editor no escucha; defaultPrevented cubre el Escape
     // que el diálogo ya consumió.
     if (shareState.clip || e.defaultPrevented) return;
+    // La tarjeta de exportación tapa el editor: sus atajos no actúan por detrás, y Escape cierra
+    // la tarjeta terminada en vez del editor (a mitad de export no hace nada; para eso, Cancelar).
+    if (editorState.exporting || editorState.exportDone) {
+      if (e.key === 'Escape' && editorState.exportDone) {
+        e.preventDefault();
+        dismissExport();
+      }
+      return;
+    }
     const el = e.target as HTMLElement | null;
     if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
     if (e.key === 'Escape') {
@@ -133,24 +149,36 @@
     </div>
   {/if}
 
-  {#if editorState.exporting}
+  {#if editorState.exporting || editorState.exportDone}
+    {@const done = editorState.exportDone}
     <div class="export-backdrop">
       <div class="export-card">
-        <div class="export-title">{t('ed.exportingClip')}</div>
+        <div class="export-title">{done ? t('ed.exportDone') : t('ed.exportingClip')}</div>
         <div class="export-progress">
           <div class="export-bar">
             <div class="export-fill" style:width="{Math.max(2, Math.round(editorState.exportProgress * 100))}%"></div>
           </div>
           <div class="export-status">
-            {#key exportStage(editorState.exportProgress)}
-              <span class="export-stage" in:fade={{ duration: 180 }}>{t(exportStage(editorState.exportProgress))}…</span>
-            {/key}
+            {#if done}
+              <span class="export-stage export-file" in:fade={{ duration: 180 }}>{fileName(done)}</span>
+            {:else}
+              {#key exportStage(editorState.exportProgress)}
+                <span class="export-stage" in:fade={{ duration: 180 }}>{t(exportStage(editorState.exportProgress))}…</span>
+              {/key}
+            {/if}
             <span class="export-pct mono">{Math.round(editorState.exportProgress * 100)}%</span>
           </div>
         </div>
-        <button class="export-cancel" onclick={cancelExport} disabled={editorState.exportCancelling}>
-          {editorState.exportCancelling ? t('ed.cancelling') : t('ed.cancelExport')}
-        </button>
+        {#if done}
+          <div class="export-actions">
+            <button class="export-cancel" onclick={dismissExport}>{t('ed.close')}</button>
+            <button class="export-cancel export-view" onclick={onViewExport}>{t('ed.viewClip')}</button>
+          </div>
+        {:else}
+          <button class="export-cancel" onclick={cancelExport} disabled={editorState.exportCancelling}>
+            {editorState.exportCancelling ? t('ed.cancelling') : t('ed.cancelExport')}
+          </button>
+        {/if}
       </div>
     </div>
   {/if}
@@ -388,5 +416,23 @@
   }
   .export-cancel:disabled {
     opacity: 0.6;
+  }
+  .export-actions {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+  }
+  .export-view {
+    color: var(--text-0);
+    border-color: var(--accent);
+  }
+  .export-view:hover:not(:disabled) {
+    background: var(--bg-2);
+  }
+  .export-file {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 </style>

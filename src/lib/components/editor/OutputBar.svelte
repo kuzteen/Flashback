@@ -39,11 +39,7 @@
   async function onExport(format: ExportFormat) {
     menuOpen = false;
     try {
-      const dst = await exportClip(format);
-      if (dst) {
-        await refreshLibrary();
-        ui.setNotice(t('ed.exported', { name: dst.split(/[/\\]/).pop() ?? '' }), 4000);
-      }
+      if (await exportClip(format)) await refreshLibrary();
     } catch (e) {
       if (String(e).includes(CANCELLED)) {
         ui.setNotice(t('ed.exportCancelled'), 3000);

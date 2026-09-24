@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import type { Clip } from './clips';
 import { EditHistory } from './edit-history';
 import { clearFilmstrip, loadFilmstrip } from './filmstrip.svelte';
+import { library, refreshLibrary } from './library.svelte';
 import {
   DEFAULT_FORMAT,
   fromSaved,
@@ -43,6 +44,7 @@ type EditorState = {
   mixPeaks: number[] | null;
   exporting: boolean;
   exportCancelling: boolean;
+  exportDone: string | null;
   exportProgress: number;
   edit: EditState;
   // Bloque seleccionado: destino de quitar, desactivar y de los tiradores de recorte.
@@ -68,6 +70,7 @@ function blank(): EditorState {
     mixPeaks: null,
     exporting: false,
     exportCancelling: false,
+    exportDone: null,
     exportProgress: 0,
     edit: initialState(0),
     active: 0,
@@ -262,6 +265,7 @@ export async function exportClip(format: ExportFormat): Promise<string | undefin
   if (s.segments.length === 0) throw new Error('No hay bloques activos para exportar');
   editorState.exporting = true;
   editorState.exportCancelling = false;
+  editorState.exportDone = null;
   editorState.exportProgress = 0;
   const unlisten = await listen<number>('export-progress', (e) => {
     editorState.exportProgress = e.payload;
@@ -269,11 +273,13 @@ export async function exportClip(format: ExportFormat): Promise<string | undefin
   try {
     const dst = await invoke<string>('edit_dest', { src: clip.path, format });
     await invoke('export_clip', { src: clip.path, dst, edit: { segments: s.segments, mixer: s.mixer, format: s.format ?? DEFAULT_FORMAT, look: s.look } });
+    editorState.exportProgress = 1;
+    editorState.exportDone = dst;
     return dst;
   } finally {
     unlisten();
     editorState.exporting = false;
-    editorState.exportProgress = 0;
+    if (!editorState.exportDone) editorState.exportProgress = 0;
   }
 }
 
@@ -317,4 +323,24 @@ export function cancelExport() {
   if (!editorState.exporting || editorState.exportCancelling) return;
   editorState.exportCancelling = true;
   invoke('export_cancel').catch(() => {});
+}
+
+export function dismissExport() {
+  editorState.exportDone = null;
+  editorState.exportProgress = 0;
+}
+
+// Abre en el editor el clip recién exportado. Se guarda antes el montaje del actual, igual que al
+// cambiar de clip, y se relee la biblioteca porque el exportado aún no estaba en ella.
+export async function viewExport(): Promise<boolean> {
+  const dst = editorState.exportDone;
+  if (!dst) return false;
+  await refreshLibrary();
+  const exported = library.clips.find((c) => c.path?.toLowerCase() === dst.toLowerCase());
+  if (!exported) return false;
+  cancelPersist();
+  await persistEdit();
+  dismissExport();
+  openEditor(exported);
+  return true;
 }
