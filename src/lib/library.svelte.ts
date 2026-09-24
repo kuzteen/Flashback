@@ -95,9 +95,9 @@ function toClip(r: RawClip, withEdits: Set<string>): Clip {
     createdAt: new Date(r.modified_ms),
     path: r.path,
     edited: withEdits.has(r.path),
-    // Los clips exportados desde el editor se nombran `<nombre>_edit.mp4` (`_edit_2.mp4`… si se
-    // exporta más de una vez).
-    exported: /_edit(_\d+)?\.mp4$/.test(r.id),
+    // Los clips exportados desde el editor se nombran `<nombre>_edit.mp4` o `.mov` según el formato
+    // elegido (`_edit_2`… si se exporta más de una vez).
+    exported: /_edit(_\d+)?\.(mp4|mov)$/i.test(r.id),
     // La fecha en la URL: un archivo nuevo con la ruta de otro no debe salir de la caché del
     // WebView como si fuera el anterior.
     previewSrc: `${convertFileSrc(r.path)}?v=${r.modified_ms}`

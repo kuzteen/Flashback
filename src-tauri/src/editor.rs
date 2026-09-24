@@ -619,6 +619,15 @@ mod win {
                 let _ = std::fs::remove_file(&dst);
             }
             unsafe { CoUninitialize(); }
+            let r = r.and_then(|()| {
+                let mov = std::path::Path::new(&dst)
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("mov"));
+                if mov {
+                    crate::mp4mux::brand_quicktime(std::path::Path::new(&dst)).map_err(|e| e.to_string())?;
+                }
+                Ok(())
+            });
             // El clip editado hereda el origen del original (juego/monitor) embebiéndolo igual que
             // en la captura, para que conserve su etiqueta en la biblioteca.
             if r.is_ok() {
@@ -2062,6 +2071,28 @@ mod win {
             let r = export_fixture("tiny.webm");
             assert!(r.video >= 44, "vídeo {} de 45", r.video);
             assert!(r.audio > 0, "sin audio");
+        }
+
+        #[test]
+        fn exporting_to_mov_brands_it_as_quicktime() {
+            let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tiny.mkv");
+            let dst = std::env::temp_dir().join(format!("fb_export_{}_brand.mov", std::process::id()));
+            export_clip(
+                src.to_string_lossy().into_owned(),
+                dst.to_string_lossy().into_owned(),
+                edit(&[(0.0, 1500.0)]),
+                None,
+                None,
+                None,
+                None,
+                |_| {},
+            )
+            .unwrap();
+            let head = std::fs::read(&dst).unwrap()[..12].to_vec();
+            let read = crate::mp4mux::mf_tests::read(&dst);
+            let _ = std::fs::remove_file(&dst);
+            assert_eq!(&head[4..12], b"ftypqt  ");
+            assert!(read.video >= 44 && read.audio > 0);
         }
 
         #[test]

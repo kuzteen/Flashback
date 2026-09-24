@@ -41,11 +41,16 @@
   const fpsOptions = FPS_OPTIONS.map((o) => ({ label: `${o} fps`, value: o }));
   const qualityOptions = $derived(QUALITY_OPTIONS.map((o) => ({ label: qualityLabel(o.key), value: o.key })));
   const encoderOptions = ENCODER_OPTIONS.map((o) => ({ label: o, value: o }));
+  const exportFormatOptions = [
+    { label: 'MP4', value: 'mp4' },
+    { label: 'MOV', value: 'mov' }
+  ];
   const bufferOptions = BUFFER_OPTIONS.map((o) => ({ label: o.label, value: o.seconds }));
   const soundOptions = $derived(SOUND_OPTIONS.map((o) => ({ label: soundLabel(o.key), value: o.key })));
   const languageOptions = LOCALES.map((l) => ({ label: l.label, value: l.value }));
 
   let encoder = $state<EncoderOption>('Auto');
+  let exportFormat = $state('mp4');
   let autoDelete = $state(true);
   let discordRpc = $state(false);
 
@@ -57,11 +62,17 @@
       if (ENCODER_OPTIONS.includes(e as EncoderOption)) encoder = e as EncoderOption;
     }).catch(() => {});
     invoke<boolean>('get_discord_rpc').then((v) => (discordRpc = v)).catch(() => {});
+    invoke<string>('get_export_format').then((v) => (exportFormat = v)).catch(() => {});
   });
 
   function setDiscordRpc(on: boolean) {
     discordRpc = on;
     invoke('set_discord_rpc', { enabled: on }).catch(() => {});
+  }
+
+  function setExportFormat(format: string) {
+    exportFormat = format;
+    invoke('set_export_format', { format }).catch(() => {});
   }
 
   function setEncoder(opt: EncoderOption) {
@@ -201,6 +212,13 @@
         <p>{t('settings.encoder.desc')}</p>
       </div>
       <Dropdown value={encoder} options={encoderOptions} onchange={setEncoder} ariaLabel={t('settings.encoder')} />
+    </div>
+    <div class="setting">
+      <div class="info">
+        <h3>{t('settings.exportFormat')}</h3>
+        <p>{t('settings.exportFormat.desc')}</p>
+      </div>
+      <Dropdown value={exportFormat} options={exportFormatOptions} onchange={setExportFormat} ariaLabel={t('settings.exportFormat')} />
     </div>
   </section>
 

@@ -113,6 +113,16 @@ fn set_watermark(app: tauri::AppHandle, on: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn get_export_format(app: tauri::AppHandle) -> String {
+    config::get_export_format(&app)
+}
+
+#[tauri::command]
+fn set_export_format(app: tauri::AppHandle, format: String) -> Result<(), String> {
+    config::set_export_format(&app, &format)
+}
+
+#[tauri::command]
 fn get_watermark_corner(app: tauri::AppHandle) -> String {
     config::get_watermark_corner(&app)
 }
@@ -645,18 +655,19 @@ fn edit_dest(app: tauri::AppHandle, src: String) -> String {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("clip");
-    free_path(&config::clips_edit_dir(&app), &format!("{stem}_edit"))
+    let ext = config::get_export_format(&app);
+    free_path(&config::clips_edit_dir(&app), &format!("{stem}_edit"), &ext)
         .to_string_lossy()
         .into_owned()
 }
 
 // Primer nombre libre (`x.mp4`, `x_2.mp4`, …): exportar otra vez el mismo clip no debe pisar el
 // export anterior.
-fn free_path(dir: &std::path::Path, stem: &str) -> std::path::PathBuf {
+fn free_path(dir: &std::path::Path, stem: &str, ext: &str) -> std::path::PathBuf {
     (1..1000u32)
-        .map(|n| dir.join(if n == 1 { format!("{stem}.mp4") } else { format!("{stem}_{n}.mp4") }))
+        .map(|n| dir.join(if n == 1 { format!("{stem}.{ext}") } else { format!("{stem}_{n}.{ext}") }))
         .find(|p| !p.exists())
-        .unwrap_or_else(|| dir.join(format!("{stem}.mp4")))
+        .unwrap_or_else(|| dir.join(format!("{stem}.{ext}")))
 }
 
 #[derive(serde::Deserialize)]
@@ -832,6 +843,8 @@ pub fn run() {
             set_watermark,
             get_watermark_corner,
             set_watermark_corner,
+            get_export_format,
+            set_export_format,
             rename_clip,
             delete_clip,
             delete_clips,
@@ -868,11 +881,12 @@ mod tests {
         let dir = std::env::temp_dir().join("flashback_free_path");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(super::free_path(&dir, "a_edit"), dir.join("a_edit.mp4"));
+        assert_eq!(super::free_path(&dir, "a_edit", "mp4"), dir.join("a_edit.mp4"));
         std::fs::write(dir.join("a_edit.mp4"), b"").unwrap();
-        assert_eq!(super::free_path(&dir, "a_edit"), dir.join("a_edit_2.mp4"));
+        assert_eq!(super::free_path(&dir, "a_edit", "mp4"), dir.join("a_edit_2.mp4"));
         std::fs::write(dir.join("a_edit_2.mp4"), b"").unwrap();
-        assert_eq!(super::free_path(&dir, "a_edit"), dir.join("a_edit_3.mp4"));
+        assert_eq!(super::free_path(&dir, "a_edit", "mp4"), dir.join("a_edit_3.mp4"));
+        assert_eq!(super::free_path(&dir, "a_edit", "mov"), dir.join("a_edit.mov"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
