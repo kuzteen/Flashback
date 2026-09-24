@@ -192,7 +192,10 @@
                 <span class="export-stage" in:fade={{ duration: 180 }}>{t(exportStage(editorState.exportProgress))}…</span>
               {/key}
             {/if}
-            <span class="export-pct mono">{Math.round(editorState.exportProgress * 100)}%</span>
+            <span class="export-pct mono" class:done>
+              {#if done}<span class="export-check" in:fade={{ duration: 180 }}><Icon name="check" size={13} sw={2.4} /></span>{/if}
+              {Math.round(editorState.exportProgress * 100)}%
+            </span>
           </div>
         </div>
         {#if done}
@@ -419,9 +422,6 @@
   .export-stage {
     color: var(--text-2);
   }
-  .export-pct {
-    color: var(--text-1);
-  }
   .export-cancel {
     height: 32px;
     padding: 0 18px;
@@ -440,9 +440,24 @@
     opacity: 0.6;
   }
   .export-actions {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(2, 112px);
     justify-content: center;
     gap: 10px;
+  }
+  .export-pct {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: none;
+    color: var(--text-1);
+  }
+  .export-pct.done {
+    color: var(--text-0);
+  }
+  .export-check {
+    display: inline-grid;
+    color: var(--accent);
   }
   .export-view {
     color: var(--text-0);
