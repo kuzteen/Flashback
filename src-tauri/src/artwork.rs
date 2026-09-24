@@ -95,6 +95,23 @@ fn mime_of(bytes: &[u8]) -> &'static str {
     }
 }
 
+// El arte viaja a la interfaz como ruta y no como data URL: el WebView lo carga por el
+// protocolo asset con su propia caché de imágenes, sin codificar a base64 un fondo de ~1 MB ni
+// mandarlo entero por IPC cada vez que se pinta.
+fn cached(path: &std::path::Path) -> Option<String> {
+    let len = std::fs::metadata(path).ok()?.len();
+    (len > 0).then(|| path.to_string_lossy().into_owned())
+}
+
+// Si no se puede escribir en la caché, la imagen se entrega igual (como data URL) en vez de
+// perderla.
+fn store(path: &std::path::Path, bytes: &[u8]) -> String {
+    match std::fs::write(path, bytes) {
+        Ok(()) => path.to_string_lossy().into_owned(),
+        Err(_) => to_data_url(bytes),
+    }
+}
+
 fn to_data_url(bytes: &[u8]) -> String {
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
@@ -119,10 +136,8 @@ pub async fn game_hero(
 
     // Antes de mirar la lista detectable: en acierto de caché no hace falta saber de qué tienda
     // venía el arte, y consultarla costaba una búsqueda que el fondo ya cacheado no necesita.
-    if let Ok(bytes) = std::fs::read(&path) {
-        if !bytes.is_empty() {
-            return Some(to_data_url(&bytes));
-        }
+    if let Some(src) = cached(&path) {
+        return Some(src);
     }
 
     // Orden: arte oficial primero (Steam y Microsoft publican una sola imagen por juego, limpia
@@ -150,8 +165,7 @@ pub async fn game_hero(
     if bytes.is_empty() {
         return None;
     }
-    let _ = std::fs::write(&path, &bytes);
-    Some(to_data_url(&bytes))
+    Some(store(&path, &bytes))
 }
 
 // URL PÚBLICA del icono del juego para el Rich Presence de Discord. Mismo orden de fuentes que
@@ -369,10 +383,8 @@ pub async fn game_icon(
     };
     let path = dir.join(&cache_key);
 
-    if let Ok(bytes) = std::fs::read(&path) {
-        if !bytes.is_empty() {
-            return Some(to_data_url(&bytes));
-        }
+    if let Some(src) = cached(&path) {
+        return Some(src);
     }
 
     let client = http();
@@ -384,8 +396,7 @@ pub async fn game_icon(
         // para verse a 30. El Rich Presence sigue usando la URL sin recortar.
         if let Some(bytes) = download(client, &format!("{url}?size=256")).await {
             if !bytes.is_empty() {
-                let _ = std::fs::write(&path, &bytes);
-                return Some(to_data_url(&bytes));
+                return Some(store(&path, &bytes));
             }
         }
     }
@@ -399,8 +410,7 @@ pub async fn game_icon(
     if bytes.is_empty() {
         return None;
     }
-    let _ = std::fs::write(&path, &bytes);
-    Some(to_data_url(&bytes))
+    Some(store(&path, &bytes))
 }
 
 async fn steam_icon(client: &reqwest::Client, app: &tauri::AppHandle, appid: u32) -> Option<Vec<u8>> {
@@ -433,13 +443,13 @@ async fn name_icon(client: &reqwest::Client, app: &tauri::AppHandle, name: &str)
 pub async fn search_icon(app: &tauri::AppHandle, name: &str) -> Option<String> {
     let cache = app.path().app_cache_dir().ok()?;
     let main = cache.join("artwork").join(format!("art-{}", slug(name)));
-    if let Some(bytes) = std::fs::read(&main).ok().filter(|b| !b.is_empty()) {
-        return Some(to_data_url(&bytes));
+    if let Some(src) = cached(&main) {
+        return Some(src);
     }
     let dir = search_cache_dir(app)?;
     let path = dir.join(slug(name));
-    if let Some(bytes) = std::fs::read(&path).ok().filter(|b| !b.is_empty()) {
-        return Some(to_data_url(&bytes));
+    if let Some(src) = cached(&path) {
+        return Some(src);
     }
     let url = crate::detect::art_for(app, name).await?.icon_url?;
     let bytes = download(http(), &format!("{url}?size=64")).await?;
@@ -447,8 +457,7 @@ pub async fn search_icon(app: &tauri::AppHandle, name: &str) -> Option<String> {
         return None;
     }
     let _ = std::fs::create_dir_all(&dir);
-    let _ = std::fs::write(&path, &bytes);
-    Some(to_data_url(&bytes))
+    Some(store(&path, &bytes))
 }
 
 pub fn search_cache_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
@@ -475,6 +484,23 @@ pub fn prune_search_cache(dir: &std::path::Path, max_age: std::time::Duration) {
 mod search_cache_tests {
     use super::*;
     use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn cached_art_is_served_by_path() {
+        let dir = std::env::temp_dir().join(format!("fb_art_path_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("art-x");
+        assert_eq!(cached(&file), None);
+        std::fs::write(&file, b"").unwrap();
+        assert_eq!(cached(&file), None, "un archivo vacío no cuenta");
+        let stored = store(&file, b"png");
+        assert_eq!(stored, file.to_string_lossy());
+        assert_eq!(cached(&file).as_deref(), Some(stored.as_str()));
+        let unwritable = dir.join("no-existe").join("art-y");
+        assert!(store(&unwritable, b"png").starts_with("data:"), "sin disco, data URL");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn old_search_icons_are_pruned_and_recent_ones_kept() {

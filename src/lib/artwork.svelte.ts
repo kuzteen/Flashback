@@ -1,4 +1,11 @@
-import { invoke } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+
+// El backend entrega el arte como ruta del archivo en caché (se carga por el protocolo asset);
+// solo si no pudo escribirlo en disco llega como data URL.
+export function artSrc(value: string | null | undefined): string | null {
+  if (!value) return null;
+  return value.startsWith('data:') ? value : convertFileSrc(value);
+}
 
 // Caché de iconos compartida por toda la app. El backend ya los guarda en disco, pero sin esto
 // cada tarjeta de playlist pediría por su cuenta los mismos juegos: aquí la petición se hace una
@@ -14,7 +21,7 @@ export function ensureGameIcon(name: string) {
   if (asked.has(name)) return;
   asked.add(name);
   invoke<string | null>('game_icon', { name, steamAppid: null })
-    .then((url) => (icons[name] = url ?? null))
+    .then((url) => (icons[name] = artSrc(url)))
     .catch(() => (icons[name] = null));
 }
 
@@ -31,7 +38,7 @@ export function ensureGameHero(name: string) {
   if (heroAsked.has(name)) return;
   heroAsked.add(name);
   invoke<string | null>('game_hero', { name, steamAppid: null })
-    .then((url) => (heroes[name] = url ?? null))
+    .then((url) => (heroes[name] = artSrc(url)))
     .catch(() => (heroes[name] = null));
 }
 
@@ -49,6 +56,6 @@ export function ensureSearchIcon(name: string) {
   if (name in icons || searchAsked.has(name)) return;
   searchAsked.add(name);
   invoke<string | null>('search_icon', { name })
-    .then((url) => (searchIcons[name] = url ?? null))
+    .then((url) => (searchIcons[name] = artSrc(url)))
     .catch(() => (searchIcons[name] = null));
 }

@@ -4,6 +4,7 @@
   import { type SeenGame, gameSettings, loadDisabledGames, toggleGameDisabled, fetchSeenGames } from '$lib/games.svelte';
   import { t } from '$lib/i18n.svelte';
   import { initial } from '$lib/source-badge';
+  import { artSrc } from '$lib/artwork.svelte';
 
   type Detected = { name: string; steam_appid: number | null };
 
@@ -41,7 +42,7 @@
     logos[key] = null;
     try {
       const url = await invoke<string | null>('game_icon', { name, steamAppid: steam_appid });
-      logos = { ...logos, [key]: url ?? null };
+      logos = { ...logos, [key]: artSrc(url) };
     } catch {}
   }
 

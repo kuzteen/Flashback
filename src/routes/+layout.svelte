@@ -37,7 +37,7 @@
   } from '$lib/capture-config.svelte';
   import { gameSettings, loadDisabledGames } from '$lib/games.svelte';
   import { displaySource, isScreenSource } from '$lib/clips';
-  import { ensureGameHero, gameHero } from '$lib/artwork.svelte';
+  import { artSrc, ensureGameHero, gameHero } from '$lib/artwork.svelte';
   import { t, initLocale } from '$lib/i18n.svelte';
   import {
     updater,
@@ -405,7 +405,7 @@
       if (framePending !== key) return;
       // Commit único: el juego sin arte también pasa por aquí, para que su nombre no se quede
       // esperando un banner que no existe.
-      frame = url ?? '';
+      frame = artSrc(url) ?? '';
       frameKey = key;
       shown = detected.name;
     } catch {
@@ -617,7 +617,7 @@
           {#if editorState.clip}
             {#key editorFrame}
               {#if editorFrame}
-                <span class="cap-frame" style:background-image={`url(${editorFrame})`}></span>
+                <span class="cap-frame" style:background-image={`url("${editorFrame}")`}></span>
               {/if}
             {/key}
             <span class="cap-icon" style:background={editorFrame ? 'transparent' : null}>
@@ -639,7 +639,7 @@
             <!-- key: al cambiar de banner el elemento se recrea y la animación vuelve a correr. -->
             {#key frame}
               {#if frame}
-                <span class="cap-frame" style:background-image={`url(${frame})`}></span>
+                <span class="cap-frame" style:background-image={`url("${frame}")`}></span>
               {/if}
             {/key}
             <span class="cap-icon" style="background: transparent; color: {shown ? 'var(--bright)' : 'var(--text-2)'}">

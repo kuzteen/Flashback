@@ -953,15 +953,15 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    // La interfaz pinta estas carpetas con convertFileSrc: si no están en el ámbito del protocolo
+    // La interfaz pinta estas carpetas (portadas y arte de juegos) con convertFileSrc: si no están en el ámbito del protocolo
     // asset, Tauri bloquea la petición y la imagen sale vacía sin ningún error visible.
     #[test]
-    fn cover_folders_are_in_the_asset_scope() {
+    fn image_folders_are_in_the_asset_scope() {
         let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         let scope = &conf["app"]["security"]["assetProtocol"]["scope"];
         let scope: Vec<&str> = scope.as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
-        for dir in ["playlist-covers", "clip-covers"] {
-            assert!(scope.contains(&format!("$APPDATA/{dir}/*").as_str()), "{dir} fuera del ámbito");
+        for dir in ["$APPDATA/playlist-covers", "$APPDATA/clip-covers", "$APPCACHE/artwork", "$APPCACHE/artwork-search"] {
+            assert!(scope.contains(&format!("{dir}/*").as_str()), "{dir} fuera del ámbito");
         }
     }
 

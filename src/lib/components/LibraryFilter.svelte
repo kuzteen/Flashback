@@ -4,6 +4,7 @@
   import { isScreenSource, sameFilter, displaySource, type Clip, type LibraryFilter } from '$lib/clips';
   import { isFavorite } from '$lib/library.svelte';
   import { groupCover, initial } from '$lib/source-badge';
+  import { artSrc } from '$lib/artwork.svelte';
   import { t } from '$lib/i18n.svelte';
 
   let { clips, selected = $bindable() }: { clips: Clip[]; selected: LibraryFilter[] } = $props();
@@ -37,7 +38,7 @@
     logos[name] = null;
     try {
       const url = await invoke<string | null>('game_icon', { name, steamAppid: null });
-      logos = { ...logos, [name]: url ?? null };
+      logos = { ...logos, [name]: artSrc(url) };
     } catch {}
   }
   $effect(() => {
