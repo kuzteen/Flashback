@@ -5,6 +5,7 @@
   import { shareState } from '$lib/share.svelte';
   import { t } from '$lib/i18n.svelte';
   import { exportStage } from '$lib/export-stage';
+  import { tick } from 'svelte';
   import { fade } from 'svelte/transition';
   import { runAction } from './actions';
   import { playback } from './playback.svelte';
@@ -53,6 +54,26 @@
     closeEditor();
   }
 
+  let exportCard = $state<HTMLDivElement | null>(null);
+  const exportCardOpen = $derived(editorState.exporting || !!editorState.exportDone);
+
+  // La tarjeta se queda con el foco: al abrirse y al pasar de exportando a terminado, lo toma su
+  // botón principal (Cancelar / Ver clip).
+  $effect(() => {
+    if (!exportCardOpen) return;
+    void editorState.exportDone;
+    tick().then(() => exportCard?.querySelector<HTMLButtonElement>('[data-autofocus]')?.focus());
+  });
+
+  // Tab solo circula entre los botones de la tarjeta; el editor de detrás está inert.
+  function trapTab(e: KeyboardEvent) {
+    const buttons = [...(exportCard?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])];
+    if (buttons.length === 0) return;
+    const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    const next = e.shiftKey ? (at <= 0 ? buttons.length - 1 : at - 1) : (at + 1) % buttons.length;
+    buttons[next].focus();
+  }
+
   const fileName = (path: string) => path.split(/[/\\]/).pop() ?? path;
 
   async function onViewExport() {
@@ -66,8 +87,11 @@
     if (shareState.clip || e.defaultPrevented) return;
     // La tarjeta de exportación tapa el editor: sus atajos no actúan por detrás, y Escape cierra
     // la tarjeta terminada en vez del editor (a mitad de export no hace nada; para eso, Cancelar).
-    if (editorState.exporting || editorState.exportDone) {
-      if (e.key === 'Escape' && editorState.exportDone) {
+    if (exportCardOpen) {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        trapTab(e);
+      } else if (e.key === 'Escape' && editorState.exportDone) {
         e.preventDefault();
         dismissExport();
       }
@@ -117,13 +141,15 @@
 <svelte:document onmouseleave={() => ui.hideFsCtrl()} />
 
 <div class="ed" bind:this={root} tabindex="-1">
-  <EditorHeader onclose={close} />
-  <div class="middle">
+  <div class="contents" inert={exportCardOpen}>
+    <EditorHeader onclose={close} />
+  </div>
+  <div class="middle" inert={exportCardOpen}>
     <LookPanel />
     <Viewer />
     <FormatPanel />
   </div>
-  <div class="dock" bind:this={dock} style:height={ui.dockH !== null ? `${ui.dockH}px` : null}>
+  <div class="dock" bind:this={dock} inert={exportCardOpen} style:height={ui.dockH !== null ? `${ui.dockH}px` : null}>
     <div
       class="grip"
       role="presentation"
@@ -149,11 +175,11 @@
     </div>
   {/if}
 
-  {#if editorState.exporting || editorState.exportDone}
+  {#if exportCardOpen}
     {@const done = editorState.exportDone}
     <div class="export-backdrop">
-      <div class="export-card">
-        <div class="export-title">{done ? t('ed.exportDone') : t('ed.exportingClip')}</div>
+      <div class="export-card" bind:this={exportCard} role="dialog" aria-modal="true" aria-labelledby="export-title">
+        <div class="export-title" id="export-title">{done ? t('ed.exportDone') : t('ed.exportingClip')}</div>
         <div class="export-progress">
           <div class="export-bar">
             <div class="export-fill" style:width="{Math.max(2, Math.round(editorState.exportProgress * 100))}%"></div>
@@ -172,10 +198,10 @@
         {#if done}
           <div class="export-actions">
             <button class="export-cancel" onclick={dismissExport}>{t('ed.close')}</button>
-            <button class="export-cancel export-view" onclick={onViewExport}>{t('ed.viewClip')}</button>
+            <button class="export-cancel export-view" data-autofocus onclick={onViewExport}>{t('ed.viewClip')}</button>
           </div>
         {:else}
-          <button class="export-cancel" onclick={cancelExport} disabled={editorState.exportCancelling}>
+          <button class="export-cancel" data-autofocus onclick={cancelExport} disabled={editorState.exportCancelling}>
             {editorState.exportCancelling ? t('ed.cancelling') : t('ed.cancelExport')}
           </button>
         {/if}
@@ -341,6 +367,9 @@
   }
   .shot button:hover {
     color: var(--text-0);
+  }
+  .contents {
+    display: contents;
   }
   .export-backdrop {
     position: absolute;
