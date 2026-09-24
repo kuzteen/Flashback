@@ -143,24 +143,14 @@
     <SourceIcon source={previewSource} size={96} />
   {/snippet}
   {#snippet fields()}
-    {#if single}
-      <label class="field">
-        <span class="notch">{t('clipEdit.name')}</span>
-        <input
-          use:focusSelect
-          bind:value={name}
-          maxlength="120"
-          placeholder={t('clipEdit.name')}
-          onkeydown={(e) => e.key === 'Enter' && dialog?.save()}
-        />
-      </label>
-    {/if}
     <div class="game">
       <label class="field">
         <span class="notch">{t('clipEdit.game')}</span>
         <span class="game-ico"><SourceIcon source={previewSource} size={18} /></span>
         <input
           class="game-input"
+          style:padding-left="40px"
+          use:focusSelect
           value={gameText}
           placeholder={commonSource === null && !gameTouched ? t('clipEdit.mixed') : t('clipEdit.gamePlaceholder')}
           role="combobox"
@@ -199,6 +189,17 @@
         </button>
       {/if}
     </div>
+    {#if single}
+      <label class="field">
+        <span class="notch">{t('clipEdit.name')}</span>
+        <input
+          bind:value={name}
+          maxlength="120"
+          placeholder={t('clipEdit.name')}
+          onkeydown={(e) => e.key === 'Enter' && dialog?.save()}
+        />
+      </label>
+    {/if}
   {/snippet}
 </CoverFormDialog>
 
@@ -214,9 +215,6 @@
     display: grid;
     color: var(--text-2);
     pointer-events: none;
-  }
-  .game .game-input {
-    padding-left: 40px;
   }
   .results {
     position: absolute;
