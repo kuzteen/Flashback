@@ -217,85 +217,108 @@ pub struct ListArt {
     pub xbox_sku: Option<String>,
 }
 
-// Icono que Discord renderiza para el juego, buscado por nombre. Se parsea la lista en crudo y
-// no el mapa del detector: ese está indexado por ejecutable y descarta entradas (lanzadores,
-// .exe genéricos o compartidos entre juegos), así que se queda en ~9.700 de las ~30.000 y un
-// juego puede tener icono en Discord sin estar ahí.
+// Índice por nombre de la lista detectable completa (~24.000 juegos): el arte de cada uno y su
+// nombre en minúsculas para el buscador. No sale del mapa del detector: ese está indexado por
+// ejecutable y descarta entradas (lanzadores, .exe genéricos o compartidos), así que se queda en
+// ~9.300 nombres y un juego puede tener icono en Discord sin estar ahí.
 //
-// Se parsea en cada fallo de caché con un struct ligero que ignora los ejecutables, en lugar de
-// mantener un índice por nombre en memoria: esto ocurre una vez por juego en toda la vida de la
-// instalación (luego el PNG vive en disco) y va seguido de una descarga, que cuesta mucho más.
-// Memo por nombre: la lista son 12 MB y parsearla cuesta ~190 ms, y a un mismo juego le piden
-// arte varias superficies (icono, fondo, Rich Presence). Se guarda el resultado, no la lista.
-static ART_MEMO: Mutex<Option<HashMap<String, Option<ListArt>>>> = Mutex::new(None);
+// Se construye una vez (parsear los 12 MB cuesta ~25 ms en release, ~190 en debug) y se queda en
+// memoria (~3 MB): antes se volvía a parsear la lista por cada juego nuevo, y el buscador de
+// "Editar clip" pide una docena de juegos nuevos en cada búsqueda.
+pub struct GameIndex {
+    entries: Vec<IndexEntry>,
+    by_name: HashMap<String, usize>,
+}
+
+struct IndexEntry {
+    name: String,
+    lower: String,
+    // Id de la aplicación y hash del icono en vez de la URL armada: ~60 bytes menos por juego.
+    icon: Option<(String, String)>,
+    steam_appid: Option<u32>,
+    xbox_sku: Option<String>,
+}
+
+impl GameIndex {
+    fn from_list(bytes: &[u8]) -> Option<GameIndex> {
+        let list: Vec<IconEntry> = serde_json::from_slice(bytes).ok()?;
+        let mut entries = Vec::with_capacity(list.len());
+        let mut by_name = HashMap::with_capacity(list.len());
+        for game in list {
+            let lower = game.name.trim().to_lowercase();
+            let sku = |store: &str| {
+                game.third_party_skus
+                    .iter()
+                    .find(|s| s.distributor.as_deref() == Some(store))
+                    .and_then(|s| s.id.clone())
+            };
+            let steam_appid = sku("steam").and_then(|id| id.parse::<u32>().ok());
+            let xbox_sku = sku("xbox");
+            let icon = match (game.id.is_empty(), game.icon_hash) {
+                (false, Some(hash)) => Some((game.id, hash)),
+                _ => None,
+            };
+            // La primera entrada con ese nombre manda, como hacía la búsqueda lineal.
+            by_name.entry(lower.clone()).or_insert(entries.len());
+            entries.push(IndexEntry { name: game.name, lower, icon, steam_appid, xbox_sku });
+        }
+        Some(GameIndex { entries, by_name })
+    }
+
+    fn art(&self, name: &str) -> Option<ListArt> {
+        let e = &self.entries[*self.by_name.get(&name.trim().to_lowercase())?];
+        Some(ListArt {
+            icon_url: e
+                .icon
+                .as_ref()
+                .map(|(id, hash)| format!("https://cdn.discordapp.com/app-icons/{id}/{hash}.png")),
+            steam_appid: e.steam_appid,
+            xbox_sku: e.xbox_sku.clone(),
+        })
+    }
+
+    fn search(&self, query: &str, limit: usize) -> Vec<String> {
+        rank_games(self.entries.iter().map(|e| (e.name.as_str(), e.lower.as_str())), query, limit)
+    }
+}
+
+static INDEX: Mutex<Option<Arc<GameIndex>>> = Mutex::new(None);
+
+async fn ensure_index(app: &tauri::AppHandle) -> Option<Arc<GameIndex>> {
+    if let Some(index) = INDEX.lock().unwrap().as_ref() {
+        return Some(index.clone());
+    }
+    let bytes = load_or_fetch(app).await?;
+    let index = Arc::new(GameIndex::from_list(&bytes)?);
+    *INDEX.lock().unwrap() = Some(index.clone());
+    Some(index)
+}
 
 pub async fn art_for(app: &tauri::AppHandle, name: &str) -> Option<ListArt> {
-    let needle = name.trim().to_lowercase();
-    if let Some(hit) = ART_MEMO
-        .lock()
-        .unwrap()
-        .as_ref()
-        .and_then(|m| m.get(&needle))
-    {
-        return hit.clone();
-    }
-    let art = art_lookup(app, &needle).await;
-    ART_MEMO
-        .lock()
-        .unwrap()
-        .get_or_insert_with(HashMap::new)
-        .insert(needle, art.clone());
-    art
+    ensure_index(app).await?.art(name)
 }
 
-async fn art_lookup(app: &tauri::AppHandle, needle: &str) -> Option<ListArt> {
-    let bytes = load_or_fetch(app).await?;
-    art_from_list(&bytes, needle)
-}
-
-// Separada del I/O para poder probarla: es la parte que se come un JSON de terceros de 12 MB
-// que se refresca solo cada semana, y un solo campo inesperado tumba el vector entero.
+#[cfg(test)]
 fn art_from_list(bytes: &[u8], name: &str) -> Option<ListArt> {
-    let needle = name.trim().to_lowercase();
-    let list: Vec<IconEntry> = serde_json::from_slice(bytes).ok()?;
-    let game = list
-        .into_iter()
-        .find(|g| g.name.trim().to_lowercase() == needle)?;
-    let icon_url = match (game.id.is_empty(), &game.icon_hash) {
-        (false, Some(hash)) => Some(format!(
-            "https://cdn.discordapp.com/app-icons/{}/{}.png",
-            game.id, hash
-        )),
-        _ => None,
-    };
-    let sku = |store: &str| {
-        game.third_party_skus
-            .iter()
-            .find(|s| s.distributor.as_deref() == Some(store))
-            .and_then(|s| s.id.clone())
-    };
-    let steam_appid = sku("steam").and_then(|id| id.parse::<u32>().ok());
-    let xbox_sku = sku("xbox");
-    Some(ListArt {
-        icon_url,
-        steam_appid,
-        xbox_sku,
-    })
+    GameIndex::from_list(bytes)?.art(name)
 }
 
 // Buscador del diálogo de editar clip: por niveles (nombre exacto, empieza por, empieza una
 // palabra, lo contiene) y alfabético dentro de cada uno. La lista de Discord repite nombres
 // (una entrada por ejecutable), así que se deduplica.
-fn rank_games<'a>(names: impl Iterator<Item = &'a str>, query: &str, limit: usize) -> Vec<String> {
+fn rank_games<'a>(
+    names: impl Iterator<Item = (&'a str, &'a str)>,
+    query: &str,
+    limit: usize,
+) -> Vec<String> {
     let q = query.trim().to_lowercase();
     if q.is_empty() {
         return Vec::new();
     }
     let mut seen = std::collections::HashSet::new();
-    let mut hits: Vec<(u8, String, &str)> = Vec::new();
-    for name in names {
-        let lower = name.to_lowercase();
-        if !seen.insert(lower.clone()) {
+    let mut hits: Vec<(u8, &str, &str)> = Vec::new();
+    for (name, lower) in names {
+        if !seen.insert(lower) {
             continue;
         }
         let tier = if lower == q {
@@ -311,13 +334,15 @@ fn rank_games<'a>(names: impl Iterator<Item = &'a str>, query: &str, limit: usiz
         };
         hits.push((tier, lower, name));
     }
-    hits.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    hits.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
     hits.into_iter().take(limit).map(|(_, _, n)| n.to_string()).collect()
 }
 
+// Con la consulta vacía solo prepara el índice: el diálogo lo llama al abrirse para que la
+// primera búsqueda no espere a parsear la lista.
 pub async fn search_games(app: &tauri::AppHandle, query: &str) -> Vec<String> {
-    let Some(map) = ensure_map(app).await else { return Vec::new() };
-    rank_games(map.values().map(|g| g.name.as_str()), query, 12)
+    let Some(index) = ensure_index(app).await else { return Vec::new() };
+    index.search(query, 12)
 }
 
 pub async fn detect_game(app: &tauri::AppHandle) -> Option<DetectedGame> {
@@ -634,23 +659,28 @@ mod tests {
 
     const GAMES: [&str; 7] = ["Overwatch 2", "VALORANT", "Valheim", "Hollow Knight", "Knights of Valor", "Overwatch 2", "Rocket League"];
 
+    fn ranked(query: &str, limit: usize) -> Vec<String> {
+        let pairs: Vec<(String, String)> = GAMES.iter().map(|n| (n.to_string(), n.to_lowercase())).collect();
+        rank_games(pairs.iter().map(|(n, l)| (n.as_str(), l.as_str())), query, limit)
+    }
+
     #[test]
     fn exact_then_prefix_then_word_then_contains() {
-        let hits = rank_games(GAMES.iter().copied(), "val", 10);
+        let hits = ranked("val", 10);
         assert_eq!(hits, ["Valheim", "VALORANT", "Knights of Valor"]);
-        assert_eq!(rank_games(GAMES.iter().copied(), "valorant", 10), ["VALORANT"]);
+        assert_eq!(ranked("valorant", 10), ["VALORANT"]);
     }
 
     #[test]
     fn names_are_unique_and_limited() {
-        assert_eq!(rank_games(GAMES.iter().copied(), "over", 10), ["Overwatch 2"]);
-        assert_eq!(rank_games(GAMES.iter().copied(), "o", 2).len(), 2);
-        assert!(rank_games(GAMES.iter().copied(), "   ", 10).is_empty());
+        assert_eq!(ranked("over", 10), ["Overwatch 2"]);
+        assert_eq!(ranked("o", 2).len(), 2);
+        assert!(ranked("   ", 10).is_empty());
     }
 
     #[test]
     fn knight_matches_the_word_before_the_middle() {
-        assert_eq!(rank_games(GAMES.iter().copied(), "knight", 10), ["Knights of Valor", "Hollow Knight"]);
+        assert_eq!(ranked("knight", 10), ["Knights of Valor", "Hollow Knight"]);
     }
 
     // Recorte con la forma real de la lista de Discord. La primera entrada lleva el `"id": null`
@@ -665,6 +695,22 @@ mod tests {
        "third_party_skus":[{"distributor":"xbox","id":"9PB2"},{"distributor":"steam","id":"2592160"}]},
       {"id":"","name":"No Art","icon_hash":null,"third_party_skus":[]}
     ]"#;
+
+    #[test]
+    fn the_index_searches_every_entry_of_the_list() {
+        let index = GameIndex::from_list(LIST.as_bytes()).unwrap();
+        assert_eq!(index.search("dis", 10), ["Dispatch"]);
+        assert_eq!(index.search("battle", 10), ["Battlenet Game"]);
+        assert_eq!(index.search("art", 10), ["No Art"]);
+    }
+
+    #[test]
+    fn the_index_resolves_art_by_name() {
+        let index = GameIndex::from_list(LIST.as_bytes()).unwrap();
+        let art = index.art("  vAlOrAnT ").expect("VALORANT resolves");
+        assert_eq!(art.xbox_sku.as_deref(), Some("9N1NLJK9SKRN"));
+        assert!(index.art("Half-Life 3").is_none());
+    }
 
     #[test]
     fn a_null_sku_id_does_not_sink_the_rest_of_the_list() {

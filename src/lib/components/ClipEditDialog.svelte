@@ -36,6 +36,12 @@
     return clips.every((c) => c.source === first) ? first : null;
   });
 
+  // Al abrir se prepara el índice de juegos del backend (parsear la lista la primera vez): así la
+  // primera búsqueda responde al instante.
+  $effect(() => {
+    if (open) invoke('search_games', { query: '' }).catch(() => {});
+  });
+
   $effect(() => {
     void clipEdit.paths;
     untrack(() => {
@@ -85,7 +91,7 @@
     searchTimer = setTimeout(async () => {
       const hits = await invoke<string[]>('search_games', { query }).catch(() => [] as string[]);
       if (seq === searchSeq) results = hits;
-    }, 120);
+    }, 50);
   }
 
   function pick(game: string) {

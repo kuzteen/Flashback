@@ -130,22 +130,22 @@ pub async fn game_hero(
     // candidatos con 0 votos entre los que no podemos elegir mejor que al azar.
     // La lista detectable se consulta aquí y no antes para no pagar su parseo en acierto de caché.
     let list_art = crate::detect::art_for(app, name).await;
-    let client = reqwest::Client::new();
+    let client = http();
     let store_appid = appid.or_else(|| list_art.as_ref().and_then(|a| a.steam_appid));
     let official = match store_appid {
-        Some(id) => steam_hero(&client, app, id).await,
+        Some(id) => steam_hero(client, app, id).await,
         None => None,
     };
     let official = match official {
         Some(bytes) => Some(bytes),
         None => match list_art.as_ref().and_then(|a| a.xbox_sku.as_deref()) {
-            Some(sku) => ms_hero(&client, sku).await,
+            Some(sku) => ms_hero(client, sku).await,
             None => None,
         },
     };
     let bytes = match official {
         Some(bytes) => bytes,
-        None => sgdb_hero(&client, app, name, store_appid).await?,
+        None => sgdb_hero(client, app, name, store_appid).await?,
     };
     if bytes.is_empty() {
         return None;
@@ -169,11 +169,11 @@ pub async fn game_art_url(
         return Some(url);
     }
     let steam_appid = steam_appid.or_else(|| list_art.and_then(|a| a.steam_appid));
-    let client = reqwest::Client::new();
+    let client = http();
     if let Some(key) = api_key(app) {
         let game_id = match steam_appid {
-            Some(id) => sgdb_by_steam(&client, &key, id).await,
-            None => search_game(&client, &key, name).await,
+            Some(id) => sgdb_by_steam(client, &key, id).await,
+            None => search_game(client, &key, name).await,
         };
         if let Some(gid) = game_id {
             let url = format!(
@@ -262,6 +262,13 @@ async fn sgdb_hero(
     };
     let hero_url = first_hero(client, &key, game_id).await?;
     download(client, &hero_url).await
+}
+
+// Un cliente para toda la app: reutiliza las conexiones (y su TLS) con los CDN en vez de negociar
+// una nueva por imagen, que es lo que más tardaba al cargar varios iconos seguidos.
+fn http() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
 }
 
 async fn download(client: &reqwest::Client, url: &str) -> Option<Vec<u8>> {
@@ -368,14 +375,14 @@ pub async fn game_icon(
         }
     }
 
-    let client = reqwest::Client::new();
+    let client = http();
     // Discord primero: su lista detectable ya está cacheada para el detector de juegos, así que
     // sale gratis, y su arte es homogéneo entre juegos. SteamGridDB queda de respaldo.
     let list_art = crate::detect::art_for(app, name).await;
     if let Some(url) = list_art.as_ref().and_then(|a| a.icon_url.as_deref()) {
         // 256 px: el original del CDN puede ser de 1024 y esto viaja al frontend como data URL
         // para verse a 30. El Rich Presence sigue usando la URL sin recortar.
-        if let Some(bytes) = download(&client, &format!("{url}?size=256")).await {
+        if let Some(bytes) = download(client, &format!("{url}?size=256")).await {
             if !bytes.is_empty() {
                 let _ = std::fs::write(&path, &bytes);
                 return Some(to_data_url(&bytes));
@@ -386,8 +393,8 @@ pub async fn game_icon(
     // de por nombre, que es lo que confunde remasters y secuelas.
     let appid = steam_appid.or_else(|| list_art.and_then(|a| a.steam_appid));
     let bytes = match appid {
-        Some(id) => steam_icon(&client, app, id).await?,
-        None => name_icon(&client, app, name).await?,
+        Some(id) => steam_icon(client, app, id).await?,
+        None => name_icon(client, app, name).await?,
     };
     if bytes.is_empty() {
         return None;
@@ -435,7 +442,7 @@ pub async fn search_icon(app: &tauri::AppHandle, name: &str) -> Option<String> {
         return Some(to_data_url(&bytes));
     }
     let url = crate::detect::art_for(app, name).await?.icon_url?;
-    let bytes = download(&reqwest::Client::new(), &format!("{url}?size=64")).await?;
+    let bytes = download(http(), &format!("{url}?size=64")).await?;
     if bytes.is_empty() {
         return None;
     }
