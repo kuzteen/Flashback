@@ -1,11 +1,32 @@
 use std::io::{self, Write};
+use std::ops::Range;
 
 const NAL_SPS: u8 = 7;
 const NAL_PPS: u8 = 8;
 const NAL_AUD: u8 = 9;
 
+// Recorre cada byte de cada paquete (dos veces al guardar un replay: tamaños y escritura), así que
+// es el bucle más caliente del muxer. Un código de inicio lleva dos ceros seguidos y el vídeo
+// comprimido casi no tiene ceros: se leen 8 bytes de golpe y se salta el bloque entero si no hay
+// ninguno, como hace ffmpeg. Byte a byte, un replay de un minuto tardaba segundos en escribirse.
 fn start_code(data: &[u8], from: usize) -> Option<usize> {
-    data.get(from..)?.windows(3).position(|w| w == [0, 0, 1]).map(|p| from + p)
+    const LOW: u64 = 0x0101_0101_0101_0101;
+    const HIGH: u64 = 0x8080_8080_8080_8080;
+    let mut i = from;
+    while i + 3 <= data.len() {
+        if let Some(block) = data.get(i..i + 8) {
+            let w = u64::from_le_bytes(block.try_into().unwrap_or_default());
+            if w.wrapping_sub(LOW) & !w & HIGH == 0 {
+                i += 8;
+                continue;
+            }
+        }
+        if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
 }
 
 pub fn nal_units(data: &[u8]) -> impl Iterator<Item = &[u8]> {
@@ -33,14 +54,27 @@ fn samples_nals(data: &[u8]) -> impl Iterator<Item = &[u8]> {
     nal_units(data).filter(|n| !matches!(nal_type(n), NAL_SPS | NAL_PPS | NAL_AUD))
 }
 
-pub fn mp4_size(data: &[u8]) -> u32 {
-    samples_nals(data).map(|n| 4 + n.len() as u32).sum()
+// NAL que van al MP4, como rangos del paquete. Se buscan una sola vez: el índice necesita el
+// tamaño antes de escribir los datos, y recorrer el paquete de nuevo al escribirlo duplicaba el
+// coste del muxer.
+pub fn mp4_nals(data: &[u8]) -> Vec<Range<usize>> {
+    let base = data.as_ptr() as usize;
+    samples_nals(data)
+        .map(|n| {
+            let at = n.as_ptr() as usize - base;
+            at..at + n.len()
+        })
+        .collect()
 }
 
-pub fn write_mp4<W: Write>(w: &mut W, data: &[u8]) -> io::Result<()> {
-    for nal in samples_nals(data) {
-        w.write_all(&(nal.len() as u32).to_be_bytes())?;
-        w.write_all(nal)?;
+pub fn mp4_size(nals: &[Range<usize>]) -> u32 {
+    nals.iter().map(|n| 4 + n.len() as u32).sum()
+}
+
+pub fn write_mp4<W: Write>(w: &mut W, data: &[u8], nals: &[Range<usize>]) -> io::Result<()> {
+    for n in nals {
+        w.write_all(&(n.len() as u32).to_be_bytes())?;
+        w.write_all(&data[n.clone()])?;
     }
     Ok(())
 }
@@ -147,6 +181,28 @@ mod tests {
         out
     }
 
+    fn naive_start_code(data: &[u8], from: usize) -> Option<usize> {
+        data.get(from..)?.windows(3).position(|w| w == [0, 0, 1]).map(|p| from + p)
+    }
+
+    #[test]
+    fn the_block_skip_finds_the_same_start_codes_as_a_byte_scan() {
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for _ in 0..400 {
+            let len = (next() % 200) as usize;
+            let data: Vec<u8> = (0..len).map(|_| match next() % 8 { 0..=2 => 0, 3 => 1, _ => next() as u8 }).collect();
+            for from in 0..=len {
+                assert_eq!(start_code(&data, from), naive_start_code(&data, from), "{data:?} desde {from}");
+            }
+        }
+    }
+
     #[test]
     fn splits_three_and_four_byte_start_codes() {
         let data = [0, 0, 0, 1, 0x09, 0xF0, 0, 0, 1, 0x65, 0xAA, 0xBB, 0, 0, 0, 1, 0x41, 0xCC];
@@ -164,16 +220,17 @@ mod tests {
     #[test]
     fn size_drops_parameter_sets_and_delimiters() {
         let data = annexb(&[&[0x09, 0xF0], &HIGH_SPS, &PPS, &[0x65, 0xAA, 0xBB]]);
-        assert_eq!(mp4_size(&data), 4 + 3);
+        assert_eq!(mp4_size(&mp4_nals(&data)), 4 + 3);
     }
 
     #[test]
     fn writes_length_prefixed_nals() {
         let data = annexb(&[&[0x09, 0xF0], &[0x06, 0x05], &[0x65, 0xAA, 0xBB]]);
+        let nals = mp4_nals(&data);
         let mut out = Vec::new();
-        write_mp4(&mut out, &data).unwrap();
+        write_mp4(&mut out, &data, &nals).unwrap();
         assert_eq!(out, [0, 0, 0, 2, 0x06, 0x05, 0, 0, 0, 3, 0x65, 0xAA, 0xBB]);
-        assert_eq!(out.len() as u32, mp4_size(&data));
+        assert_eq!(out.len() as u32, mp4_size(&nals));
     }
 
     #[test]

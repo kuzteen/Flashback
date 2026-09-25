@@ -33,7 +33,7 @@ pub struct AudioInput {
 
 #[cfg(target_os = "windows")]
 pub use win::{
-    list_audio_inputs, list_monitors, replay_active, replay_target, save_replay, start,
+    begin_save_replay, list_audio_inputs, list_monitors, replay_active, replay_target, save_replay, start,
     start_replay, status, stop, stop_replay,
 };
 
@@ -97,6 +97,21 @@ pub fn save_replay(_source: &str) -> Option<String> {
 }
 
 #[cfg(not(target_os = "windows"))]
+pub struct PendingReplay;
+
+#[cfg(not(target_os = "windows"))]
+impl PendingReplay {
+    pub fn write(self) -> Option<String> {
+        None
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn begin_save_replay(_source: &str) -> Option<PendingReplay> {
+    None
+}
+
+#[cfg(not(target_os = "windows"))]
 pub fn replay_active() -> bool {
     false
 }
@@ -145,19 +160,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn screens_are_labelled_by_their_display_number() {
-        assert_eq!(source_label(Some(r"\.\DISPLAY2")), "Pantalla 2");
-        assert_eq!(source_label(Some("otra-cosa")), "Pantalla");
-        assert_eq!(source_label(None), "");
-    }
-
-    #[test]
     fn only_the_dx12_fallback_encoder_is_refused() {
         assert!(unusable_h264_encoder("Microsoft AVC DX12 Encoder HMFT"));
         assert!(!unusable_h264_encoder("NVIDIA H.264 Encoder MFT"));
         assert!(!unusable_h264_encoder("Intel Quick Sync Video H.264 Encoder MFT"));
         assert!(!unusable_h264_encoder("AMDh264Encoder"));
         assert!(!unusable_h264_encoder("H264 Encoder MFT"));
+    }
+
+    #[test]
+    fn screens_are_labelled_by_their_display_number() {
+        assert_eq!(source_label(Some(r"\.\DISPLAY2")), "Pantalla 2");
+        assert_eq!(source_label(Some("otra-cosa")), "Pantalla");
+        assert_eq!(source_label(None), "");
     }
 
     #[test]

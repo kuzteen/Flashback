@@ -10,11 +10,12 @@ use super::{Packet, Track};
 // los tamaños sin copiar, se escribe el `moov` con los desplazamientos definitivos y luego los
 // datos, convirtiendo el vídeo NAL a NAL. El audio va intercalado por GOP de vídeo.
 pub fn write<W: Write>(w: &mut W, tracks: &[Track], packets: &[Vec<Packet>]) -> io::Result<()> {
-    let sizes: Vec<Vec<u32>> = tracks
+    let layouts: Vec<Vec<_>> = tracks
         .iter()
         .zip(packets)
-        .map(|(t, ps)| ps.iter().map(|p| t.sample_size(p.data)).collect())
+        .map(|(t, ps)| ps.iter().map(|p| t.layout(p.data)).collect())
         .collect();
+    let sizes: Vec<Vec<u32>> = layouts.iter().map(|l| l.iter().map(|s| s.size).collect()).collect();
     let runs = layout(tracks, packets);
     let payload: u64 = sizes.iter().flatten().map(|s| *s as u64).sum();
     let head = ftyp();
@@ -36,8 +37,8 @@ pub fn write<W: Write>(w: &mut W, tracks: &[Track], packets: &[Vec<Packet>]) -> 
     w.write_all(&moov)?;
     w.write_all(&mdat)?;
     for (track, range) in &runs {
-        for p in &packets[*track][range.clone()] {
-            tracks[*track].write_sample(w, p.data)?;
+        for i in range.clone() {
+            tracks[*track].write_sample(w, packets[*track][i].data, &layouts[*track][i])?;
         }
     }
     w.flush()

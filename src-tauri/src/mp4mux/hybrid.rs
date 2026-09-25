@@ -124,11 +124,13 @@ impl<W: Write + Seek> Hybrid<W> {
         moof.close(mfhd);
         let mut offset_fields = Vec::new();
         let mut run_sizes = Vec::new();
+        let mut run_layouts = Vec::new();
         for (track, samples, next) in &runs {
             let t = &self.tracks[*track];
             let ts = t.timescale();
             let tab = &mut self.tables[*track];
-            let sizes: Vec<u32> = samples.iter().map(|p| t.sample_size(&p.data)).collect();
+            let layouts: Vec<_> = samples.iter().map(|p| t.layout(&p.data)).collect();
+            let sizes: Vec<u32> = layouts.iter().map(|l| l.size).collect();
             let starts: Vec<u64> = samples
                 .iter()
                 .zip(&sizes)
@@ -164,6 +166,7 @@ impl<W: Write + Seek> Hybrid<W> {
             moof.close(trun);
             moof.close(traf);
             run_sizes.push(sizes.iter().map(|s| *s as u64).sum::<u64>());
+            run_layouts.push(layouts);
         }
         moof.close(m);
 
@@ -180,9 +183,9 @@ impl<W: Write + Seek> Hybrid<W> {
         self.w.seek(SeekFrom::Start(moof_at))?;
         self.w.write_all(&moof.b)?;
         self.w.write_all(&header)?;
-        for ((track, samples, _), size) in runs.iter().zip(&run_sizes) {
-            for p in samples {
-                self.tracks[*track].write_sample(&mut self.w, &p.data)?;
+        for (((track, samples, _), size), layouts) in runs.iter().zip(&run_sizes).zip(&run_layouts) {
+            for (p, layout) in samples.iter().zip(layouts) {
+                self.tracks[*track].write_sample(&mut self.w, &p.data, layout)?;
             }
             self.tables[*track].add_chunk(chunk_at, samples.len() as u32);
             chunk_at += size;

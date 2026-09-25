@@ -108,19 +108,31 @@ fn save_clip(app: &AppHandle) {
         toast(app, ToastTopic::Problems, "info", msg.into());
         return;
     }
-    match crate::capture::save_replay(&crate::capture::source_label(crate::capture::replay_target().as_deref())) {
+    let source = crate::capture::source_label(crate::capture::replay_target().as_deref());
+    let Some(pending) = crate::capture::begin_save_replay(&source) else {
+        let msg = if es {
+            "No se pudo guardar el replay (el buffer aún no tiene un keyframe)."
+        } else {
+            "Could not save the replay (the buffer has no keyframe yet)."
+        };
+        toast(app, ToastTopic::Problems, "info", msg.into());
+        return;
+    };
+    // El clip ya está fijado en este instante: se avisa ya y se escribe después. Escribir el MP4
+    // entero puede llevar segundos con un buffer largo, y el aviso no debe esperar al disco.
+    crate::sound::play();
+    toast(app, ToastTopic::Saved, "saved", if es { "Clip guardado" } else { "Clip saved" }.into());
+    match pending.write() {
         Some(path) => {
-            crate::sound::play();
-            toast(app, ToastTopic::Saved, "saved", if es { "Clip guardado" } else { "Clip saved" }.into());
             let _ = app.emit("clip-saved", path);
         }
         None => {
             let msg = if es {
-                "No se pudo guardar el replay (el buffer aún no tiene un keyframe)."
+                "No se pudo escribir el clip en el disco."
             } else {
-                "Could not save the replay (the buffer has no keyframe yet)."
+                "The clip could not be written to disk."
             };
-            toast(app, ToastTopic::Problems, "info", msg.into());
+            toast(app, ToastTopic::Problems, "error", msg.into());
         }
     }
 }

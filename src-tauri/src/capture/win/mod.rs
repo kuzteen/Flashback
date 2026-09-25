@@ -853,9 +853,26 @@ pub fn replay_target() -> Option<String> {
     REPLAY_STATE.lock_ok().as_ref().map(|r| r.target.clone())
 }
 
-// Muxea los últimos N s del ring a un MP4 desde el último IDR. Se clona lo necesario
-// bajo el lock y se libera antes de tocar disco para no frenar el hilo de codificación.
+// Clip ya fijado: referencias a los paquetes del ring en el instante del atajo. Escribirlo es lo
+// lento (el MP4 entero a disco), así que quien guarda avisa al usuario antes de llamar a `write`.
+pub struct PendingReplay {
+    out_dir: String,
+    source: String,
+    packets: Vec<(Bytes, i64, i64, bool)>,
+    seq_header: Vec<u8>,
+    width: u32,
+    height: u32,
+    sys_audio: Option<AudioMuxTrack>,
+    mic_audio: Option<AudioMuxTrack>,
+}
+
 pub fn save_replay(source: &str) -> Option<String> {
+    begin_save_replay(source)?.write()
+}
+
+// Fija los últimos N s del ring desde el último IDR. Solo clona referencias bajo el lock, así que
+// es instantáneo y no frena el hilo de codificación.
+pub fn begin_save_replay(source: &str) -> Option<PendingReplay> {
     let (buffer, out_dir) = {
         let guard = REPLAY_STATE.lock_ok();
         let r = guard.as_ref()?;
@@ -917,20 +934,35 @@ pub fn save_replay(source: &str) -> Option<String> {
         None => None,
     };
 
-    let path = reserve_clip_path(&out_dir);
-    match mux_replay(&path, &packets, &seq_header, width, height, sys_audio, mic_audio) {
-        Ok(()) => {
-            if !source.is_empty() {
-                let _ = crate::library::write_embedded_source(std::path::Path::new(&path), source);
+    Some(PendingReplay {
+        out_dir,
+        source: source.to_string(),
+        packets,
+        seq_header,
+        width,
+        height,
+        sys_audio,
+        mic_audio,
+    })
+}
+
+impl PendingReplay {
+    pub fn write(self) -> Option<String> {
+        let path = reserve_clip_path(&self.out_dir);
+        match mux_replay(&path, &self.packets, &self.seq_header, self.width, self.height, self.sys_audio, self.mic_audio) {
+            Ok(()) => {
+                if !self.source.is_empty() {
+                    let _ = crate::library::write_embedded_source(std::path::Path::new(&path), &self.source);
+                }
+                Some(path)
             }
-            Some(path)
-        }
-        Err(e) => {
-            eprintln!("save_replay: fallo al escribir el MP4: {e}");
-            // Un MP4 a medio escribir con el índice delante apuntaría a datos que no están:
-            // se borra para no dejar un clip roto en la biblioteca.
-            let _ = std::fs::remove_file(&path);
-            None
+            Err(e) => {
+                eprintln!("save_replay: fallo al escribir el MP4: {e}");
+                // Un MP4 a medio escribir con el índice delante apuntaría a datos que no están:
+                // se borra para no dejar un clip roto en la biblioteca.
+                let _ = std::fs::remove_file(&path);
+                None
+            }
         }
     }
 }
