@@ -3,6 +3,7 @@
 </script>
 
 <script lang="ts">
+  import { flip } from '$lib/flip';
   import { untrack, type Snippet } from 'svelte';
   import Icon from './Icon.svelte';
   import { t } from '$lib/i18n.svelte';
@@ -320,7 +321,7 @@
                   <Icon name="more" size={18} />
                 </button>
                 {#if coverMenu}
-                  <div class="cover-menu" role="menu">
+                  <div class="cover-menu" role="menu" use:flip>
                     <button
                       role="menuitem"
                       onclick={() => {

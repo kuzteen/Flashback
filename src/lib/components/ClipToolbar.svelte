@@ -1,4 +1,5 @@
 <script lang="ts" generics="S extends string">
+  import { flip } from '$lib/flip';
   import Icon from './Icon.svelte';
   import LibraryFilter from './LibraryFilter.svelte';
   import type { Clip, LibraryFilter as Filter } from '$lib/clips';
@@ -62,7 +63,7 @@
       <Icon name="chevron-down" size={13} sw={2} />
     </button>
     {#if sortOpen}
-      <div class="sort-menu">
+      <div class="sort-menu" use:flip>
         {#each sorts as o (o.value)}
           <button
             class="sort-item"

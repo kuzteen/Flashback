@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { flip } from '$lib/flip';
   import { untrack } from 'svelte';
   import Icon from '$lib/components/Icon.svelte';
   import SortableGrid from '$lib/components/SortableGrid.svelte';
@@ -216,7 +217,7 @@
         {t('pl.addTo')}
       </button>
       {#if plOpen}
-        <div class="pl-menu">
+        <div class="pl-menu" use:flip>
           <PlaylistPicker paths={selectedPaths} onclose={() => (plOpen = false)} />
         </div>
       {/if}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { flip } from '$lib/flip';
   import { invoke } from '@tauri-apps/api/core';
   import { untrack } from 'svelte';
   import CoverFormDialog, { type CoverChange } from './CoverFormDialog.svelte';
@@ -178,7 +179,7 @@
         />
       </label>
       {#if listOpen && options.length}
-        <div class="results" id="game-results" role="listbox">
+        <div class="results" id="game-results" role="listbox" use:flip>
           {#each options as option, i (option + i)}
             <button
               type="button"

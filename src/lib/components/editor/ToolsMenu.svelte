@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { flip } from '$lib/flip';
   import Icon from '../Icon.svelte';
   import { SHORTCUTS, comboTokens } from '$lib/shortcuts';
   import { t } from '$lib/i18n.svelte';
@@ -33,7 +34,7 @@
   </button>
 
   {#if ui.toolsOpen}
-    <div class="menu" role="menu">
+    <div class="menu" role="menu" use:flip>
       {#each SHORTCUTS as s (s.action)}
         <button
           role="menuitem"

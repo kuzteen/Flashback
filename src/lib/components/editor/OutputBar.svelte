@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { flip } from '$lib/flip';
   import { invoke } from '@tauri-apps/api/core';
   import Icon from '../Icon.svelte';
   import WatermarkToggle from '../WatermarkToggle.svelte';
@@ -91,7 +92,7 @@
         <Icon name="export" size={16} sw={2.2} />
       </button>
       {#if menuOpen}
-        <div class="menu" role="menu" aria-label={t('ed.exportAs')}>
+        <div class="menu" role="menu" aria-label={t('ed.exportAs')} use:flip>
           <span class="menu-title">{t('ed.exportAs')}</span>
           {#each FORMATS as f (f.value)}
             <button role="menuitem" class="item" onclick={() => onExport(f.value)}>

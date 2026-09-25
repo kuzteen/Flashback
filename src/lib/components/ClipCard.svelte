@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { flip } from '$lib/flip';
   import { untrack } from 'svelte';
   import Icon from './Icon.svelte';
   import PlaylistPicker from './PlaylistPicker.svelte';
@@ -475,6 +476,7 @@
           style={menuPos ? `left:${menuPos.x}px;top:${menuPos.y}px` : ''}
           bind:this={menuEl}
           role="menu"
+          use:flip
         >
           <button role="menuitem" onclick={(e) => { e.stopPropagation(); openEditor(clip); }}><Icon name="editor" size={16} /> {t('card.openEditor')}</button>
           <button role="menuitem" class:on={favorite} onclick={favClick}><Icon name="star-fill" size={16} /> {favorite ? t('card.favRemove') : t('card.favAdd')}</button>

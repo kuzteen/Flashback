@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { flip } from '$lib/flip';
   import '@fontsource-variable/geist';
   import '@fontsource-variable/outfit';
   import '../app.css';
@@ -706,7 +707,7 @@
         </button>
 
         {#if !editorState.clip && pickerOpen}
-          <div class="cap-menu" role="menu">
+          <div class="cap-menu" role="menu" use:flip>
             <button class="cap-opt" class:on={!selectedMonitor} role="menuitem" onclick={(e) => backToApp(e)}>
               <span class="opt-ico"><Icon name="console" size={21} /></span>
               <span class="opt-text">
@@ -751,7 +752,7 @@
                   <span class="mic-chev"><Icon name="chevron-down" size={13} sw={2} /></span>
                 </button>
                 {#if micDDOpen}
-                  <div class="mic-list" role="listbox">
+                  <div class="mic-list" role="listbox" use:flip>
                     {#each audioInputs as inp (inp.id)}
                       <button
                         class="mic-item"
@@ -814,7 +815,7 @@
           </button>
 
           {#if settingsOpen}
-            <div class="qset-menu" role="menu">
+            <div class="qset-menu" role="menu" use:flip>
               {#each settingRows as row (row.key)}
                 <div class="qrow">
                   <span class="qtitle">{row.title}</span>
@@ -830,7 +831,7 @@
                       <span class="qdd-chev"><Icon name="chevron-down" size={13} sw={2} /></span>
                     </button>
                     {#if openRow === row.key}
-                      <div class="qdd-list" role="listbox">
+                      <div class="qdd-list" role="listbox" use:flip>
                         {#each row.options as opt (opt.label)}
                           <button
                             class="qdd-item"

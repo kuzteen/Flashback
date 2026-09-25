@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { flip } from '$lib/flip';
   import { invoke } from '@tauri-apps/api/core';
   import Icon from '$lib/components/Icon.svelte';
   import { isScreenSource, sameFilter, displaySource, type Clip, type LibraryFilter } from '$lib/clips';
@@ -67,7 +68,7 @@
   </button>
 
   {#if open}
-    <div class="menu" role="menu">
+    <div class="menu" role="menu" use:flip>
       <button class="item" class:on={selected.length === 0} onclick={clearAll} role="menuitemradio" aria-checked={selected.length === 0}>
         <span class="lead"><Icon name="clips-fill" size={15} /></span>
         <span class="txt">{t('filter.all')}</span>

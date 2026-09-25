@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { flip } from '$lib/flip';
   import Icon from './Icon.svelte';
   import { menu } from '$lib/menu.svelte';
   import { formatDuration, isScreenSource, displaySource } from '$lib/clips';
@@ -184,6 +185,7 @@
         style={menuPos ? `left:${menuPos.x}px;top:${menuPos.y}px` : ''}
         bind:this={menuEl}
         role="menu"
+        use:flip
       >
         <button
           role="menuitem"

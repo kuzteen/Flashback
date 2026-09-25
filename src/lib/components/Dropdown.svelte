@@ -1,4 +1,5 @@
 <script lang="ts" generics="T extends string | number">
+  import { flip } from '$lib/flip';
   import Icon from '$lib/components/Icon.svelte';
 
   type Option = { label: string; value: T };
@@ -50,7 +51,7 @@
     <span class="dd-chev"><Icon name="chevron-down" size={13} sw={2} /></span>
   </button>
   {#if open}
-    <div class="dd-list" role="listbox">
+    <div class="dd-list" role="listbox" use:flip>
       {#each options as o (o.value)}
         <button
           class="dd-item"
