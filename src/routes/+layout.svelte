@@ -3,7 +3,7 @@
   import '@fontsource-variable/outfit';
   import '../app.css';
   import { page } from '$app/state';
-  import { goto } from '$app/navigation';
+  import { afterNavigate, beforeNavigate, goto } from '$app/navigation';
   import Icon from '$lib/components/Icon.svelte';
   import WindowControls from '$lib/components/WindowControls.svelte';
   import { invoke } from '@tauri-apps/api/core';
@@ -216,6 +216,42 @@
     if (t?.closest('input, textarea, [contenteditable="true"]')) return;
     e.preventDefault();
   }
+
+  function focusOnMount(node: HTMLElement) {
+    node.focus({ preventScroll: true });
+  }
+
+  function onUpdateKey(e: KeyboardEvent) {
+    if (!updater.popupOpen || e.key !== 'Escape') return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    closeUpdatePopup();
+  }
+
+  // .content es un único contenedor de scroll para todas las rutas y SvelteKit solo restaura el
+  // de la ventana, así que cada ruta guarda aquí su posición. Se reintenta unos fotogramas porque
+  // la rejilla virtual fija su alto después de medir la primera fila, y hasta entonces el
+  // navegador recorta el scrollTop.
+  let contentEl = $state<HTMLDivElement | null>(null);
+  const scrollByPath = new Map<string, number>();
+  let restoreRaf = 0;
+  beforeNavigate(({ from }) => {
+    if (contentEl && from?.url) scrollByPath.set(from.url.pathname, contentEl.scrollTop);
+  });
+  afterNavigate(({ from, to }) => {
+    const el = contentEl;
+    // En la carga inicial `from` existe pero con url null; un error aquí rompe el arranque del
+    // router y cada clic en un enlace pasa a ser una recarga completa.
+    if (!el || !to?.url || !from?.url || from.url.pathname === to.url.pathname) return;
+    const target = scrollByPath.get(to.url.pathname) ?? 0;
+    cancelAnimationFrame(restoreRaf);
+    let frames = 0;
+    const apply = () => {
+      el.scrollTop = target;
+      if (Math.abs(el.scrollTop - target) > 1 && ++frames < 30) restoreRaf = requestAnimationFrame(apply);
+    };
+    apply();
+  });
 
   function toggleMicDD(e: MouseEvent) {
     e.stopPropagation();
@@ -545,7 +581,7 @@
   });
 </script>
 
-<svelte:window onclick={closeAll} oncontextmenu={onContextMenu} />
+<svelte:window onclick={closeAll} onkeydown={onUpdateKey} oncontextmenu={onContextMenu} />
 
 <div class="app">
   <aside class="sidebar" data-tauri-drag-region>
@@ -567,7 +603,7 @@
       {/if}
     </div>
 
-    <nav>
+    <nav inert={!!editorState.clip}>
       {#each nav as item (item.href)}
         <a
           class="nav-item"
@@ -582,6 +618,7 @@
 
     <a
       class="nav-item games-tab"
+      inert={!!editorState.clip}
       class:active={isActive('/juegos')}
       href="/juegos"
       aria-label={t('nav.games')}
@@ -590,6 +627,7 @@
     </a>
     <a
       class="nav-item settings-tab"
+      inert={!!editorState.clip}
       class:active={isActive('/settings')}
       class:spin={gearSpin}
       onmouseenter={() => (gearSpin = true)}
@@ -842,7 +880,7 @@
       <div class="winctl"><WindowControls /></div>
     </header>
 
-    <div class="content">
+    <div class="content" class:behind={!!editorState.clip} bind:this={contentEl}>
       {@render children()}
     </div>
   </div>
@@ -860,12 +898,20 @@
 <ClipEditDialog />
 
 {#if updater.popupOpen && updater.info}
-  <div class="upd-overlay" role="presentation" onclick={closeUpdatePopup}>
+  <div
+    class="upd-overlay"
+    role="presentation"
+    onclick={(e) => {
+      if (e.target === e.currentTarget) closeUpdatePopup();
+    }}
+  >
     <div
       class="upd-modal"
       role="dialog"
       aria-modal="true"
-      onclick={(e) => e.stopPropagation()}
+      aria-label={t('upd.title')}
+      tabindex="-1"
+      use:focusOnMount
     >
       <h2 class="modal-title">{t('upd.title')}</h2>
       <p class="upd-ver">{t('upd.version', { v: updater.info.version })}</p>
@@ -1739,6 +1785,11 @@
     overflow-x: hidden;
     scrollbar-gutter: stable;
     background: var(--base);
+  }
+  /* Tapada por el editor: sin pintarla, pero montada para conservar scroll y estado. También la
+     saca del orden de tabulación. */
+  .content.behind {
+    visibility: hidden;
   }
 
   .logo-btn {
