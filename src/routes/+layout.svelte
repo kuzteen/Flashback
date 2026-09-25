@@ -151,8 +151,9 @@
   // El feedback se muestra como toast en una ventana overlay (transparente, siempre
   // encima, click-through) para que sea visible también sobre el juego en modo Aplicación.
   type ToastKind = 'info' | 'ready' | 'saved' | 'error';
-  function toast(text: string, kind: ToastKind = 'info', keys: string[] = []) {
-    invoke('toast', { payload: { title: 'Flashback', body: text, keys, kind } }).catch(() => {});
+  type ToastTopic = 'saved' | 'ready' | 'recording' | 'problems';
+  function toast(text: string, topic: ToastTopic, kind: ToastKind = 'info', keys: string[] = []) {
+    invoke('toast', { payload: { title: 'Flashback', body: text, keys, kind, topic } }).catch(() => {});
   }
 
   const activeMonitor = $derived(monitors.find((m) => m.id === selectedMonitor) ?? null);
@@ -288,7 +289,7 @@
     if (recording) return;
     const target = captureTarget;
     if (!target) {
-      toast(t('toast.selectScreen'));
+      toast(t('toast.selectScreen'), 'problems');
       return;
     }
     try {
@@ -302,9 +303,9 @@
         micDevice: micInput
       });
       recording = true;
-      toast(t('toast.recording'), 'ready');
+      toast(t('toast.recording'), 'recording', 'ready');
     } catch (e) {
-      toast(t('toast.startFailed', { e: String(e) }), 'error');
+      toast(t('toast.startFailed', { e: String(e) }), 'problems', 'error');
       console.error('start_capture', e);
     }
   }
@@ -316,13 +317,13 @@
     try {
       const path = await invoke<string | null>('stop_capture');
       if (path) {
-        toast(t('toast.clipSaved'), 'saved');
+        toast(t('toast.clipSaved'), 'saved', 'saved');
         await refreshLibrary();
       } else {
-        toast(t('toast.recStopped'), 'info');
+        toast(t('toast.recStopped'), 'recording', 'info');
       }
     } catch (e) {
-      toast(t('toast.stopFailed', { e: String(e) }), 'error');
+      toast(t('toast.stopFailed', { e: String(e) }), 'problems', 'error');
       console.error('stop_capture', e);
     }
   }
@@ -333,7 +334,7 @@
   }
 
   function editHotkey() {
-    goto('/settings#atajos');
+    goto('/settings/shortcuts');
   }
 
   // Guardar clip y grabar los atiende Rust al pulsar el atajo (sin pasar por aquí, que con un
@@ -507,7 +508,7 @@
         }
       }
       if (!cancelled && failed.length) {
-        toast(t('toast.hotkeyInUse', { failed: failed.join(', ') }), 'error');
+        toast(t('toast.hotkeyInUse', { failed: failed.join(', ') }), 'problems', 'error');
       }
     })();
     return () => {
@@ -546,10 +547,10 @@
         await invoke('stop_replay');
         if (key !== 'off') {
           await invoke('start_replay', { target, seconds, fps, quality, resolution, bitrate, mic, micDevice });
-          if (wasOff) toast(t('toast.replayReadyHint'), 'ready', labelTokens(hotkeys.saveReplay));
+          if (wasOff) toast(t('toast.replayReadyHint'), 'ready', 'ready', labelTokens(hotkeys.saveReplay));
         }
       } catch (e) {
-        toast(t('toast.replayStartFailed', { e: String(e) }), 'error');
+        toast(t('toast.replayStartFailed', { e: String(e) }), 'problems', 'error');
         console.error('replay', e);
       }
     })();
@@ -560,7 +561,7 @@
   // nueva ventana emite este evento y volvemos a mostrar el toast "Listo para clipear".
   $effect(() => {
     const un = listen('replay-retargeted', () => {
-      toast(t('toast.replayReadyHint'), 'ready', labelTokens(hotkeys.saveReplay));
+      toast(t('toast.replayReadyHint'), 'ready', 'ready', labelTokens(hotkeys.saveReplay));
     });
     return () => {
       un.then((u) => u());

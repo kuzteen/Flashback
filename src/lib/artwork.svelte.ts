@@ -59,3 +59,14 @@ export function ensureSearchIcon(name: string) {
     .then((url) => (searchIcons[name] = artSrc(url)))
     .catch(() => (searchIcons[name] = null));
 }
+
+// Tras vaciar la caché de disco las rutas guardadas aquí apuntan a archivos borrados: se olvidan y
+// cada componente las vuelve a pedir al montarse.
+export function forgetArtwork() {
+  for (const k of Object.keys(icons)) delete icons[k];
+  for (const k of Object.keys(heroes)) delete heroes[k];
+  for (const k of Object.keys(searchIcons)) delete searchIcons[k];
+  asked.clear();
+  heroAsked.clear();
+  searchAsked.clear();
+}

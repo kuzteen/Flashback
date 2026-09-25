@@ -135,6 +135,10 @@ export function cachedThumb(path: string): string | null {
   return thumbCache.get(path) ?? null;
 }
 
+export function forgetThumbs() {
+  thumbCache.clear();
+}
+
 export function requestThumb(path: string): Promise<string | null> {
   const cached = thumbCache.get(path);
   if (cached) return Promise.resolve(cached);

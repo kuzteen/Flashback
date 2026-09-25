@@ -1,6 +1,7 @@
 mod artwork;
 #[cfg(target_os = "windows")]
 mod audio;
+mod cache;
 mod capture;
 mod clipmeta;
 mod config;
@@ -16,6 +17,7 @@ mod mp4mux;
 mod playlists;
 mod reframe;
 mod share;
+mod sound;
 #[cfg(target_os = "windows")]
 mod overlay;
 mod thumbnail;
@@ -216,7 +218,7 @@ fn set_record_prefs(prefs: hotkeys::RecordPrefs) {
 
 #[tauri::command]
 fn set_save_sound(gain: f32) {
-    hotkeys::set_sound_gain(gain);
+    sound::set_gain(gain);
 }
 
 #[tauri::command]
@@ -705,6 +707,84 @@ fn set_clips_dir(app: tauri::AppHandle, dir: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn cache_usage(app: tauri::AppHandle) -> Result<Vec<cache::Usage>, String> {
+    tokio::task::spawn_blocking(move || cache::usage(&app))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn clear_cache(app: tauri::AppHandle) -> Result<(), String> {
+    cache::clear(&app).await
+}
+
+// Desde Rust y no con el plugin en la interfaz: la carpeta de clips puede estar en cualquier
+// sitio y el permiso de abrir rutas del frontend solo cubre Vídeos y app-data.
+#[tauri::command]
+fn open_clips_dir(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let dir = config::clips_dir(&app);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    app.opener()
+        .open_path(dir.to_string_lossy(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_toast_prefs(app: tauri::AppHandle) -> config::ToastPrefs {
+    config::get_toast_prefs(&app)
+}
+
+#[tauri::command]
+fn set_toast_prefs(app: tauri::AppHandle, prefs: config::ToastPrefs) -> Result<(), String> {
+    config::set_toast_prefs(&app, prefs)
+}
+
+#[tauri::command]
+fn get_save_sound_name(app: tauri::AppHandle) -> Option<String> {
+    config::get_save_sound_name(&app)
+}
+
+#[tauri::command]
+fn test_save_sound() {
+    sound::play();
+}
+
+// Abre el selector y deja el archivo elegido como borrador para escoger su tramo de 2 s. None si
+// se canceló el selector.
+#[tauri::command]
+async fn pick_save_sound(filter_name: String) -> Result<Option<sound::DraftInfo>, String> {
+    tokio::task::spawn_blocking(move || {
+        let Some(src) = config::pick_audio_file(&filter_name)? else {
+            return Ok(None);
+        };
+        sound::open_draft(&src).map(Some)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn preview_save_sound(start_ms: u64, len_ms: u64) {
+    sound::preview_draft(start_ms, len_ms);
+}
+
+#[tauri::command]
+fn accept_save_sound(app: tauri::AppHandle, start_ms: u64, len_ms: u64) -> Result<String, String> {
+    sound::accept_draft(&app, start_ms, len_ms)
+}
+
+#[tauri::command]
+fn discard_save_sound() {
+    sound::discard_draft();
+}
+
+#[tauri::command]
+fn clear_save_sound(app: tauri::AppHandle) -> Result<(), String> {
+    sound::clear_custom(&app)
+}
+
+#[tauri::command]
 async fn pick_folder() -> Result<Option<String>, String> {
     tokio::task::spawn_blocking(config::pick_folder)
         .await
@@ -744,11 +824,15 @@ struct ToastPayload {
     #[serde(default)]
     keys: Vec<String>,
     kind: String,
+    topic: config::ToastTopic,
 }
 
 #[cfg(target_os = "windows")]
 #[tauri::command]
-fn toast(toast: tauri::State<'_, toast::Toast>, payload: ToastPayload) {
+fn toast(app: tauri::AppHandle, toast: tauri::State<'_, toast::Toast>, payload: ToastPayload) {
+    if !config::get_toast_prefs(&app).allows(payload.topic) {
+        return;
+    }
     toast.show(toast::ToastData {
         title: payload.title,
         body: payload.body,
@@ -806,11 +890,14 @@ pub fn run() {
             config::allow_asset_scopes(app.handle());
             // Rich Presence de Discord: arranca el gestor con el valor persistido (off por defecto).
             discord::init(app.handle().clone(), config::get_discord_rpc(app.handle()));
+            sound::init(app.handle());
             // Temporales de compartir: se purgan en segundo plano para no retrasar el arranque.
             let share_dir = share::dir(app.handle());
             let search_icons = artwork::search_cache_dir(app.handle());
+            let handle = app.handle().clone();
             std::thread::spawn(move || {
                 share::cleanup(&share_dir);
+                cache::prune_editor_audio(&handle, std::time::Duration::from_secs(7 * 24 * 3600));
                 if let Some(dir) = search_icons {
                     artwork::prune_search_cache(&dir, std::time::Duration::from_secs(7 * 24 * 3600));
                 }
@@ -897,6 +984,18 @@ pub fn run() {
             clips_dir,
             set_clips_dir,
             pick_folder,
+            cache_usage,
+            get_toast_prefs,
+            set_toast_prefs,
+            get_save_sound_name,
+            test_save_sound,
+            pick_save_sound,
+            preview_save_sound,
+            accept_save_sound,
+            discard_save_sound,
+            clear_save_sound,
+            clear_cache,
+            open_clips_dir,
             edit_dest,
             prepare_clip_audio,
             load_clip_edit,

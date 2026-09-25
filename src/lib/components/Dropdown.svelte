@@ -59,7 +59,7 @@
           aria-selected={o.value === value}
           onclick={() => pick(o.value)}
         >
-          {o.label}
+          <span class="dd-label">{o.label}</span>
           <span class="dd-check"><Icon name="check" size={13} sw={2.2} /></span>
         </button>
       {/each}
@@ -96,6 +96,16 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* Recortadas a la altura de la mayúscula para centrarlas en su caja. El valor necesita relleno
+     simétrico: su overflow recorta, y sin él se comería los trazos bajo la línea (g, p, y). */
+  .dd-value,
+  .dd-label {
+    line-height: 1;
+    text-box: trim-both cap alphabetic;
+  }
+  .dd-value {
+    padding-block: 3px;
   }
   .dd-chev {
     display: inline-flex;

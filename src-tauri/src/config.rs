@@ -199,6 +199,67 @@ pub fn set_discord_rpc(app: &tauri::AppHandle, on: bool) -> Result<(), String> {
     write_setting(app, "discord_rpc", serde_json::json!(on))
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToastTopic {
+    Saved,
+    Ready,
+    Recording,
+    Problems,
+}
+
+// Qué avisos en pantalla se muestran. Todo activado por defecto; `enabled` los silencia todos sin
+// perder la elección individual.
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[serde(default)]
+pub struct ToastPrefs {
+    pub enabled: bool,
+    pub saved: bool,
+    pub ready: bool,
+    pub recording: bool,
+    pub problems: bool,
+}
+
+impl Default for ToastPrefs {
+    fn default() -> Self {
+        ToastPrefs { enabled: true, saved: true, ready: true, recording: true, problems: true }
+    }
+}
+
+impl ToastPrefs {
+    pub fn allows(&self, topic: ToastTopic) -> bool {
+        self.enabled
+            && match topic {
+                ToastTopic::Saved => self.saved,
+                ToastTopic::Ready => self.ready,
+                ToastTopic::Recording => self.recording,
+                ToastTopic::Problems => self.problems,
+            }
+    }
+}
+
+pub fn get_toast_prefs(app: &tauri::AppHandle) -> ToastPrefs {
+    settings_path(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| serde_json::from_value(v.get("toasts")?.clone()).ok())
+        .unwrap_or_default()
+}
+
+pub fn set_toast_prefs(app: &tauri::AppHandle, prefs: ToastPrefs) -> Result<(), String> {
+    write_setting(app, "toasts", serde_json::to_value(prefs).map_err(|e| e.to_string())?)
+}
+
+// Nombre del archivo que eligió el usuario como sonido de "clip guardado". El audio ya convertido
+// vive en app-data (ver sound.rs); sin nombre se usa el sonido de Flashback.
+pub fn get_save_sound_name(app: &tauri::AppHandle) -> Option<String> {
+    read_setting(app, "save_sound_name")
+}
+
+pub fn set_save_sound_name(app: &tauri::AppHandle, name: Option<&str>) -> Result<(), String> {
+    write_setting(app, "save_sound_name", name.map_or(serde_json::Value::Null, |n| serde_json::json!(n)))
+}
+
 // Marca de agua en la exportación: opt-in, desactivada por defecto. La esquina se guarda como
 // "tl"/"tr"/"bl"/"br" (inferior-derecha por defecto). Solo la lee el export (editor.rs).
 pub fn get_watermark(app: &tauri::AppHandle) -> bool {
@@ -293,4 +354,59 @@ pub fn pick_folder() -> Result<Option<String>, String> {
 #[cfg(not(windows))]
 pub fn pick_folder() -> Result<Option<String>, String> {
     Err("El selector de carpeta solo está disponible en Windows".into())
+}
+
+#[cfg(windows)]
+pub fn pick_audio_file(filter_name: &str) -> Result<Option<String>, String> {
+    use windows::core::{HSTRING, PCWSTR};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER,
+        COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
+    use windows::Win32::UI::Shell::{FileOpenDialog, IFileOpenDialog, IShellItem, SIGDN_FILESYSPATH};
+
+    let name = HSTRING::from(filter_name);
+    let spec = HSTRING::from("*.wav;*.mp3;*.m4a;*.aac;*.flac;*.wma;*.ogg");
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let result = (|| -> Result<Option<String>, String> {
+            let dialog: IFileOpenDialog =
+                CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)
+                    .map_err(|e| e.to_string())?;
+            let filters = [COMDLG_FILTERSPEC { pszName: PCWSTR(name.as_ptr()), pszSpec: PCWSTR(spec.as_ptr()) }];
+            dialog.SetFileTypes(&filters).map_err(|e| e.to_string())?;
+            if dialog.Show(Some(HWND::default())).is_err() {
+                return Ok(None);
+            }
+            let item: IShellItem = dialog.GetResult().map_err(|e| e.to_string())?;
+            let pwstr = item.GetDisplayName(SIGDN_FILESYSPATH).map_err(|e| e.to_string())?;
+            let path = pwstr.to_string().map_err(|e| e.to_string());
+            CoTaskMemFree(Some(pwstr.0 as *const _));
+            Ok(Some(path?))
+        })();
+        CoUninitialize();
+        result
+    }
+}
+
+#[cfg(not(windows))]
+pub fn pick_audio_file(_filter_name: &str) -> Result<Option<String>, String> {
+    Err("El selector de archivos solo está disponible en Windows".into())
+}
+
+#[cfg(test)]
+mod toast_prefs_tests {
+    use super::*;
+
+    #[test]
+    fn missing_fields_default_to_on_and_the_master_switch_wins() {
+        let p: ToastPrefs = serde_json::from_str(r#"{"ready": false}"#).unwrap();
+        assert!(p.allows(ToastTopic::Saved));
+        assert!(!p.allows(ToastTopic::Ready));
+        let off = ToastPrefs { enabled: false, ..ToastPrefs::default() };
+        assert!(!off.allows(ToastTopic::Saved));
+        assert!(!off.allows(ToastTopic::Problems));
+    }
 }

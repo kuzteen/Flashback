@@ -47,10 +47,13 @@ strip = true
 [target.'cfg(windows)'.dependencies]
 # Ya viene con `windows`; se nombra para las transformaciones de Direct2D del compositor.
 windows-numerics = "0.2"
+# Ya viene con Tauri (wry); se nombra para vaciar la caché de disco del WebView sin tocar su localStorage.
+webview2-com = "0.38"
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Threading",
     "Win32_System_Com",

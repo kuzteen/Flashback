@@ -1,10 +1,12 @@
+import { invoke } from '@tauri-apps/api/core';
 import { t } from './i18n.svelte';
 
 const LEVEL_KEY = 'flashback.replay.soundLevel';
 
-export type SoundLevel = 'low' | 'normal' | 'high';
+export type SoundLevel = 'off' | 'low' | 'normal' | 'high';
 
 export const SOUND_OPTIONS: { key: SoundLevel; gain: number }[] = [
+  { key: 'off', gain: 0 },
   { key: 'low', gain: 0.25 },
   { key: 'normal', gain: 0.55 },
   { key: 'high', gain: 1.0 }
@@ -37,19 +39,7 @@ export function soundLabel(level: SoundLevel): string {
   return t(`sound.${level}`);
 }
 
-// Un único elemento reutilizado: evita crear un Audio por cada reproducción. Suena aunque
-// la ventana esté oculta (el proceso del webview sigue vivo durante el juego).
-let audio: HTMLAudioElement | null = null;
-
-export function playReplaySound(level: SoundLevel = replaySound.level) {
-  if (typeof Audio === 'undefined') return;
-  if (!audio) {
-    audio = new Audio('/sounds/replay-saved.wav');
-    audio.preload = 'auto';
-  }
-  audio.volume = gainFor(level);
-  audio.currentTime = 0;
-  audio.play().catch(() => {
-    // el navegador puede bloquear la reproducción sin interacción previa
-  });
+// Suena por el mismo camino que el atajo (Rust), así se oye el sonido elegido, personalizado incluido.
+export function playReplaySound() {
+  invoke('test_save_sound').catch(() => {});
 }

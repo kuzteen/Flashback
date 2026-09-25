@@ -1023,6 +1023,7 @@ dependencies = [
  "time",
  "tokio",
  "urlencoding",
+ "webview2-com",
  "windows",
  "windows-numerics",
 ]

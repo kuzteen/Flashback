@@ -68,7 +68,8 @@ pub struct ClipEdit {
 pub(crate) use win::create_gpu;
 #[cfg(target_os = "windows")]
 pub use win::{
-    clip_dims, clip_fps, export_clip, frame_times, keyframe_times, prepare_clip_audio,
+    clip_dims, clip_fps, decode_audio_head, export_clip, frame_times, keyframe_times,
+    prepare_clip_audio,
 };
 
 // Edición no destructiva: cortes y mezcla viven en el índice único de app-data (no en un sidecar
@@ -292,6 +293,8 @@ mod win {
         // En ese caso los picos se sacan del WAV local (lectura barata) en vez de redecodificar.
         let ready = |p: &str| std::fs::metadata(p).map(|m| m.len() > 0).unwrap_or(false);
         let (sys_peaks, mic_peaks) = if ready(&sys) && ready(&mic) {
+            crate::cache::touch(&sys);
+            crate::cache::touch(&mic);
             (peaks_from_wav(&sys), peaks_from_wav(&mic))
         } else {
             let (sys_pcm, sr, sc) = read_pcm(path, 1).map_err(mf)?;
@@ -361,6 +364,17 @@ mod win {
     }
 
     fn read_pcm(path: &str, ordinal: usize) -> Result<(Vec<u8>, u32, u16)> {
+        read_pcm_limited(path, ordinal, None)
+    }
+
+    // Primeros `max_secs` de la primera pista de audio de cualquier archivo que decodifique Media
+    // Foundation, como PCM de 16 bits. Deja de leer al llegar al límite: un archivo largo no se
+    // decodifica entero para quedarse con su principio.
+    pub fn decode_audio_head(path: String, max_secs: f64) -> std::result::Result<(Vec<u8>, u32, u16), String> {
+        with_mf(move || read_pcm_limited(&path, 0, Some(max_secs)).map_err(|e| e.message()))
+    }
+
+    fn read_pcm_limited(path: &str, ordinal: usize, max_secs: Option<f64>) -> Result<(Vec<u8>, u32, u16)> {
         let reader = open_reader(path)?;
         unsafe { reader.SetStreamSelection(ALL_STREAMS, false)? };
 
@@ -379,9 +393,13 @@ mod win {
         let sr = unsafe { actual.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND) }.unwrap_or(48000);
         let ch = unsafe { actual.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS) }.unwrap_or(2) as u16;
         let frame_bytes = (ch.max(1) as usize) * 2;
+        let limit = max_secs.map(|s| (s * sr as f64).round() as usize * frame_bytes);
 
         let mut pcm = Vec::new();
         loop {
+            if limit.is_some_and(|l| pcm.len() >= l) {
+                break;
+            }
             let mut flags = 0u32;
             let mut sample: Option<IMFSample> = None;
             unsafe { reader.ReadSample(idx, 0, None, Some(&mut flags), None, Some(&mut sample))? };
@@ -408,6 +426,9 @@ mod win {
             unsafe { buf.Unlock()? };
         }
 
+        if let Some(l) = limit {
+            pcm.truncate(l);
+        }
         Ok((pcm, sr, ch))
     }
 
