@@ -1850,12 +1850,13 @@ mod win {
         let mic_gain = if edit.mixer.mic_muted { 0.0 } else { edit.mixer.mic_vol.max(0.0) };
 
         let n = sys.len().max(mic.len());
-        let mut mixed = vec![0i16; n];
-        for i in 0..n {
-            let s = sys.get(i).copied().unwrap_or(0.0) * sys_gain;
-            let m = mic.get(i).copied().unwrap_or(0.0) * mic_gain;
-            mixed[i] = soft_clip_sample(s + m);
-        }
+        let mixed = (0..n)
+            .map(|i| {
+                let s = sys.get(i).copied().unwrap_or(0.0) * sys_gain;
+                let m = mic.get(i).copied().unwrap_or(0.0) * mic_gain;
+                soft_clip_sample(s + m)
+            })
+            .collect();
         Ok((mixed, out_rate))
     }
 

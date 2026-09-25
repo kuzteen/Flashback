@@ -226,8 +226,8 @@ mod win {
         let factory: IWICImagingFactory =
             unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)? };
         let stream = unsafe { factory.CreateStream()? };
-        let mut data = LOGO_PNG.to_vec();
-        unsafe { stream.InitializeFromMemory(&mut data)? };
+        let data = LOGO_PNG.to_vec();
+        unsafe { stream.InitializeFromMemory(&data)? };
         let decoder = unsafe {
             factory.CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnLoad)?
         };

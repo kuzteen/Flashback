@@ -137,7 +137,7 @@ pub fn get_seen_games(app: &tauri::AppHandle) -> Vec<SeenGame> {
         .get("seen_games")
         .and_then(|a| serde_json::from_value(a.clone()).ok())
         .unwrap_or_default();
-    games.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
+    games.sort_by_key(|g| std::cmp::Reverse(g.last_seen));
     games
 }
 

@@ -598,7 +598,7 @@ fn process_path(pid: u32) -> Option<String> {
         PROCESS_QUERY_LIMITED_INFORMATION,
     };
     unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false.into(), pid).ok()?;
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
         let mut buf = [0u16; 512];
         let mut size = buf.len() as u32;
         let res = QueryFullProcessImageNameW(
@@ -763,6 +763,6 @@ mod tests {
         let map = build_map(list);
         assert_eq!(map.get("alpha.exe").map(|e| e.name.as_str()), Some("Alpha"));
         assert_eq!(map.get("beta.exe").map(|e| e.name.as_str()), Some("Beta"));
-        assert!(map.get("shared.exe").is_none());
+        assert!(!map.contains_key("shared.exe"));
     }
 }

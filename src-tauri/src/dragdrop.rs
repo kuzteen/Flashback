@@ -79,14 +79,16 @@ mod win {
 
         // Top-down (alto negativo): así el orden de filas del DIB coincide con el que entrega WIC y
         // no hay que voltear la imagen a mano.
-        let mut info = BITMAPINFO::default();
-        info.bmiHeader = BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: w as i32,
-            biHeight: -(h as i32),
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB.0,
+        let info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: w as i32,
+                biHeight: -(h as i32),
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
@@ -116,7 +118,7 @@ mod win {
             let _ = DeleteObject(bmp.into());
             return;
         };
-        let mut img = SHDRAGIMAGE {
+        let img = SHDRAGIMAGE {
             sizeDragImage: windows::Win32::Foundation::SIZE {
                 cx: w as i32,
                 cy: h as i32,
@@ -130,7 +132,7 @@ mod win {
             crColorKey: windows::Win32::Foundation::COLORREF(0xFFFF_FFFF),
         };
         // En caso de éxito el helper se queda con el bitmap y lo libera él; si falla, es nuestro.
-        if helper.InitializeFromBitmap(&mut img, data).is_err() {
+        if helper.InitializeFromBitmap(&img, data).is_err() {
             let _ = DeleteObject(bmp.into());
         }
     }

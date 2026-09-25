@@ -26,7 +26,7 @@ pub fn list_clips(dirs: Vec<PathBuf>) -> Vec<ClipInfo> {
     // Dedup por ruta por si dos carpetas escaneadas se solapan; se conserva la primera.
     let mut seen = std::collections::HashSet::new();
     out.retain(|c| seen.insert(c.path.to_lowercase()));
-    out.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms));
+    out.sort_by_key(|c| std::cmp::Reverse(c.modified_ms));
     out
 }
 
@@ -162,7 +162,7 @@ fn recycle(paths: &[PathBuf]) -> Result<(), String> {
     }
     from.push(0);
     let mut op = SHFILEOPSTRUCTW {
-        wFunc: FO_DELETE as u32,
+        wFunc: FO_DELETE,
         pFrom: PCWSTR(from.as_ptr()),
         fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI).0 as u16,
         ..Default::default()

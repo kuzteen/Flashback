@@ -2663,7 +2663,7 @@ fn create_staging_bgra(
     };
     let mut t: Option<ID3D11Texture2D> = None;
     unsafe { device.CreateTexture2D(&desc, None, Some(&mut t))? };
-    Ok(t.ok_or_else(null_out)?)
+    t.ok_or_else(null_out)
 }
 
 fn pack2(high: u32, low: u32) -> u64 {
@@ -2770,7 +2770,7 @@ fn fps_interval(fps: u32) -> i64 {
 // congelar la cadencia; más allá se descartan frames sueltos (degradación suave). Se
 // acota para limitar la VRAM del pool NV12 (crece con la resolución de salida).
 fn enc_buffer_frames(fps: u32) -> usize {
-    ((fps as usize * 3 + 9) / 10).clamp(6, 24)
+    (fps as usize * 3).div_ceil(10).clamp(6, 24)
 }
 
 // PTS absoluto (en unidades de 100 ns) del slot CFR `n` a `fps`. No acumulado:

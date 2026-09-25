@@ -259,7 +259,7 @@ mod win {
             unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)? };
         let mut mem = vec![0u8; pixels.len() + 64 * 1024];
         let stream = unsafe { factory.CreateStream()? };
-        unsafe { stream.InitializeFromMemory(&mut mem)? };
+        unsafe { stream.InitializeFromMemory(&mem)? };
         write_frame(&factory, &stream, w, h, stride, pixels, &GUID_ContainerFormatJpeg)?;
         let mut end = 0u64;
         unsafe { stream.cast::<IStream>()?.Seek(0, STREAM_SEEK_CUR, Some(&mut end))? };
