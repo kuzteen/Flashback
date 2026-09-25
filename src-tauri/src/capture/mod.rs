@@ -109,6 +109,13 @@ pub fn replay_target() -> Option<String> {
 #[cfg(target_os = "windows")]
 mod win;
 
+// Encoders H.264 que no se usan nunca, ni para capturar ni para exportar. "Microsoft AVC DX12
+// Encoder HMFT" (la capa D3D12 de Mesa) empieza el vídeo con un intra que no es IDR: ningún
+// decodificador lo abre y el clip sale sin imagen sin que nada falle.
+pub fn unusable_h264_encoder(name: &str) -> bool {
+    name.contains("DX12")
+}
+
 // Etiqueta del origen del clip: el juego en modo Aplicación o la pantalla grabada. Mismo texto
 // que la etiqueta del selector ("Pantalla N", N de \.\DISPLAYN), sin listar monitores: eso
 // fotografía cada pantalla y no pinta nada en pleno guardado.
@@ -142,6 +149,15 @@ mod tests {
         assert_eq!(source_label(Some(r"\.\DISPLAY2")), "Pantalla 2");
         assert_eq!(source_label(Some("otra-cosa")), "Pantalla");
         assert_eq!(source_label(None), "");
+    }
+
+    #[test]
+    fn only_the_dx12_fallback_encoder_is_refused() {
+        assert!(unusable_h264_encoder("Microsoft AVC DX12 Encoder HMFT"));
+        assert!(!unusable_h264_encoder("NVIDIA H.264 Encoder MFT"));
+        assert!(!unusable_h264_encoder("Intel Quick Sync Video H.264 Encoder MFT"));
+        assert!(!unusable_h264_encoder("AMDh264Encoder"));
+        assert!(!unusable_h264_encoder("H264 Encoder MFT"));
     }
 
     #[test]

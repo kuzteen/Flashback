@@ -122,6 +122,10 @@ fn pick_hw_encoder(pref: &str) -> Result<Option<IMFActivate>> {
     for i in 0..count as usize {
         let act = unsafe { &*activates.add(i) };
         if let Some(act) = act {
+            // Si solo queda uno inservible, mejor el encoder por software que clips sin imagen.
+            if encoder_name(act).is_some_and(|n| crate::capture::unusable_h264_encoder(&n)) {
+                continue;
+            }
             if chosen.is_none() {
                 // Siempre guardamos el primero como fallback.
                 chosen = Some(act.clone());
@@ -142,20 +146,19 @@ fn pick_hw_encoder(pref: &str) -> Result<Option<IMFActivate>> {
     Ok(chosen)
 }
 
-fn encoder_name_matches(activate: &IMFActivate, keywords: &[&str]) -> bool {
-    let attrs: IMFAttributes = match activate.cast() {
-        Ok(a) => a,
-        Err(_) => return false,
-    };
+fn encoder_name(activate: &IMFActivate) -> Option<String> {
+    let attrs: IMFAttributes = activate.cast().ok()?;
     let mut buf = [0u16; 512];
     let mut len = 0u32;
-    if unsafe { attrs.GetString(&MFT_FRIENDLY_NAME_Attribute, &mut buf, Some(&mut len)) }
-        .is_err()
-    {
-        return false;
-    }
-    let name = String::from_utf16_lossy(&buf[..len as usize]).to_lowercase();
-    keywords.iter().any(|k| name.contains(k))
+    unsafe { attrs.GetString(&MFT_FRIENDLY_NAME_Attribute, &mut buf, Some(&mut len)) }.ok()?;
+    Some(String::from_utf16_lossy(&buf[..len as usize]))
+}
+
+fn encoder_name_matches(activate: &IMFActivate, keywords: &[&str]) -> bool {
+    encoder_name(activate).is_some_and(|n| {
+        let name = n.to_lowercase();
+        keywords.iter().any(|k| name.contains(k))
+    })
 }
 
 // Primer encoder H.264 que cumple los flags, o None si no hay ninguno.
@@ -239,4 +242,21 @@ fn configure_encoder_types(
         log_encoder_quality(codec, "replay", bitrate, gop, failed);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_never_picks_an_unusable_hardware_encoder() {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let _ = MFStartup(MF_VERSION, MFSTARTUP_FULL);
+        }
+        for pref in ["Auto", "NVENC", "AMF", "Quick Sync"] {
+            let name = pick_hw_encoder(pref).unwrap().and_then(|a| encoder_name(&a));
+            assert!(!name.as_deref().is_some_and(crate::capture::unusable_h264_encoder), "{pref}: {name:?}");
+        }
+    }
 }

@@ -891,6 +891,7 @@ mod win {
         dst: &str,
         manager: Option<&IMFDXGIDeviceManager>,
         passthrough: bool,
+        hardware: bool,
     ) -> Result<IMFSinkWriter> {
         let url = HSTRING::from(dst);
         let byte_stream = unsafe {
@@ -910,7 +911,7 @@ mod win {
             let mut a: Option<IMFAttributes> = None;
             MFCreateAttributes(&mut a, 4)?;
             let a = a.ok_or_else(|| windows::core::Error::from(E_FAIL))?;
-            a.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)?;
+            a.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, hardware as u32)?;
             // Sin throttling el SinkWriter acepta samples sin límite. Eso solo es seguro copiando
             // paquetes ya codificados: al recodificar, si el encoder se queda atrás, la cola crece
             // sin freno —y con texturas de GPU el lector se queda sin pool y ReadSample se bloquea
@@ -927,6 +928,19 @@ mod win {
             a
         };
         unsafe { MFCreateSinkWriterFromURL(PCWSTR::null(), &byte_stream, &attrs) }
+    }
+
+    // Nombre del encoder que el SinkWriter cargó para un stream.
+    fn sink_encoder(sink: &IMFSinkWriter, stream: u32) -> Option<String> {
+        unsafe {
+            let mut raw: *mut core::ffi::c_void = std::ptr::null_mut();
+            sink.GetServiceForStream(stream, &GUID::zeroed(), &IMFTransform::IID, &mut raw).ok()?;
+            let attrs = IMFTransform::from_raw(raw).GetAttributes().ok()?;
+            let mut buf = [0u16; 256];
+            let mut len = 0u32;
+            attrs.GetString(&MFT_FRIENDLY_NAME_Attribute, &mut buf, Some(&mut len)).ok()?;
+            Some(String::from_utf16_lossy(&buf[..len as usize]))
+        }
     }
 
     // El progreso viaja al frontend por IPC. Emitirlo cada pocos fotogramas llenaba el canal de
@@ -1137,7 +1151,7 @@ mod win {
         if r.is_ok() {
             progress.force(1.0);
             eprintln!(
-                "export: recodificado en {} · {}x{} {} kbps · sonda {:?} · total {:?}",
+                "export: recodificado (decodificación en {}) · {}x{} {} kbps · sonda {:?} · total {:?}",
                 if gpu.is_some() { "GPU" } else { "CPU" },
                 meta.width,
                 meta.height,
@@ -1185,7 +1199,7 @@ mod win {
             let _ = v_type.SetUINT32(&MF_MT_AVG_BITRATE, meta.bitrate);
         }
 
-        let sink = create_sink(dst, None, true).map_err(mf)?;
+        let sink = create_sink(dst, None, true, true).map_err(mf)?;
         let v_stream = unsafe { sink.AddStream(&v_type).map_err(mf)? };
         unsafe { sink.SetInputMediaType(v_stream, &v_type, None).map_err(mf)? };
 
@@ -1385,8 +1399,6 @@ mod win {
             _ => None,
         };
 
-        let sink = create_sink(dst, gpu.filter(|_| gpu_frames).map(|g| &g.manager), false).map_err(mf)?;
-
         let v_out = unsafe { MFCreateMediaType().map_err(mf)? };
         unsafe {
             v_out.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video).map_err(mf)?;
@@ -1396,10 +1408,26 @@ mod win {
             v_out.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32).map_err(mf)?;
             v_out.SetUINT32(&MF_MT_AVG_BITRATE, meta.bitrate).map_err(mf)?;
         }
-        let v_stream = unsafe { sink.AddStream(&v_out).map_err(mf)? };
         // Entrada del encoder = tipo de salida REAL del decodificador: evita desajustes de geometría.
         let enc_in = reframer.as_ref().map_or(&v_in, |r| r.out_type());
-        unsafe { sink.SetInputMediaType(v_stream, enc_in, None).map_err(mf)? };
+        let manager = gpu.filter(|_| gpu_frames).map(|g| &g.manager);
+        let open_video = |hardware: bool| -> std::result::Result<(IMFSinkWriter, u32), String> {
+            let sink = create_sink(dst, manager, false, hardware).map_err(mf)?;
+            let v_stream = unsafe { sink.AddStream(&v_out).map_err(mf)? };
+            unsafe { sink.SetInputMediaType(v_stream, enc_in, None).map_err(mf)? };
+            Ok((sink, v_stream))
+        };
+        // El encoder lo elige el SinkWriter, y si el del fabricante no está disponible en ese
+        // momento pasa en silencio al siguiente por hardware, que puede ser uno inservible (ver
+        // unusable_h264_encoder). En su lugar va el encoder por software, el respaldo de siempre.
+        let (sink, v_stream) = match open_video(true)? {
+            (sink, v_stream) if sink_encoder(&sink, v_stream).is_some_and(|n| crate::capture::unusable_h264_encoder(&n)) => {
+                drop(sink);
+                eprintln!("export: el encoder por hardware disponible no sirve; se codifica por software");
+                open_video(false)?
+            }
+            ok => ok,
+        };
 
         let a_reader = open_reader(src).map_err(mf)?;
         // El audio se recodifica siempre por este camino: cuesta una fracción de lo que cuesta el
