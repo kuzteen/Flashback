@@ -1,13 +1,14 @@
 <script lang="ts">
-  import Icon from '$lib/components/Icon.svelte';
   import SettingGroup from '$lib/components/settings/SettingGroup.svelte';
   import SettingRow from '$lib/components/settings/SettingRow.svelte';
   import { t } from '$lib/i18n.svelte';
+  import { takenBy } from '$lib/hotkey-conflict';
   import {
     hotkeys,
     capture,
+    hotkeyFailed,
     setHotkey,
-    labelFor,
+    labelTokens,
     comboFromEvent,
     hasMainKey,
     eventHasUnsupportedKey,
@@ -23,7 +24,26 @@
   let rebinding = $state<HotkeyAction | null>(null);
   let liveTokens = $state<string[]>([]);
   let badKey = $state(false);
-  let canSave = $derived(liveTokens.length > 0 && hasMainKey(liveTokens));
+  // Teclas que se están manteniendo ahora mismo, con la misma regla que la combinación que se
+  // guarda (un modificador + una tecla): se pintan hundidas mientras siguen pulsadas.
+  let held = $state<string[]>([]);
+  let mainDown: string | null = null;
+  const taken = $derived(rebinding && liveTokens.length ? takenBy(hotkeys, rebinding, liveTokens.join('+')) : null);
+  let canSave = $derived(liveTokens.length > 0 && hasMainKey(liveTokens) && !taken);
+  const shown = $derived(hasMainKey(held) || !liveTokens.length ? held : liveTokens);
+
+  function labelOf(action: HotkeyAction) {
+    return t(shortcutRows.find((r) => r.key === action)?.labelKey ?? '');
+  }
+
+  function refreshHeld(e: KeyboardEvent) {
+    const mods: string[] = [];
+    if (e.ctrlKey) mods.push('Control');
+    if (e.altKey) mods.push('Alt');
+    if (e.shiftKey) mods.push('Shift');
+    if (e.metaKey) mods.push('Super');
+    held = mainDown ? [...mods.slice(0, 1), mainDown] : mods.slice(0, 2);
+  }
 
   function onKeyDown(e: KeyboardEvent) {
     if (!rebinding) return;
@@ -36,33 +56,53 @@
     const combo = comboFromEvent(e);
     if (combo.length && hasMainKey(combo)) {
       liveTokens = combo;
+      mainDown = combo[combo.length - 1];
       badKey = false;
     } else if (eventHasUnsupportedKey(e)) {
       badKey = true;
     }
+    refreshHeld(e);
+  }
+
+  function onKeyUp(e: KeyboardEvent) {
+    if (!rebinding) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const combo = comboFromEvent(e);
+    if (hasMainKey(combo) && combo[combo.length - 1] === mainDown) mainDown = null;
+    refreshHeld(e);
+    // Se guarda al soltar la combinación entera. Si choca con otra acción sigue escuchando, con el
+    // aviso a la vista, para probar otra.
+    if (held.length === 0 && canSave) endCapture(true);
   }
 
   function startCapture(action: HotkeyAction) {
     rebinding = action;
     liveTokens = [];
+    held = [];
+    mainDown = null;
     badKey = false;
     // Soltar los atajos globales mientras se escucha, o el SO se traga la combinación.
     capture.active = true;
     window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('keyup', onKeyUp, true);
   }
 
   function endCapture(save: boolean) {
     window.removeEventListener('keydown', onKeyDown, true);
-    if (save && rebinding && liveTokens.length && hasMainKey(liveTokens)) {
+    window.removeEventListener('keyup', onKeyUp, true);
+    if (save && rebinding && canSave) {
       setHotkey(rebinding, liveTokens.join('+'));
     }
     rebinding = null;
     liveTokens = [];
+    held = [];
+    mainDown = null;
     badKey = false;
     capture.active = false;
   }
 
-  // Tocar el atajo inicia la captura; se guarda con el botón ✓ y ESC cancela. Tocar
+  // Tocar el atajo inicia la captura; se guarda al soltar las teclas y ESC cancela. Tocar
   // otra fila cancela la reasignación en curso sin guardar.
   function startRebind(action: HotkeyAction) {
     if (rebinding === action) return;
@@ -77,41 +117,37 @@
 
 <SettingGroup title={t('settings.group.global')}>
   {#each shortcutRows as row (row.key)}
+    {@const active = rebinding === row.key}
     <SettingRow title={t(row.labelKey)}>
+      {#snippet info()}
+        {#if active && taken}
+          <p class="warn">{t('settings.hk.takenBy', { name: labelOf(taken) })}</p>
+        {:else if !active && hotkeyFailed[row.key]}
+          <p class="warn">{t('settings.hk.inUse')}</p>
+        {/if}
+      {/snippet}
       <div class="hk-edit">
         <button
           type="button"
-          class="combo mono"
-          class:rec={rebinding === row.key}
-          class:bad={rebinding === row.key && badKey && liveTokens.length === 0}
+          class="combo"
+          class:rec={active}
+          class:bad={active && ((badKey && shown.length === 0) || taken !== null)}
+          class:failed={!active && hotkeyFailed[row.key]}
           onclick={() => startRebind(row.key)}
           aria-label={t('settings.hk.changeAria', { label: t(row.labelKey) })}
         >
-          <span class="combo-text">
-            {#if rebinding === row.key}
-              {#if liveTokens.length}
-                {labelFor(liveTokens.join('+'))}
-              {:else if badKey}
-                {t('settings.hk.badKey')}
-              {:else}
-                {t('settings.hk.pressKey')}
-              {/if}
-            {:else}
-              {labelFor(hotkeys[row.key])}
-            {/if}
-          </span>
+          {#if active && shown.length === 0}
+            <span class="combo-text">{badKey ? t('settings.hk.badKey') : t('settings.hk.pressKey')}</span>
+          {:else}
+            {@const tokens = active ? shown : hotkeys[row.key].split('+')}
+            <span class="caps">
+              {#each tokens as tok, i (tok)}
+                {#if i > 0}<span class="plus">+</span>{/if}
+                <kbd class="cap" class:down={active && held.includes(tok)}>{labelTokens(tok)[0]}</kbd>
+              {/each}
+            </span>
+          {/if}
         </button>
-        {#if rebinding === row.key}
-          <button
-            type="button"
-            class="combo-save"
-            disabled={!canSave}
-            onclick={() => endCapture(true)}
-            aria-label={t('settings.hk.saveAria')}
-          >
-            <Icon name="check" size={12} sw={3} />
-          </button>
-        {/if}
       </div>
     </SettingRow>
   {/each}
@@ -141,9 +177,8 @@
     justify-content: center;
     min-width: 132px;
     height: 34px;
-    padding: 0 14px;
+    padding: 0 8px;
     font-size: 12px;
-    letter-spacing: 0.04em;
     color: var(--text-1);
     background: var(--bg-0);
     border: 1px solid var(--line);
@@ -153,8 +188,47 @@
   /* Recortada a la altura de la mayúscula: sin descendentes, el hueco que la fuente les reserva la
      dejaba un poco alta en la caja. */
   .combo-text {
+    padding: 0 6px;
+    letter-spacing: 0.04em;
     line-height: 1;
     text-box: trim-both cap alphabetic;
+  }
+  .caps {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .plus {
+    font-size: 11px;
+    color: var(--text-3);
+    line-height: 1;
+    text-box: trim-both cap alphabetic;
+  }
+  /* Tecla física: el borde inferior grueso es su altura; hundida, baja lo que medía ese borde. */
+  .cap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    height: 22px;
+    padding: 0 6px;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    line-height: 1;
+    color: var(--text-0);
+    background: var(--bg-2);
+    border: 1px solid var(--line-strong);
+    border-bottom-width: 3px;
+    border-radius: 5px;
+    transition: height 0.07s ease, border-bottom-width 0.07s ease, margin-top 0.07s ease;
+  }
+  .cap.down {
+    height: 20px;
+    border-bottom-width: 1px;
+    margin-top: 2px;
+    background: var(--bg-3);
   }
   .combo:hover {
     color: var(--text-0);
@@ -170,29 +244,12 @@
     border-color: var(--rec);
     background: color-mix(in srgb, var(--rec) 12%, var(--bg-0));
   }
-  .combo-save {
-    position: absolute;
-    top: -8px;
-    right: -8px;
-    z-index: 5;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    color: var(--on-bright);
-    background: var(--bright);
-    border-radius: 999px;
-    box-shadow: 0 3px 10px -2px rgba(0, 0, 0, 0.6);
-    transition: transform 0.12s ease, opacity 0.12s ease;
+  .combo.failed {
+    border-color: color-mix(in srgb, var(--rec) 55%, var(--line));
   }
-  .combo-save:hover:not(:disabled) {
-    transform: scale(1.08);
-  }
-  .combo-save:active:not(:disabled) {
-    transform: scale(0.94);
-  }
-  .combo-save:disabled {
-    cursor: default;
+  .warn {
+    margin-top: 3px;
+    font-size: 12px;
+    color: var(--rec-text);
   }
 </style>

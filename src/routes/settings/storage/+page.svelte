@@ -1,5 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
+  import { Tween } from 'svelte/motion';
+  import { cubicOut } from 'svelte/easing';
   import Icon from '$lib/components/Icon.svelte';
   import SettingGroup from '$lib/components/settings/SettingGroup.svelte';
   import SettingRow from '$lib/components/settings/SettingRow.svelte';
@@ -53,6 +55,12 @@
   let failed = $state(false);
   let freedTimer: ReturnType<typeof setTimeout> | undefined;
   const total = $derived(usage?.reduce((n, u) => n + u.bytes, 0) ?? 0);
+  // El total cuenta hacia abajo al limpiar, al ritmo con que encogen los tramos de la barra.
+  const shownTotal = new Tween(0, { duration: 700, easing: cubicOut });
+  $effect(() => {
+    shownTotal.target = total;
+  });
+  let hovered = $state<Kind | null>(null);
 
   function size(bytes: number) {
     return bytes < 1024 * 1024 ? '0 MB' : formatSize(bytes);
@@ -96,7 +104,7 @@
 
 <SettingGroup title={t('settings.group.cache')}>
   <SettingRow title={t('settings.cache')} desc={t('settings.cache.desc')}>
-    <span class="total mono">{usage ? size(total) : '—'}</span>
+    <span class="total mono">{usage ? size(shownTotal.current) : '—'}</span>
     <button class="btn clear" class:busy={clearing || freed !== null} onclick={clear} disabled={clearing || freed !== null || !usage || total === 0}>
       {#if clearing}
         <span class="txt">{t('settings.cache.clearing')}</span>
@@ -109,14 +117,35 @@
     </button>
   </SettingRow>
   {#if usage}
-    <ul class="breakdown">
-      {#each usage as u (u.kind)}
-        <li>
-          <span>{t(KIND_LABEL[u.kind])}</span>
-          <span class="mono">{size(u.bytes)}</span>
-        </li>
-      {/each}
-    </ul>
+    <div class="meter">
+      <!-- Cada tramo crece en proporción a su tamaño (flex-grow en bytes), así encoge animado al
+           limpiar sin calcular porcentajes. -->
+      <div class="bar" role="presentation" onpointerleave={() => (hovered = null)}>
+        {#each usage as u, i (u.kind)}
+          <span
+            class="slice s{i}"
+            role="presentation"
+            class:dim={hovered !== null && hovered !== u.kind}
+            class:empty={u.bytes === 0}
+            style:flex-grow={u.bytes}
+            onpointerenter={() => (hovered = u.kind)}
+          ></span>
+        {/each}
+      </div>
+      <ul class="legend">
+        {#each usage as u, i (u.kind)}
+          <li
+            class:dim={hovered !== null && hovered !== u.kind}
+            onpointerenter={() => (hovered = u.kind)}
+            onpointerleave={() => (hovered = null)}
+          >
+            <span class="dot s{i}"></span>
+            <span class="name">{t(KIND_LABEL[u.kind])}</span>
+            <span class="mono">{size(u.bytes)}</span>
+          </li>
+        {/each}
+      </ul>
+    </div>
   {/if}
 </SettingGroup>
 
@@ -148,20 +177,58 @@
     color: var(--text-0);
   }
 
-  .breakdown {
-    list-style: none;
-    margin: 0;
-    padding: 12px 0 14px;
+  .meter {
+    padding: 14px 0 16px;
     border-top: 1px solid var(--line);
   }
-  .breakdown li {
+  .bar {
     display: flex;
-    justify-content: space-between;
+    gap: 2px;
+    height: 8px;
+    border-radius: 4px;
+    overflow: hidden;
+    background: var(--bg-2);
+  }
+  .slice {
+    flex-basis: 0;
+    min-width: 3px;
+    transition: flex-grow 0.7s cubic-bezier(0.215, 0.61, 0.355, 1), opacity 0.15s ease;
+  }
+  .slice.empty {
+    min-width: 0;
+  }
+  .s0 { background: var(--text-0); }
+  .s1 { background: var(--text-1); }
+  .s2 { background: var(--text-2); }
+  .s3 { background: var(--text-3); }
+  .s4 { background: color-mix(in srgb, var(--text-3) 55%, transparent); }
+  .legend {
+    list-style: none;
+    margin: 12px 0 0;
+    padding: 0;
+  }
+  .legend li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     padding: 5px 0;
     font-size: 12.5px;
     color: var(--text-2);
+    transition: opacity 0.15s ease;
   }
-  .breakdown .mono {
+  .legend .name {
+    flex: 1;
+  }
+  .legend .mono {
     color: var(--text-1);
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+  .dim {
+    opacity: 0.35;
   }
 </style>

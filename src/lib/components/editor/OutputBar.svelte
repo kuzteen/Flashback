@@ -3,7 +3,17 @@
   import { invoke } from '@tauri-apps/api/core';
   import Icon from '../Icon.svelte';
   import WatermarkToggle from '../WatermarkToggle.svelte';
-  import { editorState, exportClip, shareEdit, type ExportFormat } from '$lib/editor-state.svelte';
+  import {
+    cancelExport,
+    dismissExport,
+    editorState,
+    exportClip,
+    shareEdit,
+    viewExport,
+    type ExportFormat
+  } from '$lib/editor-state.svelte';
+  import { exportStage } from '$lib/export-stage';
+  import { playback } from './playback.svelte';
   import { CANCELLED, openShare } from '$lib/share.svelte';
   import { refreshLibrary } from '$lib/library.svelte';
   import { t } from '$lib/i18n.svelte';
@@ -37,8 +47,14 @@
     };
   });
 
+  // El propio botón lleva la exportación: se llena con el progreso, termina ofreciendo el clip y,
+  // si falla, se queda un rato como "Reintentar" con el mismo formato.
+  let failed = $state<ExportFormat | null>(null);
+  const pct = $derived(Math.round(editorState.exportProgress * 100));
+
   async function onExport(format: ExportFormat) {
     menuOpen = false;
+    failed = null;
     try {
       if (await exportClip(format)) await refreshLibrary();
     } catch (e) {
@@ -46,10 +62,28 @@
         ui.setNotice(t('ed.exportCancelled'), 3000);
         return;
       }
+      failed = format;
       ui.setNotice(t('ed.exportError', { e: String(e) }), 6000);
       console.error('export', e);
     }
   }
+
+  async function onView() {
+    playback.pause();
+    if (!(await viewExport())) dismissExport();
+  }
+
+  $effect(() => {
+    if (!editorState.exportDone) return;
+    const id = setTimeout(dismissExport, 6000);
+    return () => clearTimeout(id);
+  });
+
+  $effect(() => {
+    if (!failed) return;
+    const id = setTimeout(() => (failed = null), 8000);
+    return () => clearTimeout(id);
+  });
 
   // La marca de agua se consulta al vuelo en vez de duplicar el estado que ya lleva
   // WatermarkToggle.
@@ -80,17 +114,51 @@
       {t('card.share')}
     </button>
     <div class="export" bind:this={exportRoot}>
-      <button
-        class="btn"
-        class:open={menuOpen}
-        aria-haspopup="menu"
-        aria-expanded={menuOpen}
-        onclick={() => (menuOpen = !menuOpen)}
-        disabled={editorState.exporting}
-      >
-        {editorState.exporting ? t('ed.exporting') : t('ed.export')}
-        <Icon name="export" size={16} sw={2.2} />
-      </button>
+      {#if editorState.exporting}
+        <div
+          class="btn exp running"
+          role="progressbar"
+          aria-label={t('ed.exporting')}
+          aria-valuenow={pct}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          style:--p={editorState.exportProgress}
+          data-tip="{t(exportStage(editorState.exportProgress))}…"
+        >
+          <span class="run-fill"></span>
+          <span class="pct mono">{pct}%</span>
+          <button
+            class="stop"
+            aria-label={t('ed.cancelExport')}
+            data-tip={editorState.exportCancelling ? t('ed.cancelling') : t('ed.cancelExport')}
+            disabled={editorState.exportCancelling}
+            onclick={cancelExport}
+          >
+            <Icon name="close" size={13} sw={2.4} />
+          </button>
+        </div>
+      {:else if editorState.exportDone}
+        <button class="btn exp done" onclick={onView}>
+          <Icon name="check" size={15} sw={2.4} />
+          {t('ed.viewClip')}
+        </button>
+      {:else if failed}
+        <button class="btn exp retry" onclick={() => failed && onExport(failed)}>
+          {t('ed.retry')}
+          <Icon name="export" size={16} sw={2.2} />
+        </button>
+      {:else}
+        <button
+          class="btn exp"
+          class:open={menuOpen}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onclick={() => (menuOpen = !menuOpen)}
+        >
+          {t('ed.export')}
+          <Icon name="export" size={16} sw={2.2} />
+        </button>
+      {/if}
       {#if menuOpen}
         <div class="menu" role="menu" aria-label={t('ed.exportAs')} use:flip>
           <span class="menu-title">{t('ed.exportAs')}</span>
@@ -148,6 +216,58 @@
   }
   .export {
     position: relative;
+  }
+  /* Ancho fijo para los cuatro estados: al cambiar de Exportar a 42 % o a Ver clip no se mueve
+     nada de la barra. */
+  .exp {
+    justify-content: center;
+    width: 128px;
+    padding: 0 14px;
+  }
+  .running {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    justify-content: space-between;
+    padding: 0 5px 0 14px;
+    cursor: default;
+  }
+  .run-fill {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    transform: scaleX(var(--p));
+    transform-origin: left;
+    transition: transform 0.2s ease;
+  }
+  .pct {
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    text-box: trim-both cap alphabetic;
+  }
+  .stop {
+    display: inline-grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 4px;
+    color: var(--text-2);
+    transition: color 0.12s ease, background 0.12s ease;
+  }
+  .stop:hover:not(:disabled) {
+    color: var(--text-0);
+    background: var(--bg-hover);
+  }
+  .stop:disabled {
+    opacity: 0.4;
+  }
+  .done {
+    border-color: var(--accent);
+  }
+  .retry {
+    color: var(--rec-text);
+    border-color: color-mix(in srgb, var(--rec) 55%, var(--line-strong));
   }
   .menu {
     position: absolute;

@@ -11,7 +11,8 @@
   import { refreshPlaylists } from '$lib/playlists.svelte';
   import { clipOrder, editorState } from '$lib/editor-state.svelte';
   import { selected, clearSelection, selectAll, pruneSelection } from '$lib/selection.svelte';
-  import { confirmDelete, confirmState } from '$lib/confirm.svelte';
+  import { confirmState } from '$lib/confirm.svelte';
+  import { hold, type HoldApi } from '$lib/hold';
   import { shareState } from '$lib/share.svelte';
   import { clipEdit, openClipEdit } from '$lib/clip-edit.svelte';
   import { removeFavorite } from '$lib/library.svelte';
@@ -68,8 +69,12 @@
       clearSelection();
     } else if (e.key === 'Delete') {
       e.preventDefault();
-      deleteSelected(e);
+      if (!e.repeat) deleteHold?.press(e.shiftKey);
     }
+  }
+
+  function onKeyUp(e: KeyboardEvent) {
+    if (e.key === 'Delete') deleteHold?.release();
   }
 
   $effect(() => {
@@ -119,13 +124,13 @@
     return () => window.removeEventListener('mousedown', onDown, true);
   });
 
-  async function deleteSelected(e: { shiftKey: boolean }) {
+  // Supr mantiene el mismo botón que el ratón, así el teclado también pide mantener.
+  let deleteHold: HoldApi | undefined;
+  let deleteHint = $state(false);
+
+  async function deleteSelected() {
     if (deleting || selected.size === 0) return;
     const ids = [...selected];
-    const first = library.clips.find((c) => c.id === ids[0]);
-    // Shift salta la confirmación: el borrado va a la papelera, así que el atajo no es
-    // irreversible para quien ya sabe lo que hace.
-    if (!e.shiftKey && !(await confirmDelete(ids.length, first?.title))) return;
     deleting = true;
     // Sobre la biblioteca completa, no sobre lo filtrado: si el usuario marca clips y luego
     // escribe en el buscador, el contador seguiría diciendo 5 pero solo se borrarían los
@@ -155,7 +160,7 @@
   });
 </script>
 
-<svelte:window onkeydown={onKey} />
+<svelte:window onkeydown={onKey} onkeyup={onKeyUp} />
 
 <div class="clips">
   <header class="head">
@@ -223,9 +228,14 @@
       {/if}
     </div>
     <button class="selbtn" onclick={clearSelection}>{t('sel.cancel')}</button>
-    <button class="selbtn danger" disabled={deleting} onclick={deleteSelected}>
+    <button
+      class="selbtn danger"
+      disabled={deleting}
+      use:hold={{ onconfirm: deleteSelected, onhint: (on) => (deleteHint = on), ref: (api) => (deleteHold = api) }}
+    >
+      <span class="hold-fill"></span>
       <Icon name="trash" size={16} sw={2} />
-      {t('sel.delete')}
+      {deleteHint ? t('hold.toDelete') : t('sel.delete')}
     </button>
   </div>
 {/if}

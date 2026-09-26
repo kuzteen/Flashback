@@ -44,6 +44,11 @@
     if (look[key] !== 0) commit(withLook({ [key]: 0 }));
   }
 
+  // Comparar solo tiene sentido con algo ajustado y el panel a la vista.
+  $effect(() => {
+    if (neutral || !ui.lookOpen) ui.compare = false;
+  });
+
   function resetAll() {
     if (!neutral) commit({ ...editorState.edit, look: { ...NEUTRAL_LOOK } });
   }
@@ -89,6 +94,9 @@
           />
         </label>
       {/each}
+      <button class="compare" class:on={ui.compare} aria-pressed={ui.compare} disabled={neutral} onclick={() => (ui.compare = !ui.compare)}>
+        {t('ed.compare')}
+      </button>
       <p class="note">{t('ed.lookHint')}</p>
     </div>
   {/if}
@@ -190,6 +198,26 @@
   }
   .row .fader {
     grid-column: 1 / -1;
+  }
+  .compare {
+    height: 32px;
+    font-size: 12.5px;
+    color: var(--text-1);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-sm);
+    transition: color 0.14s ease, background 0.14s ease, border-color 0.14s ease;
+  }
+  .compare:hover:not(:disabled) {
+    color: var(--text-0);
+    background: var(--bg-hover);
+  }
+  .compare.on {
+    color: var(--text-0);
+    border-color: var(--accent);
+  }
+  .compare:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
   .note {
     font-size: 12px;

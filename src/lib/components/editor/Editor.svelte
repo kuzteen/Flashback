@@ -1,12 +1,9 @@
 <script lang="ts">
   import Icon from '../Icon.svelte';
-  import { cancelExport, closeEditor, dismissExport, editorState, persistEdit, viewExport } from '$lib/editor-state.svelte';
+  import { closeEditor, editorState, persistEdit } from '$lib/editor-state.svelte';
   import { matchShortcut } from '$lib/shortcuts';
   import { shareState } from '$lib/share.svelte';
   import { t } from '$lib/i18n.svelte';
-  import { exportStage } from '$lib/export-stage';
-  import { tick } from 'svelte';
-  import { fade } from 'svelte/transition';
   import { runAction } from './actions';
   import { playback } from './playback.svelte';
   import { ui } from './ui.svelte';
@@ -47,56 +44,19 @@
     if (ui.fs) ui.showFsCtrl();
   });
 
+  // Mientras exporta, el resultado va ligado a este clip: no se cierra hasta que acabe o se cancele.
   async function close() {
+    if (editorState.exporting) return;
     playback.pause();
     if (ui.fs) await ui.setFs(false);
     await persistEdit();
     closeEditor();
   }
 
-  let exportCard = $state<HTMLDivElement | null>(null);
-  const exportCardOpen = $derived(editorState.exporting || !!editorState.exportDone);
-
-  // La tarjeta se queda con el foco: al abrirse y al pasar de exportando a terminado, lo toma su
-  // botón principal (Cancelar / Ver clip).
-  $effect(() => {
-    if (!exportCardOpen) return;
-    void editorState.exportDone;
-    tick().then(() => exportCard?.querySelector<HTMLButtonElement>('[data-autofocus]')?.focus());
-  });
-
-  // Tab solo circula entre los botones de la tarjeta; el editor de detrás está inert.
-  function trapTab(e: KeyboardEvent) {
-    const buttons = [...(exportCard?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])];
-    if (buttons.length === 0) return;
-    const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
-    const next = e.shiftKey ? (at <= 0 ? buttons.length - 1 : at - 1) : (at + 1) % buttons.length;
-    buttons[next].focus();
-  }
-
-  const fileName = (path: string) => path.split(/[/\\]/).pop() ?? path;
-
-  async function onViewExport() {
-    playback.pause();
-    if (!(await viewExport())) dismissExport();
-  }
-
   function onKey(e: KeyboardEvent) {
     // Con el diálogo de compartir delante el editor no escucha; defaultPrevented cubre el Escape
     // que el diálogo ya consumió.
     if (shareState.clip || e.defaultPrevented) return;
-    // La tarjeta de exportación tapa el editor: sus atajos no actúan por detrás, y Escape cierra
-    // la tarjeta terminada en vez del editor (a mitad de export no hace nada; para eso, Cancelar).
-    if (exportCardOpen) {
-      if (e.key === 'Tab') {
-        e.preventDefault();
-        trapTab(e);
-      } else if (e.key === 'Escape' && editorState.exportDone) {
-        e.preventDefault();
-        dismissExport();
-      }
-      return;
-    }
     const el = e.target as HTMLElement | null;
     if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
     if (e.key === 'Escape') {
@@ -141,15 +101,13 @@
 <svelte:document onmouseleave={() => ui.hideFsCtrl()} />
 
 <div class="ed" bind:this={root} tabindex="-1">
-  <div class="contents" inert={exportCardOpen}>
-    <EditorHeader onclose={close} />
-  </div>
-  <div class="middle" inert={exportCardOpen}>
+  <EditorHeader onclose={close} />
+  <div class="middle">
     <LookPanel />
     <Viewer />
     <FormatPanel />
   </div>
-  <div class="dock" bind:this={dock} inert={exportCardOpen} style:height={ui.dockH !== null ? `${ui.dockH}px` : null}>
+  <div class="dock" bind:this={dock} style:height={ui.dockH !== null ? `${ui.dockH}px` : null}>
     <div
       class="grip"
       role="presentation"
@@ -175,42 +133,6 @@
     </div>
   {/if}
 
-  {#if exportCardOpen}
-    {@const done = editorState.exportDone}
-    <div class="export-backdrop">
-      <div class="export-card" bind:this={exportCard} role="dialog" aria-modal="true" aria-labelledby="export-title">
-        <div class="modal-title" id="export-title">{done ? t('ed.exportDone') : t('ed.exportingClip')}</div>
-        <div class="export-progress">
-          <div class="export-bar">
-            <div class="export-fill" style:width="{Math.max(2, Math.round(editorState.exportProgress * 100))}%"></div>
-          </div>
-          <div class="export-status">
-            {#if done}
-              <span class="export-stage export-file" in:fade={{ duration: 180 }}>{fileName(done)}</span>
-            {:else}
-              {#key exportStage(editorState.exportProgress)}
-                <span class="export-stage" in:fade={{ duration: 180 }}>{t(exportStage(editorState.exportProgress))}…</span>
-              {/key}
-            {/if}
-            <span class="export-pct mono" class:done>
-              {#if done}<span class="export-check" in:fade={{ duration: 180 }}><Icon name="check" size={13} sw={2.4} /></span>{/if}
-              <span class="pct-num">{Math.round(editorState.exportProgress * 100)}%</span>
-            </span>
-          </div>
-        </div>
-        {#if done}
-          <div class="export-actions">
-            <button class="export-cancel" onclick={dismissExport}>{t('ed.close')}</button>
-            <button class="export-cancel export-view" data-autofocus onclick={onViewExport}>{t('ed.viewClip')}</button>
-          </div>
-        {:else}
-          <button class="export-cancel" data-autofocus onclick={cancelExport} disabled={editorState.exportCancelling}>
-            {editorState.exportCancelling ? t('ed.cancelling') : t('ed.cancelExport')}
-          </button>
-        {/if}
-      </div>
-    </div>
-  {/if}
 </div>
 
 <style>
@@ -370,115 +292,5 @@
   }
   .shot button:hover {
     color: var(--text-0);
-  }
-  .contents {
-    display: contents;
-  }
-  .export-backdrop {
-    position: absolute;
-    inset: 0;
-    z-index: 150;
-    display: grid;
-    place-items: center;
-    background: var(--scrim);
-  }
-  .export-card {
-    width: 360px;
-    padding: 28px 28px 24px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 22px;
-    text-align: center;
-    background: var(--bg-1);
-    border: 1px solid var(--line-strong);
-    border-radius: var(--r-md);
-    box-shadow: var(--shadow-dialog);
-  }
-  .export-progress {
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .export-bar {
-    height: 6px;
-    border-radius: 999px;
-    background: var(--bg-3);
-    overflow: hidden;
-  }
-  .export-fill {
-    height: 100%;
-    background: var(--accent);
-    transition: width 0.2s ease;
-  }
-  .export-status {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 12px;
-    font-size: 12px;
-  }
-  .export-stage {
-    color: var(--text-2);
-  }
-  /* Mismas medidas que los botones de tamaño del diálogo de compartir (84 x 36). */
-  .export-cancel {
-    width: 84px;
-    height: 36px;
-    padding: 0;
-    font-size: 12.5px;
-    white-space: nowrap;
-    color: var(--text-1);
-    background: var(--surface);
-    border: 1px solid var(--line-strong);
-    border-radius: var(--r-sm);
-    transition: color 0.14s ease, background 0.14s ease;
-  }
-  .export-cancel:hover:not(:disabled) {
-    color: var(--text-0);
-    background: var(--bg-2);
-  }
-  .export-cancel:disabled {
-    opacity: 0.6;
-  }
-  .export-actions {
-    display: grid;
-    grid-template-columns: repeat(2, 84px);
-    justify-content: center;
-    gap: 6px;
-  }
-  .export-pct {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    flex: none;
-    color: var(--text-1);
-  }
-  /* Mismo recorte que la duración de las tarjetas: sin él, el hueco de ascendentes/descendentes
-     de la fuente deja los números un poco altos respecto al check. */
-  .pct-num {
-    line-height: 1;
-    text-box: trim-both cap alphabetic;
-  }
-  .export-pct.done {
-    color: var(--text-0);
-  }
-  .export-check {
-    display: inline-grid;
-    color: var(--accent);
-  }
-  .export-view {
-    color: var(--text-0);
-    border-color: var(--accent);
-  }
-  .export-view:hover:not(:disabled) {
-    background: var(--bg-2);
-  }
-  .export-file {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 </style>

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import Dropdown from '$lib/components/Dropdown.svelte';
+  import Stepper from '$lib/components/Stepper.svelte';
   import SettingGroup from '$lib/components/settings/SettingGroup.svelte';
   import SettingRow from '$lib/components/settings/SettingRow.svelte';
   import Switch from '$lib/components/settings/Switch.svelte';
@@ -41,13 +41,13 @@
 
 <SettingGroup title={t('settings.group.video')}>
   <SettingRow title={t('settings.resolution')} desc={t('settings.resolution.desc')}>
-    <Dropdown value={captureConfig.resolution} options={resOptions} onchange={setResolution} ariaLabel={t('settings.resolution')} />
+    <Stepper value={captureConfig.resolution} options={resOptions} onchange={setResolution} ariaLabel={t('settings.resolution')} />
   </SettingRow>
   <SettingRow title={t('settings.fps')} desc={t('settings.fps.desc')}>
-    <Dropdown value={captureConfig.fps} options={fpsOptions} onchange={setFps} ariaLabel={t('settings.fps')} />
+    <Stepper value={captureConfig.fps} options={fpsOptions} onchange={setFps} ariaLabel={t('settings.fps')} />
   </SettingRow>
   <SettingRow title={t('settings.quality')} desc={t('settings.quality.desc')}>
-    <Dropdown value={captureConfig.quality} options={qualityOptions} onchange={setQuality} ariaLabel={t('settings.quality')} />
+    <Stepper value={captureConfig.quality} options={qualityOptions} onchange={setQuality} ariaLabel={t('settings.quality')} />
   </SettingRow>
 </SettingGroup>
 
@@ -56,12 +56,12 @@
     <Switch checked={replay.enabled} onchange={setReplayEnabled} label={t('settings.replayBg')} />
   </SettingRow>
   <SettingRow title={t('settings.bufferLen')} desc={t('settings.bufferLen.desc')} disabled={!replay.enabled}>
-    <Dropdown value={replay.seconds} options={bufferOptions} onchange={setReplaySeconds} ariaLabel={t('settings.bufferLen')} />
+    <Stepper value={replay.seconds} options={bufferOptions} onchange={setReplaySeconds} ariaLabel={t('settings.bufferLen')} />
   </SettingRow>
 </SettingGroup>
 
 <SettingGroup title={t('settings.group.advanced')}>
   <SettingRow title={t('settings.encoder')} desc={t('settings.encoder.desc')}>
-    <Dropdown value={encoder} options={encoderOptions} onchange={setEncoder} ariaLabel={t('settings.encoder')} />
+    <Stepper value={encoder} options={encoderOptions} onchange={setEncoder} ariaLabel={t('settings.encoder')} />
   </SettingRow>
 </SettingGroup>

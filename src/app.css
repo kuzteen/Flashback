@@ -203,3 +203,25 @@ input[type='range'].fader:focus-visible::-webkit-slider-thumb {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--bright);
 }
+
+/* Botones de mantener pulsado (src/lib/hold.ts): el relleno crece mientras se mantiene y vuelve
+   rápido al soltar. */
+[data-hold] {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+.hold-fill {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--rec) 24%, transparent);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.22s cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+[data-holding] > .hold-fill {
+  transform: scaleX(1);
+  transition: transform var(--hold-ms) cubic-bezier(0.4, 0, 0.6, 1);
+}

@@ -21,7 +21,7 @@
   import { openEditor } from '$lib/editor-state.svelte';
   import { openShare } from '$lib/share.svelte';
   import { selected, isSelected, pick } from '$lib/selection.svelte';
-  import { confirmDelete } from '$lib/confirm.svelte';
+  import { hold } from '$lib/hold';
   import { playlistsWith } from '$lib/playlists.svelte';
   import { t } from '$lib/i18n.svelte';
 
@@ -304,12 +304,10 @@
     }
   }
 
-  async function deleteClip(e: MouseEvent) {
-    e.stopPropagation();
+  let deleteHint = $state(false);
+
+  async function deleteClip() {
     menu.openId = null;
-    // Shift salta la confirmación: el borrado va a la papelera, así que el atajo no es
-    // irreversible para quien ya sabe lo que hace.
-    if (!e.shiftKey && !(await confirmDelete(1, clip.title))) return;
     try {
       await invoke('delete_clip', { path: clip.path });
       selected.delete(clip.id);
@@ -504,7 +502,11 @@
           <button role="menuitem" onclick={editClip}><Icon name="rename" size={16} sw={2} /> {t('card.editClip')}</button>
           <button role="menuitem" onclick={openLocation}><Icon name="folder-open" size={16} sw={2} /> {t('card.openLocation')}</button>
           <div class="sep"></div>
-          <button role="menuitem" class="danger" onclick={deleteClip}><Icon name="trash" size={16} sw={2} /> {t('card.delete')}</button>
+          <button role="menuitem" class="danger" use:hold={{ onconfirm: deleteClip, onhint: (on) => (deleteHint = on) }}>
+            <span class="hold-fill"></span>
+            <Icon name="trash" size={16} sw={2} />
+            {deleteHint ? t('hold.toDelete') : t('card.delete')}
+          </button>
 
           {#if plOpen}
             <div

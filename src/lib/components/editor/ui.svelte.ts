@@ -40,6 +40,9 @@ class EditorUi {
   // Preferencia de quien edita: plegado por defecto y recordado entre sesiones.
   formatOpen = $state(readOpen(FORMAT_KEY));
   lookOpen = $state(readOpen(LOOK_KEY));
+  // Antes/después de los ajustes de imagen: una línea parte el visor y `split` (0..1) es dónde.
+  compare = $state(false);
+  split = $state(0.5);
 
   toggleFormat() {
     this.formatOpen = !this.formatOpen;
@@ -68,6 +71,8 @@ class EditorUi {
     this.zoom = 1;
     this.toolsOpen = false;
     this.blockMenu = null;
+    this.compare = false;
+    this.split = 0.5;
   }
 
   // Pantalla completa de la ventana nativa y no la API del navegador: en WebView2 con la ventana

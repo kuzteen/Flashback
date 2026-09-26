@@ -25,6 +25,10 @@ export const hotkeys = $state<Record<HotkeyAction, string>>(load());
 // el SO se traga la combinación (RegisterHotKey la intercepta) y nunca llega al capturador.
 export const capture = $state({ active: false });
 
+// Atajos que Windows no dejó registrar en el último intento (la combinación la tiene otra app),
+// para señalarlos en su fila de Ajustes y no solo en el aviso.
+export const hotkeyFailed = $state<Record<HotkeyAction, boolean>>({ saveReplay: false, record: false, open: false });
+
 export function setHotkey(action: HotkeyAction, accel: string) {
   hotkeys[action] = accel;
   if (typeof localStorage !== 'undefined') {

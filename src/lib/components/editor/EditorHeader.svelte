@@ -99,6 +99,7 @@
       data-tip={t('ed.closeEditor')}
       data-tip-pos="below"
       data-tip-align="end"
+      disabled={editorState.exporting}
       onclick={onclose}
     >
       <Icon name="close-fill" size={16} />

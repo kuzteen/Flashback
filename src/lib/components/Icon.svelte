@@ -131,6 +131,10 @@
     <line x1="15.1" y1="15.1" x2="20.5" y2="20.5" stroke-width="2.5" />
   {:else if name === 'chevron-down'}
     <path d="M5 9l7 7 7-7" />
+  {:else if name === 'chevron-left'}
+    <path d="M15 5l-7 7 7 7" />
+  {:else if name === 'chevron-right'}
+    <path d="M9 5l7 7-7 7" />
   {:else if name === 'plus'}
     <line x1="12" y1="5" x2="12" y2="19" />
     <line x1="5" y1="12" x2="19" y2="12" />

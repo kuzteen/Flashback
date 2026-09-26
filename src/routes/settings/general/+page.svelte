@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import Icon from '$lib/components/Icon.svelte';
-  import Dropdown from '$lib/components/Dropdown.svelte';
+  import Stepper from '$lib/components/Stepper.svelte';
   import SettingGroup from '$lib/components/settings/SettingGroup.svelte';
   import SettingRow from '$lib/components/settings/SettingRow.svelte';
   import Switch from '$lib/components/settings/Switch.svelte';
@@ -85,13 +85,13 @@
 
 <SettingGroup title={t('settings.group.interface')}>
   <SettingRow title={t('settings.language')} desc={t('settings.language.desc')}>
-    <Dropdown value={getLocale()} options={languageOptions} onchange={(v) => setLocale(v as Locale)} ariaLabel={t('settings.language')} />
+    <Stepper value={getLocale()} options={languageOptions} onchange={(v) => setLocale(v as Locale)} ariaLabel={t('settings.language')} />
   </SettingRow>
 </SettingGroup>
 
 <SettingGroup title={t('settings.group.notifications')}>
   <SettingRow title={t('settings.saveSound')} desc={t('settings.saveSound.desc')}>
-    <Dropdown value={replaySound.level} options={soundOptions} onchange={setReplaySoundLevel} ariaLabel={t('settings.soundVolume')} />
+    <Stepper value={replaySound.level} options={soundOptions} onchange={setReplaySoundLevel} ariaLabel={t('settings.soundVolume')} />
     <button
       class="play-btn"
       aria-label={t('settings.testSound')}

@@ -9,6 +9,7 @@
   import { playback } from './playback.svelte';
   import { ui } from './ui.svelte';
   import Transport from './Transport.svelte';
+  import Icon from '../Icon.svelte';
 
   let video = $state<HTMLVideoElement | null>(null);
   let sys = $state<HTMLAudioElement | null>(null);
@@ -113,6 +114,10 @@
   const graded = $derived(!isNeutral(look));
   const kernel = $derived(sharpenKernel(look));
   const lookFilter = $derived(graded ? 'url(#fb-look)' : null);
+  // Comparando, el mismo filtro se aplica solo a la derecha de la línea (subregión del filtro), así
+  // no hace falta un segundo vídeo ni copiar fotogramas: el coste es el del filtro normal.
+  const comparing = $derived(ui.compare && graded && !ui.fs);
+  const videoFilter = $derived(comparing ? 'url(#fb-look-split)' : lookFilter);
   // En pantalla completa se ve el vídeo tal cual: el lienzo vertical es una herramienta de encuadre.
   const vert = $derived(format.kind === 'vertical' && !ui.fs);
   const zoom = $derived(zoomOf(format));
@@ -130,6 +135,81 @@
   const covers = $derived(fg.x <= 0 && fg.y <= 0 && fg.x + fg.w >= OW && fg.y + fg.h >= OH);
 
   let frameEl = $state<HTMLDivElement | null>(null);
+  let stageEl = $state<HTMLDivElement | null>(null);
+
+  // Zona donde se dibuja la línea (el vídeo, o el lienzo vertical) y caja del vídeo, las dos en
+  // coordenadas del escenario. Se miden por fotograma mientras se compara (el vídeo cambia de
+  // tamaño con los paneles y, en vertical, se mueve al encuadrar), pero la línea y el corte del
+  // filtro salen los dos de `ui.split` en el mismo cálculo: si el corte se recalculara en la
+  // medición, iría un fotograma por detrás de la línea al arrastrar.
+  let region = $state({ x: 0, y: 0, w: 0, h: 0 });
+  let vbox = $state({ x: 0, w: 0 });
+  const videoSplit = $derived(
+    vbox.w > 0 ? Math.min(1, Math.max(0, (region.x + ui.split * region.w - vbox.x) / vbox.w)) : ui.split
+  );
+  // El tirador no sale nunca de la zona: en los extremos se queda entero aunque la línea llegue
+  // al borde.
+  // En los extremos la pastilla pierde una flecha y encoge: ahí se ancla por su lado exterior (sobre
+  // la línea, que está en el borde) para encoger hacia dentro sin asomar fuera del vídeo.
+  const KNOB_R = 15;
+  const knobAnchor = $derived(ui.split <= 0 ? 0 : ui.split >= 1 ? 1 : 0.5);
+  const knobShift = $derived(
+    knobAnchor !== 0.5
+      ? 0
+      : Math.min(Math.max(ui.split * region.w, KNOB_R), Math.max(KNOB_R, region.w - KNOB_R)) - ui.split * region.w
+  );
+
+  $effect(() => {
+    if (!comparing) return;
+    let raf = 0;
+    const measure = () => {
+      const st = stageEl?.getBoundingClientRect();
+      const vr = video?.getBoundingClientRect();
+      const rr = vert ? frameEl?.getBoundingClientRect() : vr;
+      if (st && vr && rr && vr.width > 0) {
+        const next = { x: rr.left - st.left, y: rr.top - st.top, w: rr.width, h: rr.height };
+        if (next.x !== region.x || next.y !== region.y || next.w !== region.w || next.h !== region.h) region = next;
+        const vx = vr.left - st.left;
+        if (vx !== vbox.x || vr.width !== vbox.w) vbox = { x: vx, w: vr.width };
+      }
+      raf = requestAnimationFrame(measure);
+    };
+    measure();
+    return () => cancelAnimationFrame(raf);
+  });
+
+  let splitDrag = false;
+
+  function splitAt(clientX: number) {
+    const st = stageEl?.getBoundingClientRect();
+    if (!st || region.w <= 0) return;
+    ui.split = Math.min(1, Math.max(0, (clientX - st.left - region.x) / region.w));
+  }
+
+  function onSplitDown(e: PointerEvent) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    splitDrag = true;
+    splitAt(e.clientX);
+  }
+
+  function onSplitMove(e: PointerEvent) {
+    if (splitDrag) splitAt(e.clientX);
+  }
+
+  function onSplitUp() {
+    splitDrag = false;
+  }
+
+  function onSplitKey(e: KeyboardEvent) {
+    const step = e.shiftKey ? 0.1 : 0.02;
+    if (e.key === 'ArrowLeft') ui.split = Math.max(0, ui.split - step);
+    else if (e.key === 'ArrowRight') ui.split = Math.min(1, ui.split + step);
+    else return;
+    e.preventDefault();
+  }
   let guideX = $state(false);
   let guideY = $state(false);
   let drag: { sx: number; sy: number; px: number; py: number; index: number; moved: boolean } | null = null;
@@ -269,9 +349,38 @@
       <feConvolveMatrix order="3" kernelMatrix={kernel.join(' ')} preserveAlpha="true" edgeMode="duplicate" />
     {/if}
   </filter>
+  <filter
+    id="fb-look-split"
+    color-interpolation-filters="sRGB"
+    primitiveUnits="objectBoundingBox"
+    x="0"
+    y="0"
+    width="1"
+    height="1"
+  >
+    <feColorMatrix type="matrix" values={svgColorValues(look)} x={videoSplit} y="0" width={1 - videoSplit} height="1" result="graded" />
+    {#if kernel}
+      <feConvolveMatrix
+        in="graded"
+        order="3"
+        kernelMatrix={kernel.join(' ')}
+        preserveAlpha="true"
+        edgeMode="duplicate"
+        x={videoSplit}
+        y="0"
+        width={1 - videoSplit}
+        height="1"
+        result="sharp"
+      />
+    {/if}
+    <feMerge>
+      <feMergeNode in="SourceGraphic" />
+      <feMergeNode in={kernel ? 'sharp' : 'graded'} />
+    </feMerge>
+  </filter>
 </svg>
 
-<div class="stage">
+<div class="stage" bind:this={stageEl}>
   {#if editorState.videoSrc}
     <div class="fit" class:balance-l={ui.formatOpen && !ui.lookOpen} class:balance-r={ui.lookOpen && !ui.formatOpen}>
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
@@ -296,7 +405,8 @@
           bind:this={video}
           src={editorState.videoSrc}
           playsinline
-          style:filter={lookFilter}
+          style:filter={videoFilter}
+          class:cmp={comparing}
           class:fs={ui.fs}
           class:nocursor={ui.fs && !ui.fsCtrlShow}
           style:left={vert ? `${(fg.x / OW) * 100}%` : null}
@@ -311,6 +421,38 @@
         {#if vert && guideY}<span class="guide gy"></span>{/if}
       </div>
     </div>
+    {#if comparing && region.w > 0}
+      <div
+        class="compare"
+        class:flat={!vert}
+        data-theme="dark"
+        style:left="{region.x}px"
+        style:top="{region.y}px"
+        style:width="{region.w}px"
+        style:height="{region.h}px"
+      >
+        <span class="tag before">{t('ed.compare.before')}</span>
+        <span class="tag after">{t('ed.compare.after')}</span>
+        <div
+          class="split"
+          style:left="{ui.split * 100}%"
+          role="slider"
+          tabindex="0"
+          aria-label={t('ed.compare')}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(ui.split * 100)}
+          onpointerdown={onSplitDown}
+          onpointermove={onSplitMove}
+          onpointerup={onSplitUp}
+          onpointercancel={onSplitUp}
+          ondblclick={() => (ui.split = 0.5)}
+          onkeydown={onSplitKey}
+        >
+          <span class="split-knob" style:translate="calc({knobShift}px - {knobAnchor * 100}%) 0"><span class="arr" class:gone={ui.split <= 0}><Icon name="chevron-left" size={12} sw={2.6} /></span><span class="arr" class:gone={ui.split >= 1}><Icon name="chevron-right" size={12} sw={2.6} /></span></span>
+        </div>
+      </div>
+    {/if}
   {/if}
   {#if editorState.system}
     <audio bind:this={sys} src={editorState.system} preload="auto"></audio>
@@ -380,6 +522,99 @@
   }
   .fit.balance-r {
     padding-right: calc(40px + var(--format-w));
+  }
+  /* Capa sobre el vídeo: solo la línea recibe el puntero, el resto deja pasar el clic de
+     reproducir y el arrastre del encuadre. */
+  .compare {
+    position: absolute;
+    z-index: 3;
+    pointer-events: none;
+  }
+  /* Chromium toma como caja del filtro el vídeo más lo que ocupa su sombra (~32 px por lado), y las
+     fracciones del corte se medían sobre esa caja mayor: la línea y el corte solo coincidían en el
+     centro. Comparando, la sombra la pinta esta capa, que ocupa justo la caja del vídeo. */
+  video.cmp {
+    box-shadow: none;
+  }
+  .compare.flat {
+    border-radius: var(--r-md);
+    box-shadow: 0 24px 60px -28px rgba(0, 0, 0, 0.9);
+  }
+  .tag {
+    position: absolute;
+    top: 10px;
+    padding: 5px 8px;
+    font-size: 11px;
+    font-weight: 560;
+    line-height: 1;
+    text-box: trim-both cap alphabetic;
+    color: var(--text-0);
+    background: var(--glass);
+    border: 1px solid var(--glass-edge);
+    border-radius: var(--r-sm);
+    backdrop-filter: blur(10px);
+  }
+  .before {
+    left: 10px;
+  }
+  .after {
+    right: 10px;
+  }
+  .split {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 24px;
+    margin-left: -12px;
+    pointer-events: auto;
+    cursor: ew-resize;
+    outline: none;
+  }
+  .split::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 10px;
+    width: 4px;
+    background: #fff;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3), 0 0 12px rgba(0, 0, 0, 0.35);
+  }
+  .split-knob {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 18px;
+    margin-top: -9px;
+    padding: 0 3px;
+    color: #111;
+    background: var(--accent-soft);
+    border-radius: 4px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+    transition: transform 0.12s ease;
+  }
+  /* En un extremo desaparece la flecha que apunta hacia él, hueco incluido: por ahí ya no se puede
+     tirar más, y la pastilla (de ancho automático) encoge con ella. */
+  .arr {
+    display: inline-flex;
+    justify-content: center;
+    width: 12px;
+    overflow: hidden;
+    transition: width 0.15s ease, opacity 0.15s ease;
+  }
+  .arr.gone {
+    width: 0;
+    opacity: 0;
+  }
+  .arr :global(svg) {
+    flex-shrink: 0;
+  }
+  .split:hover .split-knob,
+  .split:focus-visible .split-knob {
+    transform: scale(1.08);
   }
   .defs {
     position: absolute;

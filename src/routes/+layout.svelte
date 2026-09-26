@@ -11,13 +11,14 @@
   import { listen } from '@tauri-apps/api/event';
   import { register, unregisterAll } from '@tauri-apps/plugin-global-shortcut';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { hotkeys, capture, labelFor, labelTokens } from '$lib/hotkeys.svelte';
+  import { hotkeys, capture, hotkeyFailed, labelFor, labelTokens, type HotkeyAction } from '$lib/hotkeys.svelte';
   import { refreshLibrary } from '$lib/library.svelte';
   import { replay, setReplaySeconds, BUFFER_OPTIONS } from '$lib/replay.svelte';
   import { gainFor, replaySound } from '$lib/replay-sound.svelte';
   import Editor from '$lib/components/editor/Editor.svelte';
   import ShareDialog from '$lib/components/ShareDialog.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import Stepper from '$lib/components/Stepper.svelte';
   import PlaylistDialog from '$lib/components/PlaylistDialog.svelte';
   import ClipEditDialog from '$lib/components/ClipEditDialog.svelte';
   import { editorState, closeEditor } from '$lib/editor-state.svelte';
@@ -82,7 +83,6 @@
   let micInput = $state(captureConfig.micDevice);
   let micDDOpen = $state(false);
   let settingsOpen = $state(false);
-  let openRow = $state<string | null>(null);
   let gearSpin = $state(false);
 
   const secondsLabel = (s: number) => BUFFER_OPTIONS.find((o) => o.seconds === s)?.label ?? `${s}s`;
@@ -96,48 +96,44 @@
     { key: 'fps', text: `${captureConfig.fps} FPS` }
   ]);
 
-  type QRow = { key: string; title: string; value: string; options: { label: string; raw: number | string }[] };
+  type QRow = {
+    key: string;
+    title: string;
+    value: number | string;
+    options: { label: string; value: number | string }[];
+    set: (v: number | string) => void;
+  };
 
   const settingRows = $derived<QRow[]>([
     {
       key: 'tiempo',
       title: t('cap.duration'),
-      value: secondsLabel(replay.seconds),
-      options: BUFFER_OPTIONS.map((o) => ({ label: o.label, raw: o.seconds }))
+      value: replay.seconds,
+      options: BUFFER_OPTIONS.map((o) => ({ label: o.label, value: o.seconds })),
+      set: (v) => setReplaySeconds(v as number)
     },
     {
       key: 'calidad',
       title: t('cap.quality'),
-      value: qualityLabel(captureConfig.quality),
-      options: QUALITY_OPTIONS.map((q) => ({ label: qualityLabel(q.key), raw: q.key }))
+      value: captureConfig.quality,
+      options: QUALITY_OPTIONS.map((q) => ({ label: qualityLabel(q.key), value: q.key })),
+      set: (v) => setQuality(v as QualityKey)
     },
     {
       key: 'resolucion',
       title: t('cap.resolution'),
-      value: resolutionLabel(captureConfig.resolution),
-      options: RES_OPTIONS.map((r) => ({ label: r.label, raw: r.height }))
+      value: captureConfig.resolution,
+      options: RES_OPTIONS.map((r) => ({ label: r.label, value: r.height })),
+      set: (v) => setResolution(v as number)
     },
     {
       key: 'fps',
       title: t('cap.fps'),
-      value: `${captureConfig.fps} FPS`,
-      options: FPS_OPTIONS.map((f) => ({ label: `${f} FPS`, raw: f }))
+      value: captureConfig.fps,
+      options: FPS_OPTIONS.map((f) => ({ label: `${f} FPS`, value: f })),
+      set: (v) => setFps(v as number)
     }
   ]);
-
-  function toggleRow(e: MouseEvent, key: string) {
-    e.stopPropagation();
-    openRow = openRow === key ? null : key;
-  }
-
-  function pickRow(e: MouseEvent, key: string, raw: number | string) {
-    e.stopPropagation();
-    if (key === 'tiempo') setReplaySeconds(raw as number);
-    else if (key === 'calidad') setQuality(raw as QualityKey);
-    else if (key === 'resolucion') setResolution(raw as number);
-    else if (key === 'fps') setFps(raw as number);
-    openRow = null;
-  }
 
   // Tamaño estimado de un replay de la duración seleccionada con los ajustes actuales.
   const estSize = $derived(
@@ -207,7 +203,6 @@
     pickerOpen = false;
     micDDOpen = false;
     settingsOpen = false;
-    openRow = null;
   }
 
   // Desactiva el menú contextual nativo de WebView2 (atrás, recargar, guardar como, imprimir…) en
@@ -482,20 +477,23 @@
         console.error('unregisterAll', e);
       }
       if (cancelled || paused) return;
+      const bad: Record<HotkeyAction, boolean> = { saveReplay: false, record: false, open: false };
       // Cada atajo se registra por separado: en Windows RegisterHotKey falla si la combinación
       // ya la tiene otra app, y antes ese fallo (dentro de un try común) abortaba el registro de
       // los siguientes, tumbando los tres atajos. Aislado, un conflicto solo pierde ese atajo.
       // Guardar y grabar se registran en Rust, que los atiende sin pasar por el webview.
       const failed: string[] = [];
       try {
-        const bad = await invoke<string[]>('set_native_hotkeys', { save: sr, record: rec });
-        if (bad.includes(sr)) failed.push(`${t('hk.name.saveClip')} (${labelFor(sr)})`);
-        if (bad.includes(rec)) failed.push(`${t('hk.name.recording')} (${labelFor(rec)})`);
+        const rejected = await invoke<string[]>('set_native_hotkeys', { save: sr, record: rec });
+        bad.saveReplay = rejected.includes(sr);
+        bad.record = rejected.includes(rec);
+        if (bad.saveReplay) failed.push(`${t('hk.name.saveClip')} (${labelFor(sr)})`);
+        if (bad.record) failed.push(`${t('hk.name.recording')} (${labelFor(rec)})`);
       } catch (e) {
         console.error('set_native_hotkeys', e);
       }
-      const binds: { accel: string; name: string; run: () => void }[] = [
-        { accel: op, name: t('hk.name.openFlashback'), run: openFlashback }
+      const binds: { action: HotkeyAction; accel: string; name: string; run: () => void }[] = [
+        { action: 'open', accel: op, name: t('hk.name.openFlashback'), run: openFlashback }
       ];
       for (const b of binds) {
         if (cancelled) return;
@@ -506,8 +504,11 @@
         } catch (e) {
           console.error('register hotkey', b.accel, e);
           failed.push(`${b.name} (${labelFor(b.accel)})`);
+          bad[b.action] = true;
         }
       }
+      if (cancelled) return;
+      Object.assign(hotkeyFailed, bad);
       if (!cancelled && failed.length) {
         toast(t('toast.hotkeyInUse', { failed: failed.join(', ') }), 'problems', 'error');
       }
@@ -815,38 +816,13 @@
           </button>
 
           {#if settingsOpen}
-            <div class="qset-menu" role="menu" use:flip>
+            <!-- Los clics dentro del menú no deben llegar a la ventana, que cierra los menús abiertos. -->
+            <!-- svelte-ignore a11y_click_events_have_key_events, a11y_interactive_supports_focus -->
+            <div class="qset-menu" role="menu" use:flip onclick={(e) => e.stopPropagation()}>
               {#each settingRows as row (row.key)}
                 <div class="qrow">
                   <span class="qtitle">{row.title}</span>
-                  <div class="qdd" class:open={openRow === row.key}>
-                    <button
-                      class="qdd-trigger"
-                      aria-haspopup="listbox"
-                      aria-expanded={openRow === row.key}
-                      aria-label={row.title}
-                      onclick={(e) => toggleRow(e, row.key)}
-                    >
-                      <span class="qdd-value">{row.value}</span>
-                      <span class="qdd-chev"><Icon name="chevron-down" size={13} sw={2} /></span>
-                    </button>
-                    {#if openRow === row.key}
-                      <div class="qdd-list" role="listbox" use:flip>
-                        {#each row.options as opt (opt.label)}
-                          <button
-                            class="qdd-item"
-                            class:on={opt.label === row.value}
-                            role="option"
-                            aria-selected={opt.label === row.value}
-                            onclick={(e) => pickRow(e, row.key, opt.raw)}
-                          >
-                            {opt.label}
-                            <span class="qdd-check"><Icon name="check" size={13} sw={2.2} /></span>
-                          </button>
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
+                  <Stepper value={row.value} options={row.options} onchange={row.set} ariaLabel={row.title} />
                 </div>
               {/each}
 
@@ -1644,88 +1620,6 @@
     font-size: 14.5px;
     font-weight: 560;
     color: var(--text-0);
-  }
-  .qdd {
-    position: relative;
-    flex-shrink: 0;
-  }
-  .qdd-trigger {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    min-width: 118px;
-    height: 34px;
-    padding: 0 12px;
-    font-size: 13px;
-    color: var(--text-0);
-    background: var(--bg-0);
-    border: 1px solid var(--line);
-    border-radius: var(--r-sm);
-    cursor: pointer;
-    text-align: left;
-    transition: border-color 0.14s ease;
-  }
-  .qdd-trigger:hover,
-  .qdd.open .qdd-trigger {
-    border-color: var(--line-strong);
-  }
-  .qdd-value {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .qdd-chev {
-    display: inline-flex;
-    color: var(--text-3);
-    flex-shrink: 0;
-    transition: transform 0.15s ease;
-  }
-  .qdd.open .qdd-chev {
-    transform: rotate(180deg);
-  }
-  .qdd-list {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    right: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    padding: 5px;
-    background: var(--surface);
-    border: 1px solid var(--line-strong);
-    border-radius: 8px;
-    box-shadow: var(--shadow-pop);
-    z-index: 70;
-  }
-  .qdd-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 8px 10px;
-    font-size: 12.5px;
-    border-radius: 6px;
-    color: var(--text-1);
-    text-align: left;
-    white-space: nowrap;
-    transition: background 0.12s ease, color 0.12s ease;
-  }
-  .qdd-item:hover {
-    background: var(--bg-3);
-    color: var(--text-0);
-  }
-  .qdd-item.on {
-    color: var(--bright);
-  }
-  .qdd-item .qdd-check {
-    opacity: 0;
-    flex-shrink: 0;
-    color: var(--bright);
-  }
-  .qdd-item.on .qdd-check {
-    opacity: 1;
   }
   .qest {
     display: flex;

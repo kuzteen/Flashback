@@ -36,15 +36,3 @@ export function confirmDeletePlaylist(name: string): Promise<boolean> {
     confirmLabel: t('confirm.delete')
   });
 }
-
-export function confirmDelete(count: number, name?: string): Promise<boolean> {
-  return ask({
-    title: t('confirm.deleteTitle'),
-    message:
-      count === 1 && name
-        ? t('confirm.deleteOne', { name })
-        : t('confirm.deleteMany', { n: String(count) }),
-    hint: t('confirm.deleteHint'),
-    confirmLabel: t('confirm.delete')
-  });
-}
