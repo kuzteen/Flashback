@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ValueInput from './ValueInput.svelte';
   import MorphTip from '../MorphTip.svelte';
   import { TipGroup } from '$lib/morph-tip.svelte';
   import { pill } from '$lib/pill';
@@ -26,6 +27,19 @@
     const next: OutputFormat = { kind: 'vertical', fill: 'custom', zoom: z };
     if (sliding) preview({ ...editorState.edit, format: next });
     else commit({ ...editorState.edit, format: next });
+  }
+
+  // Zoom escrito a mano (clic derecho en el porcentaje o en el deslizador).
+  let editingZoom = $state(false);
+
+  function editZoom(e: MouseEvent) {
+    e.preventDefault();
+    editingZoom = true;
+  }
+
+  function typedZoom(v: number | null) {
+    editingZoom = false;
+    if (v !== null && v !== Math.round(customZoom * 100)) setZoom(v / 100);
   }
 
   function startSlide() {
@@ -121,8 +135,15 @@
               onpointerup={endSlide}
               onpointercancel={endSlide}
               oninput={(e) => setZoom(Number(e.currentTarget.value) / 100)}
+              oncontextmenu={editZoom}
             />
-            <span class="zv mono">{Math.round(customZoom * 100)}%</span>
+            <span class="val">
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <span class="zv mono" class:hidden={editingZoom} oncontextmenu={editZoom}>{Math.round(customZoom * 100)}%</span>
+              {#if editingZoom}
+                <ValueInput value={Math.round(customZoom * 100)} min={0} max={ZOOM_MAX * 100} label={t('ed.zoom')} ondone={typedZoom} />
+              {/if}
+            </span>
           </label>
         {/if}
         <p class="note">{t('ed.frameHint')}</p>
@@ -319,6 +340,14 @@
     font-size: 11.5px;
     text-align: right;
     color: var(--text-1);
+  }
+  .val {
+    position: relative;
+    display: inline-flex;
+    justify-content: flex-end;
+  }
+  .zv.hidden {
+    visibility: hidden;
   }
   .note {
     font-size: 12px;

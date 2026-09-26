@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from '../Icon.svelte';
+  import ValueInput from './ValueInput.svelte';
   import { beginGesture, commit, editorState, endGesture, preview } from '$lib/editor-state.svelte';
   import { segLen, type MixerState } from '$lib/edit-model';
   import { t } from '$lib/i18n.svelte';
@@ -64,6 +65,19 @@
     if (!dragging) return;
     dragging = false;
     endGesture();
+  }
+
+  // Volumen escrito a mano (clic derecho en el porcentaje o en el tirador).
+  let editing = $state(false);
+
+  function editVolume(e: MouseEvent) {
+    e.preventDefault();
+    editing = true;
+  }
+
+  function typedVolume(v: number | null) {
+    editing = false;
+    if (v !== null && v !== Math.round(vol * 100)) commit(withMixer(volPatch(v / 100)));
   }
 
   function onRailKey(e: KeyboardEvent) {
@@ -161,7 +175,15 @@
         <Icon name={icon} size={17} />
       </button>
       <span class="name">{label}</span>
-      <span class="pct mono" class:active={dragging || hovering}>{Math.round(vol * 100)}%</span>
+      <span class="val">
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <span class="pct mono" class:active={dragging || hovering} class:hidden={editing} oncontextmenu={editVolume}
+          >{Math.round(vol * 100)}%</span
+        >
+        {#if editing}
+          <ValueInput value={Math.round(vol * 100)} min={0} max={100} label={label} center width={40} ondone={typedVolume} />
+        {/if}
+      </span>
       <div
           class="rail"
           bind:this={rail}
@@ -179,6 +201,7 @@
           onpointerenter={() => (hovering = true)}
           onpointerleave={() => (hovering = false)}
           onkeydown={onRailKey}
+          oncontextmenu={editVolume}
         >
         <div class="bar"><div class="fill"></div></div>
         <div class="thumb"></div>
@@ -266,6 +289,14 @@
   .pct.active {
     color: var(--text-1);
   }
+  .val {
+    position: relative;
+    justify-self: center;
+    display: inline-flex;
+  }
+  .pct.hidden {
+    visibility: hidden;
+  }
   .rail {
     position: relative;
     /* Más alta que su fila (16 px) a propósito: solo crece la zona de clic, la barra no cambia. */
@@ -279,7 +310,7 @@
     left: 0;
     right: 0;
     top: 50%;
-    height: 4px;
+    height: 6px;
     transform: translateY(-50%);
     border-radius: 999px;
     background: var(--bg-3);
@@ -297,9 +328,9 @@
     position: absolute;
     top: 50%;
     left: calc(var(--v) * 100%);
-    width: 16px;
-    height: 10px;
-    border-radius: 3px;
+    width: 20px;
+    height: 14px;
+    border-radius: 4px;
     background: var(--text-0);
     transform: translate(-50%, -50%);
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
@@ -309,7 +340,7 @@
     position: absolute;
     top: 50%;
     left: 50%;
-    width: 8px;
+    width: 10px;
     height: 2px;
     border-radius: 1px;
     background: var(--bg-3);

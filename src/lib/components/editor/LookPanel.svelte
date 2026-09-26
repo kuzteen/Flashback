@@ -2,6 +2,7 @@
   import MorphTip from '../MorphTip.svelte';
   import { TipGroup } from '$lib/morph-tip.svelte';
   import Icon from '../Icon.svelte';
+  import ValueInput from './ValueInput.svelte';
   import { beginGesture, commit, editorState, endGesture, preview } from '$lib/editor-state.svelte';
   import { NEUTRAL_LOOK, isNeutral, type Look } from '$lib/look';
   import { t } from '$lib/i18n.svelte';
@@ -42,6 +43,19 @@
     endGesture();
   }
 
+  // Fila cuyo valor se está escribiendo a mano (clic derecho en el número o en el deslizador).
+  let editing = $state<keyof Look | null>(null);
+
+  function editValue(e: MouseEvent, key: keyof Look) {
+    e.preventDefault();
+    editing = key;
+  }
+
+  function typed(key: keyof Look, v: number | null) {
+    editing = null;
+    if (v !== null && v !== Math.round(look[key] * 100)) commit(withLook({ [key]: v / 100 }));
+  }
+
   function reset(key: keyof Look) {
     if (look[key] !== 0) commit(withLook({ [key]: 0 }));
   }
@@ -80,7 +94,15 @@
         {@const v = Math.round(look[r.key] * 100)}
         <label class="row">
           <span class="rl">{t(r.label)}</span>
-          <span class="rv mono" class:set={v !== 0}>{v}</span>
+          <span class="val">
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <span class="rv mono" class:set={v !== 0} class:hidden={editing === r.key} oncontextmenu={(e) => editValue(e, r.key)}
+              >{v}</span
+            >
+            {#if editing === r.key}
+              <ValueInput value={v} min={r.min} max={100} label={t(r.label)} ondone={(n) => typed(r.key, n)} />
+            {/if}
+          </span>
           <input
             class="fader"
             type="range"
@@ -93,6 +115,7 @@
             onpointercancel={endSlide}
             oninput={(e) => set(r.key, Number(e.currentTarget.value))}
             ondblclick={() => reset(r.key)}
+            oncontextmenu={(e) => editValue(e, r.key)}
           />
         </label>
       {/each}
@@ -230,6 +253,14 @@
   }
   .rv.set {
     color: var(--text-0);
+  }
+  .val {
+    position: relative;
+    display: inline-flex;
+    justify-content: flex-end;
+  }
+  .rv.hidden {
+    visibility: hidden;
   }
   .row .fader {
     grid-column: 1 / -1;
