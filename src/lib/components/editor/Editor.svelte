@@ -44,9 +44,7 @@
     if (ui.fs) ui.showFsCtrl();
   });
 
-  // Mientras exporta, el resultado va ligado a este clip: no se cierra hasta que acabe o se cancele.
   async function close() {
-    if (editorState.exporting) return;
     playback.pause();
     if (ui.fs) await ui.setFs(false);
     await persistEdit();

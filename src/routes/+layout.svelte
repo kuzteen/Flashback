@@ -19,6 +19,7 @@
   import ShareDialog from '$lib/components/ShareDialog.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import Stepper from '$lib/components/Stepper.svelte';
+  import ExportToast from '$lib/components/ExportToast.svelte';
   import PlaylistDialog from '$lib/components/PlaylistDialog.svelte';
   import ClipEditDialog from '$lib/components/ClipEditDialog.svelte';
   import { editorState, closeEditor } from '$lib/editor-state.svelte';
@@ -871,6 +872,7 @@
 {/if}
 
 <ShareDialog />
+<ExportToast />
 <ConfirmDialog />
 <PlaylistDialog />
 <ClipEditDialog />

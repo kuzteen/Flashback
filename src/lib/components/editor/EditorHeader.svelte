@@ -43,7 +43,7 @@
       data-tip={t('ed.prevClip')}
       data-tip-pos="below"
       data-tip-align="start"
-      disabled={!hasPrev || editorState.exporting}
+      disabled={!hasPrev}
       onclick={() => navigateClip(-1)}
     >
       <Icon name="arrow-left" size={18} />
@@ -53,7 +53,7 @@
       aria-label={t('ed.nextClip')}
       data-tip={t('ed.nextClip')}
       data-tip-pos="below"
-      disabled={!hasNext || editorState.exporting}
+      disabled={!hasNext}
       onclick={() => navigateClip(1)}
     >
       <Icon name="arrow-right" size={18} />
@@ -99,7 +99,6 @@
       data-tip={t('ed.closeEditor')}
       data-tip-pos="below"
       data-tip-align="end"
-      disabled={editorState.exporting}
       onclick={onclose}
     >
       <Icon name="close-fill" size={16} />
