@@ -3,8 +3,13 @@ pub fn drag(_hwnd: isize, _path: &str, _thumb: Option<&str>) -> Result<bool, Str
     Err("El arrastre solo está disponible en Windows".into())
 }
 
+#[cfg(not(target_os = "windows"))]
+pub fn copy(_path: &str) -> Result<(), String> {
+    Err("Copiar archivos solo está disponible en Windows".into())
+}
+
 #[cfg(target_os = "windows")]
-pub use win::drag;
+pub use win::{copy, drag};
 
 // Arrastre OLE de un archivo hacia otra aplicación. WebView2 no puede sacar un archivo real de la
 // ventana: el drag-and-drop de HTML no produce CF_HDROP, que es lo que Discord o el Explorador
@@ -26,7 +31,8 @@ mod win {
         CoCreateInstance, IBindCtx, IDataObject, CLSCTX_INPROC_SERVER,
     };
     use windows::Win32::System::Ole::{
-        OleInitialize, OleUninitialize, IDropSource, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK,
+        OleFlushClipboard, OleInitialize, OleSetClipboard, OleUninitialize, IDropSource, DROPEFFECT,
+        DROPEFFECT_COPY, DROPEFFECT_LINK,
     };
     use windows::Win32::UI::Shell::{
         CLSID_DragDropHelper, IDragSourceHelper, IShellItem, SHCreateItemFromParsingName,
@@ -148,6 +154,28 @@ mod win {
         }
     }
 
+    unsafe fn shell_data(path: &str) -> Result<IDataObject, String> {
+        let no_bind: Option<&IBindCtx> = None;
+        let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(path), no_bind)
+            .map_err(|e| format!("No se pudo abrir el archivo: {e:?}"))?;
+        item.BindToHandler(no_bind, &BHID_DataObject)
+            .map_err(|e| format!("No se pudo preparar el archivo: {e:?}"))
+    }
+
+    // Lo mismo que Copiar en el Explorador: al pegar en Discord o en una carpeta llega el vídeo, no
+    // su ruta. El flush deja el contenido en el portapapeles aunque Flashback se cierre después.
+    pub fn copy(path: &str) -> Result<(), String> {
+        unsafe {
+            OleInitialize(None)
+                .map_err(|e| format!("El hilo de UI no admite OLE: {e:?}"))?;
+            let _scope = OleScope;
+            let data = shell_data(path)?;
+            OleSetClipboard(&data).map_err(|e| format!("No se pudo copiar: {e:?}"))?;
+            OleFlushClipboard().map_err(|e| format!("No se pudo copiar: {e:?}"))?;
+            Ok(())
+        }
+    }
+
     pub fn drag(hwnd: isize, path: &str, thumb: Option<&str>) -> Result<bool, String> {
         unsafe {
             OleInitialize(None)
@@ -156,12 +184,7 @@ mod win {
 
             // El IDataObject lo genera el shell: trae CF_HDROP y el resto de formatos que espera el
             // Explorador, y SHDoDragDrop saca de ahí la miniatura para la imagen de arrastre.
-            let no_bind: Option<&IBindCtx> = None;
-            let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(path), no_bind)
-                .map_err(|e| format!("No se pudo abrir el archivo: {e:?}"))?;
-            let data: IDataObject = item
-                .BindToHandler(no_bind, &BHID_DataObject)
-                .map_err(|e| format!("No se pudo preparar el arrastre: {e:?}"))?;
+            let data = shell_data(path)?;
 
             if let Some(thumb) = thumb {
                 set_drag_image(&data, thumb);

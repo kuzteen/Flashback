@@ -306,6 +306,8 @@ const en: Record<string, string> = {
   'share.preparing': 'Preparing clip…',
   'share.noBlocks': 'There are no active blocks to share',
   'share.cancel': 'Cancel',
+  'share.copy': 'Copy to clipboard',
+  'share.copied': 'Copied',
 
   // Juegos
   'games.title': 'Detected games',
@@ -686,6 +688,8 @@ const es: Record<string, string> = {
   'share.preparing': 'Preparando clip…',
   'share.noBlocks': 'No hay bloques activos para compartir',
   'share.cancel': 'Cancelar',
+  'share.copy': 'Copiar al portapapeles',
+  'share.copied': 'Copiado',
 
   'games.title': 'Juegos detectados',
   'games.now': 'Ahora mismo',

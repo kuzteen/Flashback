@@ -431,6 +431,20 @@ async fn start_file_drag(
     rx.await.map_err(|e| e.to_string())?
 }
 
+// En el hilo principal por lo mismo que el arrastre: el portapapeles OLE necesita un hilo STA.
+#[tauri::command]
+async fn copy_file_to_clipboard(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    if !std::path::Path::new(&path).is_file() {
+        return Err("El archivo ya no existe".into());
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(dragdrop::copy(&path));
+    })
+    .map_err(|e| e.to_string())?;
+    rx.await.map_err(|e| e.to_string())?
+}
+
 // Ruta de la miniatura cacheada de un clip. La comparten el comando que la genera y el arrastre,
 // que la reutiliza como imagen bajo el cursor: si los dos no derivan el nombre igual, el arrastre
 // se quedaría sin imagen aunque la miniatura ya exista. Tamaño y fecha entran en el nombre: un
@@ -1018,6 +1032,7 @@ pub fn run() {
             clear_clip_cover,
             export_cancel,
             start_file_drag,
+            copy_file_to_clipboard,
             get_watermark,
             set_watermark,
             get_watermark_corner,

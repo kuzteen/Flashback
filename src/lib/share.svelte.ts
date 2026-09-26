@@ -234,3 +234,21 @@ export async function startDrag(): Promise<boolean> {
     shareState.dragging = false;
   }
 }
+
+// Copia el archivo ya preparado para el tamaño elegido, como Copiar en el Explorador: pegar con
+// Ctrl+V en un chat envía el vídeo. Si aún se está preparando, espera a que termine.
+export async function copyShare(): Promise<boolean> {
+  const clip = shareState.clip;
+  if (!clip) return false;
+  shareState.error = null;
+  try {
+    const path = await track(clip, shareState.preset);
+    if (!path || shareState.clip !== clip) return false;
+    await invoke('copy_file_to_clipboard', { path });
+    return true;
+  } catch (e) {
+    shareState.error = String(e);
+    console.error('share copy', e);
+    return false;
+  }
+}

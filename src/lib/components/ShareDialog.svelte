@@ -7,6 +7,7 @@
     closeShare,
     selectPreset,
     startDrag,
+    copyShare,
     presetDisabled,
     SIZE_PRESETS
   } from '$lib/share.svelte';
@@ -17,6 +18,27 @@
 
   const clip = $derived(shareState.clip);
   const sizeTips = new TipGroup('top');
+
+  // El botón pasa de "Copiar al portapapeles" a "Copiado" y vuelve solo. El ancho de las palabras
+  // se mide para que el botón se estreche o ensanche con el texto en vez de saltar.
+  let copied = $state(false);
+  let copyTimer: ReturnType<typeof setTimeout> | undefined;
+  let copyW = $state(0);
+  let copiedW = $state(0);
+
+  async function onCopy() {
+    if (!(await copyShare())) return;
+    copied = true;
+    clearTimeout(copyTimer);
+    copyTimer = setTimeout(() => (copied = false), 1800);
+  }
+
+  $effect(() => {
+    if (!clip) {
+      copied = false;
+      clearTimeout(copyTimer);
+    }
+  });
 
   let poster = $state<string | null>(null);
   let cardEl = $state<HTMLElement | null>(null);
@@ -160,6 +182,28 @@
         </div>
       </div>
 
+      <button
+        class="copy"
+        class:copied
+        aria-label={copied ? t('share.copied') : t('share.copy')}
+        disabled={shareState.preparing}
+        onclick={onCopy}
+      >
+        <span class="copy-icon" aria-hidden="true">
+          <svg class="ic ic-copy" viewBox="0 0 16 16">
+            <rect x="5.25" y="5.25" width="8.5" height="8.5" rx="1.75" />
+            <path d="M10.75 5.25V3.75a1.5 1.5 0 0 0-1.5-1.5h-5.5a1.5 1.5 0 0 0-1.5 1.5v5.5a1.5 1.5 0 0 0 1.5 1.5h1.5" />
+          </svg>
+          <svg class="ic ic-check" viewBox="0 0 16 16">
+            <path d="M3.5 8.25l3 3 6-6.5" />
+          </svg>
+        </span>
+        <span class="words" style:width={copyW ? `${copied ? copiedW : copyW}px` : undefined} aria-hidden="true">
+          <span class="word w-copy" bind:offsetWidth={copyW}>{t('share.copy')}</span>
+          <span class="word w-copied" bind:offsetWidth={copiedW}>{t('share.copied')}</span>
+        </span>
+      </button>
+
       {#if shareState.error}
         <p class="error">{shareState.error}</p>
       {/if}
@@ -182,7 +226,7 @@
     max-width: calc(100vw - 40px);
     display: flex;
     flex-direction: column;
-    padding: 18px 20px 20px;
+    padding: 18px 20px 16px;
     background: var(--bg-1);
     border: 1px solid var(--line-strong);
     border-radius: var(--r-md);
@@ -410,6 +454,91 @@
     border-color: var(--text-2);
   }
 
+  .copy {
+    --morph: cubic-bezier(0.23, 1, 0.32, 1);
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 36px;
+    margin-top: 14px;
+    padding: 0 14px 0 12px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-1);
+    background: var(--bg-0);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-sm);
+    transition: color 0.15s ease, background 0.15s ease, scale 0.15s ease;
+  }
+  .copy:hover:not(:disabled) {
+    color: var(--text-0);
+    background: var(--bg-2);
+  }
+  .copy:active:not(:disabled) {
+    scale: 0.96;
+  }
+  .copy:disabled {
+    opacity: 0.45;
+  }
+  .copy.copied {
+    color: var(--text-0);
+  }
+  .copy-icon {
+    display: grid;
+    width: 16px;
+    height: 16px;
+  }
+  .ic {
+    grid-area: 1 / 1;
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: opacity 0.2s var(--morph), scale 0.2s var(--morph), filter 0.2s var(--morph);
+  }
+  .ic-check {
+    stroke-width: 1.7;
+  }
+  .ic-check,
+  .copied .ic-copy {
+    opacity: 0;
+    scale: 0.25;
+    filter: blur(4px);
+  }
+  .copied .ic-check {
+    opacity: 1;
+    scale: 1;
+    filter: blur(0);
+  }
+  /* Las dos etiquetas ocupan la misma celda; el ancho visible viaja de una a otra. */
+  .words {
+    display: grid;
+    overflow: hidden;
+    transition: width 0.4s var(--morph);
+  }
+  .word {
+    grid-area: 1 / 1;
+    width: max-content;
+    white-space: nowrap;
+    transition: opacity 0.2s var(--morph) 0.06s, filter 0.2s var(--morph) 0.06s;
+  }
+  .w-copied,
+  .copied .w-copy {
+    opacity: 0;
+    filter: blur(4px);
+    transition-duration: 0.1s;
+    transition-delay: 0s;
+  }
+  .copied .w-copied {
+    opacity: 1;
+    filter: blur(0);
+    transition-duration: 0.2s;
+    transition-delay: 0.06s;
+  }
   .error {
     margin-top: 12px;
     font-size: 12px;
