@@ -183,3 +183,87 @@ fn media_foundation_honours_the_audio_delay() {
     let _ = std::fs::remove_file(&path);
     assert!((r.first_audio - 1_000_000).abs() < 100_000, "primer audio en {}", r.first_audio);
 }
+
+// Tiempos (100 ns) de cada fotograma y de los keyframes tal y como los lista Media Foundation.
+fn mf_video_times(path: &std::path::Path) -> (Vec<i64>, Vec<i64>) {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        MFStartup(MF_VERSION, MFSTARTUP_FULL).unwrap();
+        let reader = MFCreateSourceReaderFromURL(&HSTRING::from(path.as_os_str()), None).unwrap();
+        let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
+        reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false).unwrap();
+        reader.SetStreamSelection(stream, true).unwrap();
+        let (mut frames, mut keys) = (Vec::new(), Vec::new());
+        loop {
+            let mut flags = 0u32;
+            let mut time = 0i64;
+            let mut sample: Option<IMFSample> = None;
+            reader.ReadSample(stream, 0, None, Some(&mut flags), Some(&mut time), Some(&mut sample)).unwrap();
+            if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+                break;
+            }
+            if let Some(s) = sample {
+                frames.push(time);
+                if s.GetUINT32(&MFSampleExtension_CleanPoint).unwrap_or(0) != 0 {
+                    keys.push(time);
+                }
+            }
+        }
+        (frames, keys)
+    }
+}
+
+fn assert_index_matches_media_foundation(path: &PathBuf) {
+    let ix = crate::mp4index::Mp4::open(path).and_then(|m| m.video()).expect("índice del moov");
+    let (frames, keys) = mf_video_times(path);
+    let _ = std::fs::remove_file(path);
+    assert_eq!(ix.frames.len(), 30);
+    assert_eq!(ix.frames, frames);
+    assert_eq!(ix.keyframes, keys);
+}
+
+#[test]
+fn the_video_index_matches_media_foundation() {
+    let mut m = media(0);
+    let path = temp("index_progressive");
+    write_progressive(&m, &path);
+    assert_index_matches_media_foundation(&path);
+
+    // Vídeo que empieza tarde: la edit list lo coloca en su sitio y el índice debe respetarlo.
+    for v in &mut m.video {
+        v.1 += 500_000;
+    }
+    let path = temp("index_hybrid");
+    let mut h = hybrid(&m, &path);
+    h.finish().unwrap();
+    drop(h);
+    assert_index_matches_media_foundation(&path);
+}
+
+#[test]
+fn an_unfinished_recording_has_no_video_index() {
+    let m = media(0);
+    let path = temp("index_crash");
+    drop(hybrid(&m, &path));
+    let ix = crate::mp4index::Mp4::open(&path).and_then(|m| m.video());
+    let _ = std::fs::remove_file(&path);
+    assert!(ix.is_none());
+}
+
+// Vídeo + dos pistas AAC en el orden en que las escribe la captura (sistema y luego micro), cada una
+// desde su instante.
+pub(crate) fn two_audio_tracks(name: &str, sys_from: i64, mic_from: i64) -> PathBuf {
+    let sys = media(sys_from);
+    let mic = media(mic_from);
+    let mut t = tracks(&sys);
+    t.push(tracks(&mic).remove(1));
+    let v = sys.video.iter().map(|(d, t, k)| Packet { data: d, time: *t, dur: FRAME, key: *k }).collect();
+    let path = temp(name);
+    let mut w = BufWriter::new(std::fs::File::create(&path).unwrap());
+    progressive::write(&mut w, &t, &[v, audio_packets(&sys), audio_packets(&mic)]).unwrap();
+    path
+}
+
+fn audio_packets(m: &Media) -> Vec<Packet<'_>> {
+    m.audio.iter().map(|(d, t)| Packet { data: d, time: *t, dur: AAC, key: true }).collect()
+}

@@ -211,7 +211,9 @@ mod win {
     use windows::Win32::Graphics::Dxgi::IDXGISurface;
     use windows::Win32::Media::MediaFoundation::*;
     use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
-    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+    };
 
     use super::{ClipAudio, ClipEdit};
 
@@ -297,10 +299,9 @@ mod win {
             crate::cache::touch(&mic);
             (peaks_from_wav(&sys), peaks_from_wav(&mic))
         } else {
-            let (sys_pcm, sr, sc) = read_pcm(path, 1).map_err(mf)?;
+            let ((sys_pcm, sr, sc), (mic_pcm, mr, mc)) = read_pcm_pair(path).map_err(mf)?;
             write_wav(&sys, &sys_pcm, sr, sc).map_err(io)?;
             let sp = peaks_from_pcm(&sys_pcm, sc);
-            let (mic_pcm, mr, mc) = read_pcm(path, 0).map_err(mf)?;
             write_wav(&mic, &mic_pcm, mr, mc).map_err(io)?;
             let mp = peaks_from_pcm(&mic_pcm, mc);
             (Some(sp), Some(mp))
@@ -363,73 +364,262 @@ mod win {
         None
     }
 
-    fn read_pcm(path: &str, ordinal: usize) -> Result<(Vec<u8>, u32, u16)> {
-        read_pcm_limited(path, ordinal, None)
+    type Pcm = (Vec<u8>, u32, u16);
+
+    fn read_pcm(path: &str, ordinal: usize) -> Result<Pcm> {
+        Ok(read_pcm_tracks(path, &[ordinal], None)?.remove(0))
+    }
+
+    // Pistas de sistema y micro de un clip de dos pistas, en ese orden.
+    fn read_pcm_pair(path: &str) -> Result<(Pcm, Pcm)> {
+        let mut v = read_pcm_tracks(path, &[1, 0], None)?;
+        let mic = v.pop().unwrap_or_default();
+        let sys = v.pop().unwrap_or_default();
+        Ok((sys, mic))
     }
 
     // Primeros `max_secs` de la primera pista de audio de cualquier archivo que decodifique Media
     // Foundation, como PCM de 16 bits. Deja de leer al llegar al límite: un archivo largo no se
     // decodifica entero para quedarse con su principio.
     pub fn decode_audio_head(path: String, max_secs: f64) -> std::result::Result<(Vec<u8>, u32, u16), String> {
-        with_mf(move || read_pcm_limited(&path, 0, Some(max_secs)).map_err(|e| e.message()))
+        with_mf(move || {
+            read_pcm_tracks(&path, &[0], Some(max_secs))
+                .map(|mut v| v.remove(0))
+                .map_err(|e| e.message())
+        })
     }
 
-    fn read_pcm_limited(path: &str, ordinal: usize, max_secs: Option<f64>) -> Result<(Vec<u8>, u32, u16)> {
-        let reader = open_reader(path)?;
-        unsafe { reader.SetStreamSelection(ALL_STREAMS, false)? };
+    // Pistas de audio (por ordinal) como PCM de 16 bits. El SourceReader del MP4 recorre el fichero
+    // entero aunque solo se pida audio (el vídeo va intercalado): ~0,9 s por pasada en un MP4 de
+    // 887 MB frente a unos milisegundos de decodificar el AAC, y esa espera retrasaba el arranque del
+    // editor. Así que en los MP4 que escribe Flashback se leen del disco solo las muestras de audio
+    // (las tablas del `moov` dicen dónde están) y se decodifican con el decodificador AAC de Windows
+    // —el mismo que usa el SourceReader, con los mismos instantes: el PCM sale idéntico—. El resto
+    // pasa por el SourceReader, todas las pistas en una sola pasada.
+    fn read_pcm_tracks(path: &str, ordinals: &[usize], max_secs: Option<f64>) -> Result<Vec<Pcm>> {
+        if let Some(v) = read_pcm_indexed(path, ordinals, max_secs) {
+            return Ok(v);
+        }
+        read_pcm_tracks_mf(path, ordinals, max_secs)
+    }
 
-        let idx = audio_stream_at(&reader, ordinal).ok_or_else(|| {
-            windows::core::Error::from(windows::core::HRESULT(0x80070002u32 as i32))
-        })?;
+    // Cada pista en su hilo: casi todo el coste es decodificar el AAC (~90 ms por pista en un clip
+    // de un minuto) y las pistas son independientes.
+    fn read_pcm_indexed(path: &str, ordinals: &[usize], max_secs: Option<f64>) -> Option<Vec<Pcm>> {
+        let tracks = crate::mp4index::Mp4::open(std::path::Path::new(path))?.audio()?;
+        let wanted = ordinals.iter().map(|&o| tracks.get(o)?.as_ref()).collect::<Option<Vec<_>>>()?;
+        std::thread::scope(|s| {
+            let jobs: Vec<_> = wanted
+                .into_iter()
+                .map(|t| {
+                    s.spawn(move || {
+                        unsafe { let _ = CoInitializeEx(None, COINIT_MULTITHREADED); }
+                        let r = std::fs::File::open(path).ok().and_then(|mut f| decode_aac(&mut f, t, max_secs).ok());
+                        unsafe { CoUninitialize(); }
+                        r
+                    })
+                })
+                .collect();
+            jobs.into_iter().map(|j| j.join().ok().flatten()).collect()
+        })
+    }
 
-        unsafe { reader.SetStreamSelection(idx, true)? };
+    fn decode_aac(file: &mut std::fs::File, t: &crate::mp4index::AudioTrack, max_secs: Option<f64>) -> Result<Pcm> {
+        use std::io::{Read, Seek, SeekFrom};
+        let fail = || windows::core::Error::from(E_FAIL);
 
-        let pcm_type = unsafe { MFCreateMediaType()? };
-        unsafe { pcm_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)? };
-        unsafe { pcm_type.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)? };
-        unsafe { reader.SetCurrentMediaType(idx, None, &pcm_type)? };
-
-        let actual = unsafe { reader.GetCurrentMediaType(idx)? };
-        let sr = unsafe { actual.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND) }.unwrap_or(48000);
-        let ch = unsafe { actual.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS) }.unwrap_or(2) as u16;
+        let mft: IMFTransform = unsafe { CoCreateInstance(&CLSID_MSAACDecMFT, None, CLSCTX_INPROC_SERVER)? };
+        let in_type = unsafe { MFCreateMediaType()? };
+        unsafe {
+            in_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
+            in_type.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_AAC)?;
+            in_type.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, t.sample_rate)?;
+            in_type.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, t.channels as u32)?;
+            in_type.SetUINT32(&MF_MT_AAC_PAYLOAD_TYPE, 0)?;
+            in_type.SetBlob(&MF_MT_USER_DATA, &t.user_data)?;
+            mft.SetInputType(0, &in_type, 0)?;
+        }
+        let mut i = 0;
+        let out_type = loop {
+            let mt = unsafe { mft.GetOutputAvailableType(0, i)? };
+            i += 1;
+            let pcm = unsafe { mt.GetGUID(&MF_MT_SUBTYPE) }.is_ok_and(|g| g == MFAudioFormat_PCM);
+            if pcm && unsafe { mt.GetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE) }.unwrap_or(0) == 16 {
+                break mt;
+            }
+        };
+        unsafe { mft.SetOutputType(0, &out_type, 0)? };
+        let sr = unsafe { out_type.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND) }.unwrap_or(t.sample_rate);
+        let ch = unsafe { out_type.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS) }.unwrap_or(t.channels as u32) as u16;
         let frame_bytes = (ch.max(1) as usize) * 2;
         let limit = max_secs.map(|s| (s * sr as f64).round() as usize * frame_bytes);
 
-        let mut pcm = Vec::new();
-        loop {
-            if limit.is_some_and(|l| pcm.len() >= l) {
-                break;
+        let info = unsafe { mft.GetOutputStreamInfo(0)? };
+        let provides = info.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32) != 0;
+        let out_size = info.cbSize.max(8192);
+        let drain = |pcm: &mut Vec<u8>| -> Result<()> {
+            loop {
+                let mut out = MFT_OUTPUT_DATA_BUFFER::default();
+                if !provides {
+                    let sample = unsafe { MFCreateSample()? };
+                    unsafe { sample.AddBuffer(&MFCreateMemoryBuffer(out_size)?)? };
+                    out.pSample = std::mem::ManuallyDrop::new(Some(sample));
+                }
+                let mut status = 0u32;
+                let hr = unsafe { mft.ProcessOutput(0, std::slice::from_mut(&mut out), &mut status) };
+                let sample = unsafe { std::mem::ManuallyDrop::take(&mut out.pSample) };
+                unsafe { std::mem::ManuallyDrop::drop(&mut out.pEvents) };
+                match hr {
+                    Ok(()) => {}
+                    Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => return Ok(()),
+                    Err(e) => return Err(e),
+                }
+                if let Some(sample) = sample {
+                    append_pcm(pcm, &sample, sr, frame_bytes)?;
+                }
             }
-            let mut flags = 0u32;
-            let mut sample: Option<IMFSample> = None;
-            unsafe { reader.ReadSample(idx, 0, None, Some(&mut flags), None, Some(&mut sample))? };
-            if flags & ENDOFSTREAM != 0 { break; }
-            let Some(sample) = sample else { continue };
-            // Alinear al origen de tiempo común (t=0). Si la pista arrancó tarde —el loopback de
-            // sistema de WASAPI no entrega paquetes mientras no hay sonido—, su primer sample llega
-            // con timestamp > 0 y el muxer dejó ese hueco en el MP4. Rellenamos con silencio hasta
-            // su posición real para que sistema y micro queden sincronizados entre sí y con el
-            // vídeo; concatenar sin más comprimía el hueco y desfasaba la pista varios segundos.
-            let t = unsafe { sample.GetSampleTime() }.unwrap_or(0).max(0);
-            let expected = (t as f64 / 10_000_000.0 * sr as f64).round() as usize * frame_bytes;
-            if pcm.len() < expected {
-                pcm.resize(expected, 0);
-            }
-            let buf = unsafe { sample.ConvertToContiguousBuffer()? };
-            let mut ptr: *mut u8 = std::ptr::null_mut();
-            let mut cur = 0u32;
-            unsafe { buf.Lock(&mut ptr, None, Some(&mut cur))? };
-            if cur > 0 {
-                let slice = unsafe { std::slice::from_raw_parts(ptr, cur as usize) };
-                pcm.extend_from_slice(slice);
-            }
-            unsafe { buf.Unlock()? };
-        }
+        };
 
+        unsafe { mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)? };
+        let times: Vec<i64> = t.chunks.iter().flat_map(|(_, _, ts)| ts.iter().copied()).collect();
+        let last_dur = 1024 * 10_000_000 / t.sample_rate.max(1) as i64;
+        let mut pcm = Vec::new();
+        let mut n = 0usize;
+        let mut chunk = Vec::new();
+        'read: for (offset, sizes, _) in &t.chunks {
+            chunk.resize(sizes.iter().map(|s| *s as usize).sum(), 0);
+            file.seek(SeekFrom::Start(*offset)).map_err(|_| fail())?;
+            file.read_exact(&mut chunk).map_err(|_| fail())?;
+            let mut at = 0usize;
+            for size in sizes {
+                if limit.is_some_and(|l| pcm.len() >= l) {
+                    break 'read;
+                }
+                let data = &chunk[at..at + *size as usize];
+                at += *size as usize;
+                let time = times[n];
+                let dur = times.get(n + 1).map_or(last_dur, |next| next - time);
+                n += 1;
+                let sample = unsafe { MFCreateSample()? };
+                let buf = unsafe { MFCreateMemoryBuffer(data.len() as u32)? };
+                let mut ptr: *mut u8 = std::ptr::null_mut();
+                unsafe {
+                    buf.Lock(&mut ptr, None, None)?;
+                    std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
+                    buf.Unlock()?;
+                    buf.SetCurrentLength(data.len() as u32)?;
+                    sample.AddBuffer(&buf)?;
+                    sample.SetSampleTime(time)?;
+                    sample.SetSampleDuration(dur)?;
+                }
+                loop {
+                    match unsafe { mft.ProcessInput(0, &sample, 0) } {
+                        Ok(()) => break,
+                        Err(e) if e.code() == MF_E_NOTACCEPTING => drain(&mut pcm)?,
+                        Err(e) => return Err(e),
+                    }
+                }
+                drain(&mut pcm)?;
+            }
+        }
+        unsafe {
+            mft.ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0)?;
+            mft.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)?;
+        }
+        drain(&mut pcm)?;
         if let Some(l) = limit {
             pcm.truncate(l);
         }
         Ok((pcm, sr, ch))
+    }
+
+    // Alinea cada bloque al origen de tiempo común (t=0). Si la pista arrancó tarde —el loopback de
+    // sistema de WASAPI no entrega paquetes mientras no hay sonido—, su primer sample llega con
+    // timestamp > 0 y el muxer dejó ese hueco en el MP4. Se rellena con silencio hasta su posición
+    // real para que sistema y micro queden sincronizados entre sí y con el vídeo; concatenar sin
+    // más comprimía el hueco y desfasaba la pista varios segundos.
+    fn append_pcm(pcm: &mut Vec<u8>, sample: &IMFSample, sr: u32, frame_bytes: usize) -> Result<()> {
+        let ts = unsafe { sample.GetSampleTime() }.unwrap_or(0).max(0);
+        let expected = (ts as f64 / 10_000_000.0 * sr as f64).round() as usize * frame_bytes;
+        if pcm.len() < expected {
+            pcm.resize(expected, 0);
+        }
+        let buf = unsafe { sample.ConvertToContiguousBuffer()? };
+        let mut ptr: *mut u8 = std::ptr::null_mut();
+        let mut cur = 0u32;
+        unsafe { buf.Lock(&mut ptr, None, Some(&mut cur))? };
+        if cur > 0 {
+            pcm.extend_from_slice(unsafe { std::slice::from_raw_parts(ptr, cur as usize) });
+        }
+        unsafe { buf.Unlock() }
+    }
+
+    fn read_pcm_tracks_mf(path: &str, ordinals: &[usize], max_secs: Option<f64>) -> Result<Vec<Pcm>> {
+        struct Track {
+            idx: u32,
+            sr: u32,
+            frame_bytes: usize,
+            limit: Option<usize>,
+            pcm: Vec<u8>,
+            ch: u16,
+            done: bool,
+        }
+
+        let reader = open_reader(path)?;
+        unsafe { reader.SetStreamSelection(ALL_STREAMS, false)? };
+
+        let mut tracks = Vec::with_capacity(ordinals.len());
+        for &ordinal in ordinals {
+            let idx = audio_stream_at(&reader, ordinal).ok_or_else(|| {
+                windows::core::Error::from(windows::core::HRESULT(0x80070002u32 as i32))
+            })?;
+            unsafe { reader.SetStreamSelection(idx, true)? };
+
+            let pcm_type = unsafe { MFCreateMediaType()? };
+            unsafe { pcm_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)? };
+            unsafe { pcm_type.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)? };
+            unsafe { reader.SetCurrentMediaType(idx, None, &pcm_type)? };
+
+            let actual = unsafe { reader.GetCurrentMediaType(idx)? };
+            let sr = unsafe { actual.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND) }.unwrap_or(48000);
+            let ch = unsafe { actual.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS) }.unwrap_or(2) as u16;
+            let frame_bytes = (ch.max(1) as usize) * 2;
+            let limit = max_secs.map(|s| (s * sr as f64).round() as usize * frame_bytes);
+            tracks.push(Track { idx, sr, frame_bytes, limit, pcm: Vec::new(), ch, done: false });
+        }
+
+        while tracks.iter().any(|t| !t.done) {
+            let mut stream = 0u32;
+            let mut flags = 0u32;
+            let mut sample: Option<IMFSample> = None;
+            unsafe {
+                reader.ReadSample(ALL_STREAMS, 0, Some(&mut stream), Some(&mut flags), None, Some(&mut sample))?
+            };
+            let Some(t) = tracks.iter_mut().find(|t| t.idx == stream) else {
+                if flags & ENDOFSTREAM != 0 { break; }
+                continue;
+            };
+            if flags & ENDOFSTREAM != 0 {
+                t.done = true;
+                continue;
+            }
+            let Some(sample) = sample else { continue };
+            append_pcm(&mut t.pcm, &sample, t.sr, t.frame_bytes)?;
+            if t.limit.is_some_and(|l| t.pcm.len() >= l) {
+                t.done = true;
+                unsafe { reader.SetStreamSelection(t.idx, false)? };
+            }
+        }
+
+        Ok(tracks
+            .into_iter()
+            .map(|mut t| {
+                if let Some(l) = t.limit {
+                    t.pcm.truncate(l);
+                }
+                (t.pcm, t.sr, t.ch)
+            })
+            .collect())
     }
 
     fn write_wav(path: &str, pcm: &[u8], sample_rate: u32, channels: u16) -> std::io::Result<()> {
@@ -512,12 +702,10 @@ mod win {
 
     // Tiempos de presentación (ms) de TODOS los fotogramas de vídeo, ordenados. La captura WGC es de
     // framerate variable (frames solo cuando la pantalla cambia), así que para avanzar exactamente un
-    // fotograma hay que conocer sus timestamps reales en vez de asumir un paso fijo. Mismo coste que
-    // keyframe_times (una pasada de demux, sin decodificar).
-    // Sonda del clip: un ÚNICO recorrido del MP4 del que salen los tiempos de fotograma, los
-    // keyframes y si el orden de decodificación coincide con el de presentación. Sin
-    // SetCurrentMediaType el lector entrega el H.264 tal cual, así que esto es solo demux (no se
-    // decodifica nada) y cuesta lo que leer el fichero.
+    // fotograma hay que conocer sus timestamps reales en vez de asumir un paso fijo.
+    // Sonda del clip: tiempos de fotograma, keyframes y si el orden de decodificación coincide con
+    // el de presentación. En un MP4 cerrado salen de las tablas del `moov`; si no, de un recorrido
+    // de demux con Media Foundation (sin decodificar, pero leyendo el fichero entero).
     struct ClipProbe {
         frames: Vec<f64>,
         keyframes: Vec<f64>,
@@ -566,6 +754,14 @@ mod win {
     }
 
     fn scan_clip(path: &str) -> std::result::Result<ClipProbe, String> {
+        if let Some(ix) = crate::mp4index::Mp4::open(std::path::Path::new(path)).and_then(|m| m.video()) {
+            let ms = |v: Vec<i64>| v.into_iter().map(|t| t as f64 / 10_000.0).collect();
+            return Ok(ClipProbe { frames: ms(ix.frames), keyframes: ms(ix.keyframes), in_order: true });
+        }
+        scan_clip_mf(path)
+    }
+
+    fn scan_clip_mf(path: &str) -> std::result::Result<ClipProbe, String> {
         let mf = |e: windows::core::Error| format!("{e:?}");
         let reader = open_reader(path).map_err(mf)?;
         let idx = find_stream(&reader, MFMediaType_Video).map_err(mf)?;
@@ -1887,8 +2083,7 @@ mod win {
     }
 
     fn build_remixed_pcm(src: &str, edit: &ClipEdit) -> Result<(Vec<i16>, u32)> {
-        let (sys_raw, sr, sc) = read_pcm(src, 1)?;
-        let (mic_raw, mr, mc) = read_pcm(src, 0)?;
+        let ((sys_raw, sr, sc), (mic_raw, mr, mc)) = read_pcm_pair(src)?;
 
         let out_rate = remix_rate(sr, mr);
 
@@ -2234,6 +2429,26 @@ mod win {
             assert_eq!(remix_rate(44100, 48000), 44100);
             assert_eq!(remix_rate(32000, 48000), 48000);
             assert_eq!(remix_rate(32000, 22050), 48000);
+        }
+
+        // El camino que lee el audio de las tablas del `moov` debe dar exactamente lo mismo que el
+        // SourceReader, y con los mismos ordinales: de ellos depende qué pista es sistema y cuál micro.
+        #[test]
+        fn indexed_audio_matches_the_source_reader() {
+            let path = crate::mp4mux::mf_tests::two_audio_tracks("indexed_audio", 500_000, 0);
+            let p = path.to_string_lossy().into_owned();
+            let (fast, slow) = with_mf(move || {
+                let fast = read_pcm_indexed(&p, &[0, 1], None);
+                let slow = read_pcm_tracks_mf(&p, &[0, 1], None).map_err(|e| e.message())?;
+                Ok((fast, slow))
+            })
+            .unwrap();
+            let _ = std::fs::remove_file(&path);
+            let fast = fast.expect("el MP4 de mp4mux se lee por el índice");
+            assert_eq!(fast, slow);
+            let lead = |pcm: &[u8]| pcm.iter().position(|b| *b != 0).unwrap_or(pcm.len());
+            // Pista de sistema (la primera del archivo, que llega tarde): ordinal 1 en Media Foundation.
+            assert!(lead(&fast[1].0) > lead(&fast[0].0));
         }
 
     }

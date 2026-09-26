@@ -221,6 +221,8 @@ async function load(clip: Clip) {
     return;
   }
   const same = () => editorState.clip?.path === path;
+  const audio = invoke<ClipAudio>('prepare_clip_audio', { path });
+  audio.catch(() => {});
   const [frameTimes, fps, edit] = await Promise.all([
     invoke<number[]>('frame_times', { path }).catch(() => [] as number[]),
     invoke<number>('clip_fps', { path }).catch(() => 0),
@@ -232,7 +234,7 @@ async function load(clip: Clip) {
   saved = edit;
   settle();
   try {
-    const res = await invoke<ClipAudio>('prepare_clip_audio', { path });
+    const res = await audio;
     if (!same()) return;
     editorState.system = res.system ? convertFileSrc(res.system) : null;
     editorState.mic = res.mic ? convertFileSrc(res.mic) : null;
