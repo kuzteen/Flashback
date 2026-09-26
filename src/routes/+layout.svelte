@@ -787,7 +787,7 @@
             <span class="cap-group">{t('cap.screens')}</span>
 
             <div class="screen-grid" use:hoverPill={{ selector: '.screen-card', part: '.screen-thumb' }}>
-              {#each monitors as m (m.id)}
+              {#each monitors as m, i (m.id)}
                 <button
                   class="screen-card"
                   class:on={selectedMonitor === m.id}
@@ -800,6 +800,7 @@
                       <span class="screen-check"><Icon name="check" size={14} sw={2.4} /></span>
                     {/if}
                   </span>
+                  <span class="screen-name">{m.label ? displaySource(m.label) : `${t('cap.screen')} ${i + 1}`}</span>
                 </button>
               {/each}
             </div>
@@ -1249,8 +1250,21 @@
   }
   .screen-card {
     display: flex;
-    padding: 3px;
+    flex-direction: column;
+    gap: 7px;
+    padding: 3px 3px 2px;
     border-radius: 8px;
+  }
+  .screen-name {
+    font-size: 11.5px;
+    line-height: 1;
+    text-align: center;
+    color: var(--text-2);
+    transition: color 0.12s ease;
+  }
+  .screen-card:hover .screen-name,
+  .screen-card.on .screen-name {
+    color: var(--text-0);
   }
   .screen-thumb {
     position: relative;
