@@ -2,7 +2,7 @@
   import { untrack } from 'svelte';
   import { beginGesture, commit, editorState, endGesture, preview, setDuration } from '$lib/editor-state.svelte';
   import { outToSeg, setFraming } from '$lib/edit-model';
-  import { place, ZOOM_MAX, zoomOf } from '$lib/frame-math';
+  import { contextInset, place, ZOOM_MAX, zoomOf } from '$lib/frame-math';
   import { isNeutral, sharpenKernel, svgColorValues } from '$lib/look';
   import { t } from '$lib/i18n.svelte';
   import { formatTimecode } from '$lib/timeline-math';
@@ -136,6 +136,36 @@
 
   let frameEl = $state<HTMLDivElement | null>(null);
   let stageEl = $state<HTMLDivElement | null>(null);
+  let fitEl = $state<HTMLDivElement | null>(null);
+
+  // En vertical el vídeo atenuado alrededor del recuadro se corta al mismo margen por los dos lados
+  // (el hueco que deja el recuadro dentro del área útil del visor), no en el borde del visor.
+  let fitDims = $state({ room: 0, fw: 0 });
+  $effect(() => {
+    if (!vert || !fitEl || !frameEl) return;
+    const fit = fitEl;
+    const frame = frameEl;
+    const measure = () => {
+      const cs = getComputedStyle(fit);
+      const inner = fit.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      fitDims = { room: Math.max(0, (inner - frame.clientWidth) / 2), fw: frame.clientWidth };
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(fit);
+    ro.observe(frame);
+    return () => ro.disconnect();
+  });
+  const contextClip = $derived.by(() => {
+    if (!vert || fitDims.fw <= 0) return null;
+    const k = fitDims.fw / OW;
+    const i = contextInset(
+      { x: fg.x * k, y: fg.y * k, w: fg.w * k, h: fg.h * k },
+      { w: OW * k, h: OH * k },
+      fitDims.room
+    );
+    return `inset(${i.top}px ${i.right}px ${i.bottom}px ${i.left}px)`;
+  });
 
   // Zona donde se dibuja la línea (el vídeo, o el lienzo vertical) y caja del vídeo, las dos en
   // coordenadas del escenario. Se miden por fotograma mientras se compara (el vídeo cambia de
@@ -382,7 +412,7 @@
 
 <div class="stage" bind:this={stageEl}>
   {#if editorState.videoSrc}
-    <div class="fit" class:balance-l={ui.formatOpen && !ui.lookOpen} class:balance-r={ui.lookOpen && !ui.formatOpen}>
+    <div class="fit" bind:this={fitEl} class:balance-l={ui.formatOpen && !ui.lookOpen} class:balance-r={ui.lookOpen && !ui.formatOpen}>
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
       <div
         class="frame"
@@ -413,6 +443,7 @@
           style:top={vert ? `${(fg.y / OH) * 100}%` : null}
           style:width={vert ? `${(fg.w / OW) * 100}%` : null}
           style:height={vert ? `${(fg.h / OH) * 100}%` : null}
+          style:clip-path={contextClip}
           onloadedmetadata={onLoaded}
           onended={() => playback.pause()}
           onclick={vert ? undefined : () => playback.toggle()}
@@ -513,15 +544,15 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 18px 40px;
+    padding: 18px;
   }
   /* Con un solo panel abierto se reserva su ancho también en el lado contrario, para que el vídeo
      siga centrado en la ventana; con los dos abiertos ya se compensan solos. */
   .fit.balance-l {
-    padding-left: calc(40px + var(--format-w));
+    padding-left: calc(18px + var(--format-w));
   }
   .fit.balance-r {
-    padding-right: calc(40px + var(--format-w));
+    padding-right: calc(18px + var(--format-w));
   }
   /* Capa sobre el vídeo: solo la línea recibe el puntero, el resto deja pasar el clic de
      reproducir y el arrastre del encuadre. */

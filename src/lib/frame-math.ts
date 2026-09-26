@@ -30,3 +30,20 @@ function axis(size: number, canvas: number, pos: number): number {
   if (size > canvas) return Math.max(canvas - size, Math.min(0, canvas / 2 - p * size));
   return Math.max(0, Math.min(canvas - size, p * canvas - size / 2));
 }
+
+// Cuánto recortar por cada lado del vídeo que se ve atenuado alrededor del recuadro vertical: a lo
+// ancho llega hasta `room` px fuera del recuadro por los dos lados (el mismo margen que respeta el
+// vídeo sin encuadre) y a lo alto no pasa del recuadro. Sin esto, con un encuadre desplazado el
+// sobrante llegaba hasta el borde del visor por un lado y quedaba pegado al panel.
+export function contextInset(
+  video: Box,
+  frame: { w: number; h: number },
+  room: number
+): { top: number; right: number; bottom: number; left: number } {
+  return {
+    top: Math.max(0, -video.y),
+    right: Math.max(0, video.x + video.w - (frame.w + room)),
+    bottom: Math.max(0, video.y + video.h - frame.h),
+    left: Math.max(0, -room - video.x)
+  };
+}
