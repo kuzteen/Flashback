@@ -33,17 +33,8 @@
   import { shareState } from '$lib/share.svelte';
   import { confirmState } from '$lib/confirm.svelte';
   import { t } from '$lib/i18n.svelte';
-  import { cubicOut } from 'svelte/easing';
+  import { TOAST_IN, TOAST_OUT, toastSlide } from '$lib/toast-motion';
 
-  function selbarPop(_node: Element, { duration = 200 } = {}) {
-    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    return {
-      duration: reduce ? 0 : duration,
-      easing: cubicOut,
-      css: (t: number, u: number) =>
-        `opacity: ${t}; transform: translateX(-50%) translateY(${u * 18}px); will-change: transform, opacity;`
-    };
-  }
 
   const id = $derived(page.params.id ?? '');
   const playlist = $derived(playlists.loaded ? findPlaylist(id) : undefined);
@@ -336,8 +327,8 @@
     class="selbar"
     role="toolbar"
     aria-label={t('sel.bar')}
-    in:selbarPop={{ duration: 220 }}
-    out:selbarPop={{ duration: 140 }}
+    in:toastSlide={{ from: 1, duration: TOAST_IN }}
+    out:toastSlide={{ from: 1, duration: TOAST_OUT }}
   >
     <button
       class="selall"
@@ -362,8 +353,8 @@
   <div
     class="selbar undo"
     role="status"
-    in:selbarPop={{ duration: 220 }}
-    out:selbarPop={{ duration: 140 }}
+    in:toastSlide={{ from: 1, duration: TOAST_IN }}
+    out:toastSlide={{ from: 1, duration: TOAST_OUT }}
   >
     <svg class="countdown" viewBox="0 0 128 128" width="16" height="16" aria-hidden="true">
       {#each SPOKE_PATHS as d, k (k)}
@@ -520,13 +511,14 @@
     position: fixed;
     bottom: 22px;
     left: 50%;
-    transform: translateX(-50%);
+    translate: -50% 0;
     z-index: 40;
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 9px 10px 9px 11px;
-    border-radius: 12px;
+    height: 64px;
+    padding: 0 12px 0 16px;
+    border-radius: var(--r-lg);
     background: var(--bg-0);
     border: 1px solid var(--line-strong);
     box-shadow: var(--shadow-pop);

@@ -18,21 +18,8 @@
   import { removeFavorite } from '$lib/library.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { t } from '$lib/i18n.svelte';
-  import { cubicOut } from 'svelte/easing';
+  import { TOAST_IN, TOAST_OUT, toastSlide } from '$lib/toast-motion';
 
-  // La barra se centra con translateX(-50%), asi que la transicion tiene que reescribir el
-  // transform completo: si solo emitiera translateY, perderia el centrado a mitad de animacion.
-  // Sin scale a proposito: escalar obliga a rasterizar de nuevo el contenido en cada fotograma y
-  // el trazo del icono de la papelera bailaba. will-change va inline, solo mientras dura.
-  function selbarPop(_node: Element, { duration = 200 } = {}) {
-    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    return {
-      duration: reduce ? 0 : duration,
-      easing: cubicOut,
-      css: (t: number, u: number) =>
-        `opacity: ${t}; transform: translateX(-50%) translateY(${u * 18}px); will-change: transform, opacity;`
-    };
-  }
 
   let query = $state('');
   let filters = $state<Filter[]>([]);
@@ -198,8 +185,8 @@
     class="selbar"
     role="toolbar"
     aria-label={t('sel.bar')}
-    in:selbarPop={{ duration: 220 }}
-    out:selbarPop={{ duration: 140 }}
+    in:toastSlide={{ from: 1, duration: TOAST_IN }}
+    out:toastSlide={{ from: 1, duration: TOAST_OUT }}
   >
     <button
       class="selall"
@@ -292,13 +279,14 @@
     position: fixed;
     bottom: 22px;
     left: 50%;
-    transform: translateX(-50%);
+    translate: -50% 0;
     z-index: 40;
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 9px 10px 9px 11px;
-    border-radius: 12px;
+    height: 64px;
+    padding: 0 12px 0 16px;
+    border-radius: var(--r-lg);
     background: var(--bg-0);
     border: 1px solid var(--line-strong);
     box-shadow: var(--shadow-pop);
