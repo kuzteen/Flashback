@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Switch from '$lib/components/settings/Switch.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import Icon from '$lib/components/Icon.svelte';
   import { type SeenGame, gameSettings, loadDisabledGames, toggleGameDisabled, fetchSeenGames } from '$lib/games.svelte';
@@ -93,16 +94,11 @@
           </div>
           <div class="cap-toggle">
             <span class="cap-toggle-label">{t('games.capture')}</span>
-            <button
-              class="switch"
-              class:on={!gameSettings.isDisabled(currentGame.name)}
-              onclick={() => toggleGameDisabled(currentGame!.name)}
-              role="switch"
-              aria-checked={!gameSettings.isDisabled(currentGame.name)}
-              aria-label={t('games.captureAria', { name: currentGame.name })}
-            >
-              <span class="knob"></span>
-            </button>
+            <Switch
+              checked={!gameSettings.isDisabled(currentGame.name)}
+              onchange={() => toggleGameDisabled(currentGame!.name)}
+              label={t('games.captureAria', { name: currentGame.name })}
+            />
           </div>
         </div>
       </div>
@@ -133,16 +129,11 @@
             </div>
             <div class="cap-toggle">
               <span class="cap-toggle-label">{t('games.capture')}</span>
-              <button
-                class="switch"
-                class:on={!disabled}
-                onclick={() => toggleGameDisabled(g.name)}
-                role="switch"
-                aria-checked={!disabled}
-                aria-label={t('games.captureAria', { name: g.name })}
-              >
-                <span class="knob"></span>
-              </button>
+              <Switch
+                checked={!disabled}
+                onchange={() => toggleGameDisabled(g.name)}
+                label={t('games.captureAria', { name: g.name })}
+              />
             </div>
           </div>
         {/each}
@@ -296,32 +287,6 @@
     color: var(--text-2);
   }
 
-  .switch {
-    flex-shrink: 0;
-    width: 44px;
-    height: 25px;
-    border-radius: 999px;
-    background: var(--bg-3);
-    border: 1px solid var(--line);
-    padding: 2px;
-    transition: background 0.18s ease, border-color 0.18s ease;
-  }
-  .switch .knob {
-    display: block;
-    width: 19px;
-    height: 19px;
-    border-radius: 999px;
-    background: var(--text-2);
-    transition: transform 0.18s ease, background 0.18s ease;
-  }
-  .switch.on {
-    background: var(--accent);
-    border-color: transparent;
-  }
-  .switch.on .knob {
-    transform: translateX(19px);
-    background: var(--on-accent);
-  }
 
   .empty {
     display: flex;

@@ -20,6 +20,7 @@
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import Stepper from '$lib/components/Stepper.svelte';
   import MorphTip from '$lib/components/MorphTip.svelte';
+  import Switch from '$lib/components/settings/Switch.svelte';
   import ExportToast from '$lib/components/ExportToast.svelte';
   import { TipGroup } from '$lib/morph-tip.svelte';
   import { hoverPill, pill } from '$lib/pill';
@@ -86,6 +87,7 @@
   let micOn = $state(captureConfig.mic);
   let audioInputs = $state<AudioInput[]>([]);
   let micInput = $state(captureConfig.micDevice);
+  let micPressed = $state(false);
   let micDDOpen = $state(false);
   let settingsOpen = $state(false);
   let gearSpin = $state(false);
@@ -737,6 +739,9 @@
                 micOn = !micOn;
                 setMic(micOn);
               }}
+              onpointerdown={(e) => e.button === 0 && (micPressed = true)}
+              onpointerup={() => (micPressed = false)}
+              onpointerleave={() => (micPressed = false)}
             >
               <span class="opt-ico"><Icon name="mic" size={21} /></span>
               <span class="mic-label">
@@ -746,7 +751,7 @@
                   <span class="help-tip" role="tooltip">{t('cap.micTip')}</span>
                 </span>
               </span>
-              <span class="mic-switch"><span class="mic-knob"></span></span>
+              <Switch visual size="sm" checked={micOn} pressed={micPressed} label={t('cap.micCapture')} />
             </button>
 
             <div class="mic-input">
@@ -1486,32 +1491,6 @@
     opacity: 1;
   }
 
-  .mic-switch {
-    flex-shrink: 0;
-    width: 36px;
-    height: 20px;
-    border-radius: 999px;
-    background: var(--bg-3);
-    border: 1px solid var(--line);
-    padding: 2px;
-    transition: background 0.18s ease, border-color 0.18s ease;
-  }
-  .mic-knob {
-    display: block;
-    width: 14px;
-    height: 14px;
-    border-radius: 999px;
-    background: var(--text-2);
-    transition: transform 0.18s ease, background 0.18s ease;
-  }
-  .mic-opt.on .mic-switch {
-    background: var(--accent);
-    border-color: transparent;
-  }
-  .mic-opt.on .mic-knob {
-    transform: translateX(16px);
-    background: var(--on-accent);
-  }
 
   .quick {
     margin-left: auto;
