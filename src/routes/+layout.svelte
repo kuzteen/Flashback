@@ -19,7 +19,9 @@
   import ShareDialog from '$lib/components/ShareDialog.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import Stepper from '$lib/components/Stepper.svelte';
+  import MorphTip from '$lib/components/MorphTip.svelte';
   import ExportToast from '$lib/components/ExportToast.svelte';
+  import { TipGroup } from '$lib/morph-tip.svelte';
   import PlaylistDialog from '$lib/components/PlaylistDialog.svelte';
   import ClipEditDialog from '$lib/components/ClipEditDialog.svelte';
   import { editorState, closeEditor } from '$lib/editor-state.svelte';
@@ -56,9 +58,10 @@
   initLocale();
 
   const nav = [
-    { href: '/', icon: 'clips-fill', labelKey: 'nav.clips' },
+    { href: '/', icon: 'clips-fill', labelKey: 'clips.title' },
     { href: '/playlists', icon: 'folder-fill', labelKey: 'nav.playlists' }
   ];
+  const sideTips = new TipGroup('right');
 
   const isActive = (href: string) =>
     href === '/' ? page.url.pathname === '/' : page.url.pathname.startsWith(href);
@@ -614,6 +617,7 @@
           class:active={isActive(item.href)}
           href={item.href}
           aria-label={t(item.labelKey)}
+          use:sideTips.trigger={t(item.labelKey)}
         >
           <Icon name={item.icon} size={24} />
         </a>
@@ -626,6 +630,7 @@
       class:active={isActive('/juegos')}
       href="/juegos"
       aria-label={t('nav.games')}
+      use:sideTips.trigger={t('nav.games')}
     >
       <Icon name="gamepad" size={24} />
     </a>
@@ -638,10 +643,12 @@
       onanimationend={() => (gearSpin = false)}
       href="/settings"
       aria-label={t('nav.settings')}
+      use:sideTips.trigger={t('nav.settings')}
     >
       <Icon name="settings-fill" size={24} />
     </a>
   </aside>
+  <MorphTip group={sideTips} />
 
   <div class="main">
     <header class="topbar" data-tauri-drag-region>

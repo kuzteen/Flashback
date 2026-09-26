@@ -11,8 +11,11 @@
     SIZE_PRESETS
   } from '$lib/share.svelte';
   import { t } from '$lib/i18n.svelte';
+  import MorphTip from './MorphTip.svelte';
+  import { TipGroup } from '$lib/morph-tip.svelte';
 
   const clip = $derived(shareState.clip);
+  const sizeTips = new TipGroup('top');
 
   let poster = $state<string | null>(null);
   let cardEl = $state<HTMLElement | null>(null);
@@ -100,13 +103,15 @@
         {#each SIZE_PRESETS as mb (mb)}
           {@const off = presetDisabled(mb)}
           <!-- El botón deshabilitado no recibe el ratón: el hover lo recoge el contenedor. -->
-          <span class="slot" class:off>
-            <button class="size" class:on={shareState.preset === mb} disabled={off} onclick={() => selectPreset(mb)}>
+          <span class="slot" class:off use:sizeTips.trigger={off ? t('share.alreadySmaller', { mb }) : ''}>
+            <button
+              class="size"
+              class:on={shareState.preset === mb}
+              disabled={off}
+              onclick={() => selectPreset(mb)}
+            >
               {mb} MB
             </button>
-            {#if off}
-              <span class="tip" role="tooltip">{t('share.alreadySmaller', { mb })}</span>
-            {/if}
           </span>
         {/each}
       </div>
@@ -160,6 +165,7 @@
     </div>
   </div>
 {/if}
+<MorphTip group={sizeTips} />
 
 <style>
   .backdrop {
@@ -254,32 +260,6 @@
   .slot {
     position: relative;
     display: grid;
-  }
-  /* Tooltip propio: el title nativo no sale en un botón deshabilitado (no recibe el ratón). */
-  .tip {
-    position: absolute;
-    bottom: calc(100% + 8px);
-    left: 50%;
-    transform: translateX(-50%);
-    width: max-content;
-    max-width: 240px;
-    padding: 6px 10px;
-    font-size: 12px;
-    line-height: 1.3;
-    color: var(--text-1);
-    background: var(--bg-0);
-    border: 1px solid var(--line-strong);
-    border-radius: 7px;
-    box-shadow: var(--shadow-float);
-    opacity: 0;
-    visibility: hidden;
-    pointer-events: none;
-    transition: opacity 0.12s ease, visibility 0.12s;
-    z-index: 5;
-  }
-  .slot.off:hover .tip {
-    opacity: 1;
-    visibility: visible;
   }
 
   /* El borde discontinuo es la señal de "esto se arrastra"; al pasar por encima se vuelve sólido

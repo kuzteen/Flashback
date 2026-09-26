@@ -2,6 +2,8 @@
   import { flip } from '$lib/flip';
   import Icon from './Icon.svelte';
   import LibraryFilter from './LibraryFilter.svelte';
+  import MorphTip from './MorphTip.svelte';
+  import { TipGroup } from '$lib/morph-tip.svelte';
   import type { Clip, LibraryFilter as Filter } from '$lib/clips';
   import { clipView, setClipView } from '$lib/library.svelte';
   import { t } from '$lib/i18n.svelte';
@@ -19,6 +21,8 @@
     sort: S;
     sorts: { value: S; label: string }[];
   } = $props();
+
+  const viewTips = new TipGroup('bottom');
 
   let sortOpen = $state(false);
   let sortEl = $state<HTMLElement | null>(null);
@@ -84,24 +88,25 @@
       role="radio"
       aria-checked={clipView.mode === 'cards'}
       aria-label={t('clips.viewCards')}
+      use:viewTips.trigger={t('clips.viewCards')}
       class:on={clipView.mode === 'cards'}
       onclick={() => setClipView('cards')}
     >
       <Icon name="view-cards" size={16} />
-      <span class="tip" aria-hidden="true">{t('clips.viewCards')}</span>
     </button>
     <button
       role="radio"
       aria-checked={clipView.mode === 'list'}
       aria-label={t('clips.viewList')}
+      use:viewTips.trigger={t('clips.viewList')}
       class:on={clipView.mode === 'list'}
       onclick={() => setClipView('list')}
     >
       <Icon name="view-list" size={16} />
-      <span class="tip" aria-hidden="true">{t('clips.viewList')}</span>
     </button>
   </div>
 </div>
+<MorphTip group={viewTips} />
 
 <style>
   .bar {
@@ -236,33 +241,5 @@
   .view button.on {
     color: var(--text-0);
     background: var(--bg-3);
-  }
-  /* Tooltip propio en vez de title: el nativo es el de Chromium y desentona con la app. Sale
-     debajo y alineado a la derecha porque los botones van pegados al borde de la ventana, y
-     con un pequeño retraso al aparecer para no encenderse al cruzar la barra con el ratón. */
-  .tip {
-    position: absolute;
-    top: calc(100% + 9px);
-    right: -4px;
-    width: max-content;
-    padding: 7px 11px;
-    font-size: 12.5px;
-    line-height: 1.35;
-    color: var(--text-1);
-    background: var(--bg-0);
-    border: 1px solid var(--line-strong);
-    border-radius: 8px;
-    box-shadow: var(--shadow-float);
-    opacity: 0;
-    visibility: hidden;
-    pointer-events: none;
-    transition: opacity 0.12s ease, visibility 0.12s;
-    z-index: 60;
-  }
-  .view button:hover .tip,
-  .view button:focus-visible .tip {
-    opacity: 1;
-    visibility: visible;
-    transition-delay: 0.35s;
   }
 </style>
