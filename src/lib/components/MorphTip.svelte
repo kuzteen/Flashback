@@ -32,7 +32,7 @@
   // El texto que sale se saca del flujo para quedar encima del que entra, en el mismo sitio.
   function drift(_: Element, { d, blur, ms, leaving }: { d: number; blur: number; ms: number; leaving?: boolean }) {
     const dist = d * group.dir;
-    const axis = group.side === 'right' ? 'Y' : 'X';
+    const axis = group.side === 'right' || group.side === 'left' ? 'Y' : 'X';
     const pin = leaving ? 'position: absolute; left: 0; top: 0;' : '';
     return {
       duration: still ? 0 : ms,
@@ -100,6 +100,9 @@
   .tip.right {
     translate: -4px 0;
   }
+  .tip.left {
+    translate: 4px 0;
+  }
   .tip.bottom {
     translate: 0 -4px;
   }
@@ -132,6 +135,12 @@
     top: calc(var(--caret) - 5px);
     border-top-color: transparent;
     border-right-color: transparent;
+  }
+  .left .caret {
+    right: -5px;
+    top: calc(var(--caret) - 5px);
+    border-bottom-color: transparent;
+    border-left-color: transparent;
   }
   .bottom .caret {
     top: -5px;

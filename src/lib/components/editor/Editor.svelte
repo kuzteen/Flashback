@@ -147,7 +147,7 @@
     outline: none;
   }
   .middle {
-    --format-w: 260px;
+    --format-w: 280px;
     position: relative;
     flex: 1;
     min-height: 0;

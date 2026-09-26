@@ -1,4 +1,4 @@
-export type TipSide = 'right' | 'bottom' | 'top';
+export type TipSide = 'right' | 'left' | 'bottom' | 'top';
 export type Rect = { left: number; top: number; width: number; height: number };
 export type Size = { w: number; h: number };
 export type TipPlace = { x: number; y: number; caret: number };
@@ -13,10 +13,11 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), M
 // El globo se centra en el ancla y se mete dentro de la ventana; la flecha se desplaza lo mismo
 // que el globo para seguir apuntando al ancla.
 export function placeTip(anchor: Rect, size: Size, side: TipSide, view: Size): TipPlace {
-  if (side === 'right') {
+  if (side === 'right' || side === 'left') {
     const center = anchor.top + anchor.height / 2;
     const y = clamp(center - size.h / 2, EDGE, view.h - EDGE - size.h);
-    return { x: anchor.left + anchor.width + GAP, y, caret: clamp(center - y, CARET_MIN, size.h - CARET_MIN) };
+    const x = side === 'right' ? anchor.left + anchor.width + GAP : anchor.left - GAP - size.w;
+    return { x, y, caret: clamp(center - y, CARET_MIN, size.h - CARET_MIN) };
   }
   const center = anchor.left + anchor.width / 2;
   const x = clamp(center - size.w / 2, EDGE, view.w - EDGE - size.w);
@@ -25,7 +26,7 @@ export function placeTip(anchor: Rect, size: Size, side: TipSide, view: Size): T
 }
 
 export function tipDirection(from: Rect, to: Rect, side: TipSide): 1 | -1 {
-  const delta = side === 'right' ? to.top - from.top : to.left - from.left;
+  const delta = side === 'right' || side === 'left' ? to.top - from.top : to.left - from.left;
   return delta < 0 ? -1 : 1;
 }
 

@@ -14,6 +14,11 @@ describe('placeTip', () => {
     expect(p).toEqual({ x: 470, y: 110 + 10, caret: 50 });
   });
 
+  it('sits to the left of the anchor, vertically centred', () => {
+    const p = placeTip({ left: 1859, top: 120, width: 36, height: 36 }, { w: 70, h: 36 }, 'left', VIEW);
+    expect(p).toEqual({ x: 1859 - 10 - 70, y: 120, caret: 18 });
+  });
+
   it('sits above the anchor for top tips', () => {
     const p = placeTip({ left: 500, top: 300, width: 40, height: 30 }, { w: 100, h: 34 }, 'top', VIEW);
     expect(p).toEqual({ x: 470, y: 300 - 10 - 34, caret: 50 });

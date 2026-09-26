@@ -1,4 +1,6 @@
 <script lang="ts">
+  import MorphTip from '../MorphTip.svelte';
+  import { TipGroup } from '$lib/morph-tip.svelte';
   import Icon from '../Icon.svelte';
   import { beginGesture, commit, editorState, endGesture, preview } from '$lib/editor-state.svelte';
   import { NEUTRAL_LOOK, isNeutral, type Look } from '$lib/look';
@@ -52,6 +54,8 @@
   function resetAll() {
     if (!neutral) commit({ ...editorState.edit, look: { ...NEUTRAL_LOOK } });
   }
+
+  const tips = new TipGroup('right');
 </script>
 
 <aside class="panel" class:open={ui.lookOpen}>
@@ -60,9 +64,7 @@
     class:on={ui.lookOpen}
     aria-label={t('ed.look')}
     aria-expanded={ui.lookOpen}
-    data-tip={t('ed.look')}
-    data-tip-pos="below"
-    data-tip-align="start"
+    use:tips.trigger={t('ed.look')}
     onclick={() => ui.toggleLook()}
   >
     <Icon name="wand" size={18} />
@@ -101,6 +103,7 @@
     </div>
   {/if}
 </aside>
+<MorphTip group={tips} />
 
 <style>
   /* Gemelo del panel de formato, en el lado izquierdo: plegado es solo el botón sobre el visor;
@@ -119,10 +122,27 @@
     position: static;
     flex: none;
     width: var(--format-w);
-    padding: 10px 14px 14px;
+    padding: 10px 3px 14px 14px;
     background: var(--bg-0);
     border-right: 1px solid var(--line);
-    overflow: hidden;
+    /* Con la ventana baja las opciones no caben: el panel se desplaza en vez de cortarlas. El hueco
+       de la barra (11px) va siempre reservado y sale del relleno derecho, así las opciones quedan a
+       14px de ambos bordes y no se mueven cuando aparece. */
+    overflow: hidden auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    /* Se abre hacia el lado desde el tamaño del botón (36px + rellenos + hueco de la barra), así el
+       botón que se acaba de pulsar no desaparece. Solo se anima lo visible: el hueco del panel se
+       reserva entero desde el principio y el vídeo no se mueve. */
+    animation: panel-open 0.3s cubic-bezier(0.23, 1, 0.32, 1);
+  }
+  @keyframes panel-open {
+    from {
+      clip-path: inset(0 calc(100% - 64px) 0 0);
+    }
+    to {
+      clip-path: inset(0);
+    }
   }
   .toggle {
     align-self: flex-start;
@@ -154,6 +174,21 @@
     flex-direction: column;
     gap: 14px;
     min-width: 230px;
+  }
+  .open .body {
+    animation: panel-body-in 0.3s cubic-bezier(0.23, 1, 0.32, 1);
+  }
+  @keyframes panel-body-in {
+    from {
+      opacity: 0;
+      translate: -12px 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .panel.open,
+    .open .body {
+      animation: none;
+    }
   }
   .top {
     display: flex;

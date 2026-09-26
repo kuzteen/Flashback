@@ -27,6 +27,9 @@ export class TipGroup {
 
   readonly side: TipSide;
   private current: HTMLElement | null = null;
+  // Botón pulsado: su globo no vuelve hasta que el ratón sale de él. Al abrir un panel el botón
+  // cambia de sitio y el globo se quedaría apuntando a donde estaba.
+  private pressed: HTMLElement | null = null;
   private openTimer: ReturnType<typeof setTimeout> | undefined;
   private closeTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -35,7 +38,7 @@ export class TipGroup {
   }
 
   private show(el: HTMLElement, label: string, delay: boolean) {
-    if (!label) return;
+    if (!label || this.pressed === el) return;
     clearTimeout(this.closeTimer);
     if (this.current === el) return;
     clearTimeout(this.openTimer);
@@ -81,10 +84,19 @@ export class TipGroup {
   trigger: Action<HTMLElement, string> = (node, initial) => {
     let label = initial ?? '';
     const enter = () => this.show(node, label, true);
-    const leave = () => this.hide();
+    const leave = () => {
+      if (this.pressed === node) this.pressed = null;
+      this.hide();
+    };
+    const press = () => {
+      this.pressed = node;
+      if (this.current === node) this.hideNow();
+      else clearTimeout(this.openTimer);
+    };
     const focus = () => node.matches(':focus-visible') && this.show(node, label, false);
     node.addEventListener('pointerenter', enter);
     node.addEventListener('pointerleave', leave);
+    node.addEventListener('pointerdown', press);
     node.addEventListener('focusin', focus);
     node.addEventListener('focusout', leave);
     return {
@@ -98,9 +110,11 @@ export class TipGroup {
       destroy: () => {
         node.removeEventListener('pointerenter', enter);
         node.removeEventListener('pointerleave', leave);
+        node.removeEventListener('pointerdown', press);
         node.removeEventListener('focusin', focus);
         node.removeEventListener('focusout', leave);
         if (this.current === node) this.hideNow();
+        if (this.pressed === node) this.pressed = null;
       }
     };
   };

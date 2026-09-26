@@ -1,4 +1,6 @@
 <script lang="ts">
+  import MorphTip from '../MorphTip.svelte';
+  import { TipGroup } from '$lib/morph-tip.svelte';
   import { pill } from '$lib/pill';
   import Icon from '../Icon.svelte';
   import { beginGesture, commit, editorState, endGesture, preview } from '$lib/editor-state.svelte';
@@ -36,6 +38,8 @@
     sliding = false;
     endGesture();
   }
+
+  const tips = new TipGroup('left');
 </script>
 
 <aside class="panel" class:open={ui.formatOpen}>
@@ -44,9 +48,7 @@
     class:on={ui.formatOpen}
     aria-label={t('ed.format')}
     aria-expanded={ui.formatOpen}
-    data-tip={t('ed.format')}
-    data-tip-pos="below"
-    data-tip-align="end"
+    use:tips.trigger={t('ed.format')}
     onclick={() => ui.toggleFormat()}
   >
     <Icon name="crop" size={18} />
@@ -128,6 +130,7 @@
     </div>
   {/if}
 </aside>
+<MorphTip group={tips} />
 
 <style>
   /* Plegado no ocupa sitio: solo el botón, flotando sobre la esquina del visor. Abierto pasa a
@@ -146,10 +149,27 @@
     position: static;
     flex: none;
     width: var(--format-w);
-    padding: 10px 14px 14px;
+    padding: 10px 3px 14px 14px;
     background: var(--bg-0);
     border-left: 1px solid var(--line);
-    overflow: hidden;
+    /* Con la ventana baja las opciones no caben: el panel se desplaza en vez de cortarlas. El hueco
+       de la barra (11px) va siempre reservado y sale del relleno derecho, así las opciones quedan a
+       14px de ambos bordes y no se mueven cuando aparece. */
+    overflow: hidden auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    /* Se abre hacia el lado desde el tamaño del botón (36px + rellenos + hueco de la barra), así el
+       botón que se acaba de pulsar no desaparece. Solo se anima lo visible: el hueco del panel se
+       reserva entero desde el principio y el vídeo no se mueve. */
+    animation: panel-open 0.3s cubic-bezier(0.23, 1, 0.32, 1);
+  }
+  @keyframes panel-open {
+    from {
+      clip-path: inset(0 0 0 calc(100% - 64px));
+    }
+    to {
+      clip-path: inset(0);
+    }
   }
   .toggle {
     align-self: flex-end;
@@ -182,6 +202,21 @@
     flex-direction: column;
     gap: 8px;
     min-width: 230px;
+  }
+  .open .body {
+    animation: panel-body-in 0.3s cubic-bezier(0.23, 1, 0.32, 1);
+  }
+  @keyframes panel-body-in {
+    from {
+      opacity: 0;
+      translate: 12px 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .panel.open,
+    .open .body {
+      animation: none;
+    }
   }
   .title {
     margin-bottom: 4px;
