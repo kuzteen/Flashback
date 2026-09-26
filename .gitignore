@@ -50,3 +50,5 @@ CLAUDE.md
 !/src-tauri/tests/fixtures/*
 
 /latest.json
+
+/docs/superpowers/
