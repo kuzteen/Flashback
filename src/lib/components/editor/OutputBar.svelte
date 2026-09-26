@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { hoverPill } from '$lib/pill';
   import { flip } from '$lib/flip';
   import { invoke } from '@tauri-apps/api/core';
   import Icon from '../Icon.svelte';
@@ -85,7 +86,7 @@
         <Icon name="export" size={16} sw={2.2} />
       </button>
       {#if menuOpen}
-        <div class="menu" role="menu" aria-label={t('ed.exportAs')} use:flip>
+        <div class="menu" role="menu" aria-label={t('ed.exportAs')} use:flip use:hoverPill={{ selector: '.item', axis: 'y' }}>
           <span class="menu-title">{t('ed.exportAs')}</span>
           {#each FORMATS as f (f.value)}
             <button role="menuitem" class="item" onclick={() => onExport(f.value)}>
@@ -176,10 +177,16 @@
     color: var(--text-1);
     border-radius: 6px;
   }
-  .item:hover,
+  .item:hover {
+    color: var(--text-0);
+  }
   .item:focus-visible {
     background: var(--bg-3);
     color: var(--text-0);
+  }
+  .menu > :global(.slide-pill) {
+    background: var(--bg-3);
+    border-radius: 6px;
   }
   .fmt {
     font-size: 12.5px;

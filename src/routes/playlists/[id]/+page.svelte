@@ -34,6 +34,7 @@
   import { confirmState } from '$lib/confirm.svelte';
   import { t } from '$lib/i18n.svelte';
   import { TOAST_IN, TOAST_OUT, toastSlide } from '$lib/toast-motion';
+  import { hoverPill } from '$lib/pill';
 
 
   const id = $derived(page.params.id ?? '');
@@ -325,6 +326,7 @@
 {#if selected.size > 0}
   <div
     class="selbar"
+    use:hoverPill={{ selector: '.selbtn' }}
     role="toolbar"
     aria-label={t('sel.bar')}
     in:toastSlide={{ from: 1, duration: TOAST_IN }}
@@ -342,7 +344,7 @@
     </button>
     <span class="selcount mono">{t('sel.count', { n: String(selected.size) })}</span>
     <button class="selbtn" onclick={clearSelection}>{t('sel.cancel')}</button>
-    <button class="selbtn danger" onclick={removeSelected}>
+    <button class="selbtn danger" data-tone="danger" onclick={removeSelected}>
       <Icon name="minus" size={16} sw={2} />
       {t('pl.removeFrom')}
     </button>
@@ -352,6 +354,7 @@
 {#if undo && selected.size === 0}
   <div
     class="selbar undo"
+    use:hoverPill={{ selector: '.selbtn' }}
     role="status"
     in:toastSlide={{ from: 1, duration: TOAST_IN }}
     out:toastSlide={{ from: 1, duration: TOAST_OUT }}
@@ -558,8 +561,14 @@
     transition: background 0.12s ease, color 0.12s ease;
   }
   .selbtn:hover {
-    background: var(--bg-3);
     color: var(--text-0);
+  }
+  .selbar > :global(.slide-pill) {
+    background: var(--bg-3);
+    border-radius: 8px;
+  }
+  .selbar > :global(.slide-pill[data-tone='danger']) {
+    background: color-mix(in srgb, var(--rec) 12%, transparent);
   }
   .undo {
     padding-left: 14px;
@@ -583,7 +592,5 @@
   .selbtn.danger {
     color: var(--rec);
   }
-  .selbtn.danger:hover {
-    background: color-mix(in srgb, var(--rec) 12%, transparent);
-  }
+
 </style>

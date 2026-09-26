@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { hoverPill } from '$lib/pill';
   import FilmTiles from './FilmTiles.svelte';
   import { beginGesture, editorState, endGesture, preview } from '$lib/editor-state.svelte';
   import { moveTo, segLen, snap, snapTargets, sortByPos, trimToPos } from '$lib/edit-model';
@@ -226,11 +227,17 @@
       ui.blockMenu = null;
     }}
   ></div>
-  <div class="ctx" role="menu" style:left="{ui.blockMenu.x}px" style:top="{ui.blockMenu.y}px">
+  <div
+    class="ctx"
+    role="menu"
+    style:left="{ui.blockMenu.x}px"
+    style:top="{ui.blockMenu.y}px"
+    use:hoverPill={{ axis: 'y' }}
+  >
     <button role="menuitem" onclick={menuToggle}>
       {segs[ui.blockMenu.index]?.disabled ? t('ed.enable') : t('ed.disable')}
     </button>
-    <button role="menuitem" class="danger" disabled={segs.length <= 1} onclick={menuRemove}>
+    <button role="menuitem" class="danger" data-tone="danger" disabled={segs.length <= 1} onclick={menuRemove}>
       {t('ed.deleteBlock')}
     </button>
   </div>
@@ -344,14 +351,19 @@
     border-radius: 6px;
   }
   .ctx button:hover {
-    background: var(--bg-3);
     color: var(--text-0);
+  }
+  .ctx > :global(.slide-pill) {
+    background: var(--bg-3);
+    border-radius: 6px;
+  }
+  .ctx > :global(.slide-pill[data-tone='danger']) {
+    background: color-mix(in srgb, var(--rec) 12%, transparent);
   }
   .ctx .danger {
     color: var(--rec);
   }
   .ctx .danger:hover {
-    background: color-mix(in srgb, var(--rec) 12%, transparent);
     color: var(--rec);
   }
   .ctx button:disabled {

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { hoverPill } from '$lib/pill';
   import { flip } from '$lib/flip';
   import { invoke } from '@tauri-apps/api/core';
   import Icon from '$lib/components/Icon.svelte';
@@ -68,7 +69,7 @@
   </button>
 
   {#if open}
-    <div class="menu" role="menu" use:flip>
+    <div class="menu" role="menu" use:flip use:hoverPill={{ selector: '.item', axis: 'y' }}>
       <button class="item" class:on={selected.length === 0} onclick={clearAll} role="menuitemradio" aria-checked={selected.length === 0}>
         <span class="lead"><Icon name="clips-fill" size={15} /></span>
         <span class="txt">{t('filter.all')}</span>
@@ -185,8 +186,11 @@
     transition: background 0.13s ease, color 0.13s ease;
   }
   .item:hover {
-    background: var(--bg-3);
     color: var(--text-0);
+  }
+  .menu > :global(.slide-pill) {
+    background: var(--bg-3);
+    border-radius: 6px;
   }
   .item.on {
     color: var(--text-0);

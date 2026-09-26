@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { hoverPill } from '$lib/pill';
   import { flip } from '$lib/flip';
   import { untrack } from 'svelte';
   import Icon from './Icon.svelte';
@@ -475,6 +476,7 @@
           bind:this={menuEl}
           role="menu"
           use:flip
+          use:hoverPill={{ axis: 'y' }}
         >
           <button role="menuitem" onclick={(e) => { e.stopPropagation(); openEditor(clip); }}><Icon name="editor" size={16} /> {t('card.openEditor')}</button>
           <button role="menuitem" class:on={favorite} onclick={favClick}><Icon name="star-fill" size={16} /> {favorite ? t('card.favRemove') : t('card.favAdd')}</button>
@@ -502,7 +504,7 @@
           <button role="menuitem" onclick={editClip}><Icon name="rename" size={16} sw={2} /> {t('card.editClip')}</button>
           <button role="menuitem" onclick={openLocation}><Icon name="folder-open" size={16} sw={2} /> {t('card.openLocation')}</button>
           <div class="sep"></div>
-          <button role="menuitem" class="danger" use:hold={{ onconfirm: deleteClip, onhint: (on) => (deleteHint = on) }}>
+          <button role="menuitem" class="danger" data-tone="danger" use:hold={{ onconfirm: deleteClip, onhint: (on) => (deleteHint = on) }}>
             <span class="hold-fill"></span>
             <Icon name="trash" size={16} sw={2} />
             {deleteHint ? t('hold.toDelete') : t('card.delete')}
@@ -909,8 +911,14 @@
     width: 17px;
   }
   .menu button:hover {
-    background: var(--bg-3);
     color: var(--text-0);
+  }
+  .menu > :global(.slide-pill) {
+    background: var(--bg-3);
+    border-radius: 6px;
+  }
+  .menu > :global(.slide-pill[data-tone='danger']) {
+    background: color-mix(in srgb, var(--rec) 12%, transparent);
   }
   .menu button.on :global(svg) {
     color: var(--gold);
@@ -951,7 +959,6 @@
     color: var(--rec);
   }
   .menu .danger:hover {
-    background: color-mix(in srgb, var(--rec) 12%, transparent);
     color: var(--rec);
   }
   .sep {

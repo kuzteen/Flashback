@@ -19,6 +19,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { t } from '$lib/i18n.svelte';
   import { TOAST_IN, TOAST_OUT, toastSlide } from '$lib/toast-motion';
+  import { hoverPill } from '$lib/pill';
 
 
   let query = $state('');
@@ -183,6 +184,7 @@
 {#if selected.size > 0}
   <div
     class="selbar"
+    use:hoverPill={{ selector: '.selbtn' }}
     role="toolbar"
     aria-label={t('sel.bar')}
     in:toastSlide={{ from: 1, duration: TOAST_IN }}
@@ -217,6 +219,7 @@
     <button class="selbtn" onclick={clearSelection}>{t('sel.cancel')}</button>
     <button
       class="selbtn danger"
+      data-tone="danger"
       disabled={deleting}
       use:hold={{ onconfirm: deleteSelected, onhint: (on) => (deleteHint = on), ref: (api) => (deleteHold = api) }}
     >
@@ -327,8 +330,14 @@
     transition: background 0.12s ease, color 0.12s ease;
   }
   .selbtn:hover {
-    background: var(--bg-3);
     color: var(--text-0);
+  }
+  .selbar > :global(.slide-pill) {
+    background: var(--bg-3);
+    border-radius: 8px;
+  }
+  .selbar > :global(.slide-pill[data-tone='danger']) {
+    background: color-mix(in srgb, var(--rec) 12%, transparent);
   }
   .pl-dd {
     position: relative;
@@ -352,9 +361,7 @@
   .selbtn.danger {
     color: var(--rec);
   }
-  .selbtn.danger:hover {
-    background: color-mix(in srgb, var(--rec) 12%, transparent);
-  }
+
   .selbtn:disabled {
     opacity: 0.5;
   }

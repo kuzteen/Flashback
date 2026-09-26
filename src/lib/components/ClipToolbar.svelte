@@ -4,7 +4,7 @@
   import LibraryFilter from './LibraryFilter.svelte';
   import MorphTip from './MorphTip.svelte';
   import { TipGroup } from '$lib/morph-tip.svelte';
-  import { pill } from '$lib/pill';
+  import { hoverPill, pill } from '$lib/pill';
   import type { Clip, LibraryFilter as Filter } from '$lib/clips';
   import { clipView, setClipView } from '$lib/library.svelte';
   import { t } from '$lib/i18n.svelte';
@@ -68,7 +68,7 @@
       <Icon name="chevron-down" size={13} sw={2} />
     </button>
     {#if sortOpen}
-      <div class="sort-menu" use:flip>
+      <div class="sort-menu" use:flip use:hoverPill={{ selector: '.sort-item', axis: 'y' }}>
         {#each sorts as o (o.value)}
           <button
             class="sort-item"
@@ -211,8 +211,11 @@
     transition: background 0.13s ease, color 0.13s ease;
   }
   .sort-item:hover {
-    background: var(--bg-3);
     color: var(--text-0);
+  }
+  .sort-menu > :global(.slide-pill) {
+    background: var(--bg-3);
+    border-radius: 6px;
   }
   .sort-item.on {
     color: var(--text-0);

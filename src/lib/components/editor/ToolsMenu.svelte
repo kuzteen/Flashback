@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { hoverPill } from '$lib/pill';
   import { flip } from '$lib/flip';
   import Icon from '../Icon.svelte';
   import { SHORTCUTS, comboTokens } from '$lib/shortcuts';
@@ -34,7 +35,7 @@
   </button>
 
   {#if ui.toolsOpen}
-    <div class="menu" role="menu" use:flip>
+    <div class="menu" role="menu" use:flip use:hoverPill={{ selector: '.item', axis: 'y' }}>
       {#each SHORTCUTS as s (s.action)}
         <button
           role="menuitem"
@@ -122,8 +123,11 @@
     border-radius: 6px;
   }
   .item:hover {
-    background: var(--bg-3);
     color: var(--text-0);
+  }
+  .menu > :global(.slide-pill) {
+    background: var(--bg-3);
+    border-radius: 6px;
   }
   .item.danger .lbl {
     color: var(--rec);

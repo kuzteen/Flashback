@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { hoverPill } from '$lib/pill';
   import { flip } from '$lib/flip';
   import Icon from './Icon.svelte';
   import { menu } from '$lib/menu.svelte';
@@ -186,6 +187,7 @@
         bind:this={menuEl}
         role="menu"
         use:flip
+        use:hoverPill={{ axis: 'y' }}
       >
         <button
           role="menuitem"
@@ -198,7 +200,7 @@
           <Icon name="rename" size={16} sw={2} /> {t('pl.edit')}
         </button>
         <div class="sep"></div>
-        <button role="menuitem" class="danger" onclick={onDelete}>
+        <button role="menuitem" class="danger" data-tone="danger" onclick={onDelete}>
           <Icon name="trash" size={16} sw={2} /> {t('pl.delete')}
         </button>
       </div>
@@ -423,15 +425,19 @@
     width: 17px;
   }
   .menu button:hover {
-    background: var(--bg-3);
     color: var(--text-0);
+  }
+  .menu > :global(.slide-pill) {
+    background: var(--bg-3);
+    border-radius: 6px;
+  }
+  .menu > :global(.slide-pill[data-tone='danger']) {
+    background: color-mix(in srgb, var(--rec) 12%, transparent);
   }
   .menu .danger {
     color: var(--rec);
   }
-  .menu .danger:hover {
-    background: color-mix(in srgb, var(--rec) 12%, transparent);
-  }
+
   .sep {
     height: 1px;
     margin: 4px 6px;

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { hoverPill } from '$lib/pill';
   import Icon from './Icon.svelte';
   import {
     playlists,
@@ -55,7 +56,7 @@
 </script>
 
 <div class="picker" role="menu">
-  <div class="rows">
+  <div class="rows" use:hoverPill={{ axis: 'y' }}>
     {#each sorted as p (p.id)}
       {@const st = membership(p.id)}
       <button
@@ -147,6 +148,13 @@
   }
   .picker button.on {
     color: var(--text-0);
+  }
+  .rows button:hover {
+    background: none;
+  }
+  .rows > :global(.slide-pill) {
+    background: var(--bg-3);
+    border-radius: 6px;
   }
   .box {
     flex: none;

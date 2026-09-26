@@ -47,6 +47,8 @@ function mountPill(node: HTMLElement, axis: 'x' | 'y') {
     el.style.setProperty('--ds', `${d.start}s`);
     el.style.setProperty('--de', `${d.end}s`);
     el.style.inset = `${at.y}px ${node.clientWidth - at.x - w}px ${node.clientHeight - at.y - h}px ${at.x}px`;
+    if (target.dataset.tone) el.dataset.tone = target.dataset.tone;
+    else delete el.dataset.tone;
     el.classList.add('show');
     prev = span;
   }
@@ -84,6 +86,55 @@ export const pill: Action<HTMLElement, PillOpts> = (node, initial) => {
     },
     destroy() {
       ro.disconnect();
+      p.destroy();
+    }
+  };
+};
+
+// Fondo de hover compartido por los botones de una barra o un menú: sigue al ratón de uno a otro.
+// Sobre lo que no es un control (huecos, separadores, un contador) se queda donde está, para no
+// apagarse y volver a encenderse; sobre otro control que no es del grupo (una casilla, un submenú
+// con su propio fondo) se apaga. Un botón con data-tone tiñe el fondo.
+// part: el relleno se coloca sobre esa pieza del botón en vez de sobre el botón entero.
+export type HoverPillOpts = { selector?: string; axis?: 'x' | 'y'; part?: string };
+
+export const hoverPill: Action<HTMLElement, HoverPillOpts | undefined> = (node, initial) => {
+  let sel = initial?.selector ?? 'button';
+  let part = initial?.part;
+  let current: HTMLElement | null = null;
+  const p = mountPill(node, initial?.axis ?? 'x');
+
+  const over = (e: PointerEvent) => {
+    const hit = e.target as HTMLElement;
+    const target = hit.closest<HTMLElement>(sel);
+    if (target && target.closest('[data-pill]') === node && !target.matches(':disabled')) {
+      if (target === current) return;
+      const box = (part && target.querySelector<HTMLElement>(part)) || target;
+      p.moveTo(box, current !== null);
+      current = target;
+    } else {
+      const other = hit.closest('button, a, input, [role="menu"]');
+      if (other && other !== node && node.contains(other)) {
+        p.moveTo(null, false);
+        current = null;
+      }
+    }
+  };
+  const leave = () => {
+    p.moveTo(null, false);
+    current = null;
+  };
+  node.addEventListener('pointerover', over);
+  node.addEventListener('pointerleave', leave);
+
+  return {
+    update(next) {
+      sel = next?.selector ?? 'button';
+      part = next?.part;
+    },
+    destroy() {
+      node.removeEventListener('pointerover', over);
+      node.removeEventListener('pointerleave', leave);
       p.destroy();
     }
   };

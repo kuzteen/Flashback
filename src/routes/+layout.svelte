@@ -22,7 +22,7 @@
   import MorphTip from '$lib/components/MorphTip.svelte';
   import ExportToast from '$lib/components/ExportToast.svelte';
   import { TipGroup } from '$lib/morph-tip.svelte';
-  import { pill } from '$lib/pill';
+  import { hoverPill, pill } from '$lib/pill';
   import PlaylistDialog from '$lib/components/PlaylistDialog.svelte';
   import ClipEditDialog from '$lib/components/ClipEditDialog.svelte';
   import { editorState, closeEditor } from '$lib/editor-state.svelte';
@@ -717,7 +717,7 @@
         </button>
 
         {#if !editorState.clip && pickerOpen}
-          <div class="cap-menu" role="menu" use:flip>
+          <div class="cap-menu" role="menu" use:flip use:hoverPill={{ selector: '.cap-opt', axis: 'y' }}>
             <button class="cap-opt" class:on={!selectedMonitor} role="menuitem" onclick={(e) => backToApp(e)}>
               <span class="opt-ico"><Icon name="console" size={21} /></span>
               <span class="opt-text">
@@ -762,7 +762,7 @@
                   <span class="mic-chev"><Icon name="chevron-down" size={13} sw={2} /></span>
                 </button>
                 {#if micDDOpen}
-                  <div class="mic-list" role="listbox" use:flip>
+                  <div class="mic-list" role="listbox" use:flip use:hoverPill={{ selector: '.mic-item', axis: 'y' }}>
                     {#each audioInputs as inp (inp.id)}
                       <button
                         class="mic-item"
@@ -786,7 +786,7 @@
             <div class="cap-sep"></div>
             <span class="cap-group">{t('cap.screens')}</span>
 
-            <div class="screen-grid">
+            <div class="screen-grid" use:hoverPill={{ selector: '.screen-card', part: '.screen-thumb' }}>
               {#each monitors as m (m.id)}
                 <button
                   class="screen-card"
@@ -1222,8 +1222,11 @@
     transition: background 0.12s ease, color 0.12s ease;
   }
   .cap-opt:hover {
-    background: var(--bg-3);
     color: var(--text-0);
+  }
+  .cap-menu > :global(.slide-pill) {
+    background: var(--bg-3);
+    border-radius: 7px;
   }
   .cap-opt.on {
     color: var(--text-0);
@@ -1264,9 +1267,16 @@
     overflow: hidden;
     transition: border-color 0.12s ease;
   }
-  .screen-card:hover .screen-thumb,
   .screen-card.on .screen-thumb {
     border-color: var(--bright);
+  }
+  /* En las pantallas el hover es el borde blanco, no un fondo: un marco que viaja por encima de
+     las miniaturas hasta la que está bajo el ratón. */
+  .screen-grid > :global(.slide-pill) {
+    z-index: 1;
+    background: none;
+    border: 2px solid var(--bright);
+    border-radius: 6px;
   }
   .screen-check {
     position: absolute;
@@ -1444,8 +1454,11 @@
     transition: background 0.12s ease, color 0.12s ease;
   }
   .mic-item:hover {
-    background: var(--bg-3);
     color: var(--text-0);
+  }
+  .mic-list > :global(.slide-pill) {
+    background: var(--bg-3);
+    border-radius: 6px;
   }
   .mic-item.on {
     color: var(--bright);
