@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { pill } from '$lib/pill';
   import Icon from '../Icon.svelte';
   import { beginGesture, commit, editorState, endGesture, preview } from '$lib/editor-state.svelte';
   import type { OutputFormat } from '$lib/edit-model';
@@ -78,7 +79,7 @@
       </div>
 
       {#if format.kind === 'vertical'}
-        <div class="seg" role="radiogroup" aria-label={t('ed.fill')}>
+        <div class="seg" role="radiogroup" aria-label={t('ed.fill')} use:pill={{ key: format.fill }}>
           <button
             role="radio"
             aria-checked={format.fill === 'crop'}
@@ -262,7 +263,10 @@
   }
   .seg button.on {
     color: var(--text-0);
+  }
+  .seg > :global(.slide-pill) {
     background: var(--bg-3);
+    border-radius: 4px;
   }
   .zoom {
     display: grid;

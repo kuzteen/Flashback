@@ -22,6 +22,7 @@
   import MorphTip from '$lib/components/MorphTip.svelte';
   import ExportToast from '$lib/components/ExportToast.svelte';
   import { TipGroup } from '$lib/morph-tip.svelte';
+  import { pill } from '$lib/pill';
   import PlaylistDialog from '$lib/components/PlaylistDialog.svelte';
   import ClipEditDialog from '$lib/components/ClipEditDialog.svelte';
   import { editorState, closeEditor } from '$lib/editor-state.svelte';
@@ -610,7 +611,7 @@
       {/if}
     </div>
 
-    <nav inert={!!editorState.clip}>
+    <nav inert={!!editorState.clip} use:pill={{ key: page.url.pathname, axis: 'y', selector: '.active' }}>
       {#each nav as item (item.href)}
         <a
           class="nav-item"
@@ -624,29 +625,29 @@
       {/each}
     </nav>
 
-    <a
-      class="nav-item games-tab"
-      inert={!!editorState.clip}
-      class:active={isActive('/juegos')}
-      href="/juegos"
-      aria-label={t('nav.games')}
-      use:sideTips.trigger={t('nav.games')}
-    >
-      <Icon name="gamepad" size={24} />
-    </a>
-    <a
-      class="nav-item settings-tab"
-      inert={!!editorState.clip}
-      class:active={isActive('/settings')}
-      class:spin={gearSpin}
-      onmouseenter={() => (gearSpin = true)}
-      onanimationend={() => (gearSpin = false)}
-      href="/settings"
-      aria-label={t('nav.settings')}
-      use:sideTips.trigger={t('nav.settings')}
-    >
-      <Icon name="settings-fill" size={24} />
-    </a>
+    <div class="nav-bottom" inert={!!editorState.clip} use:pill={{ key: page.url.pathname, axis: 'y', selector: '.active' }}>
+      <a
+        class="nav-item"
+        class:active={isActive('/juegos')}
+        href="/juegos"
+        aria-label={t('nav.games')}
+        use:sideTips.trigger={t('nav.games')}
+      >
+        <Icon name="gamepad" size={24} />
+      </a>
+      <a
+        class="nav-item settings-tab"
+        class:active={isActive('/settings')}
+        class:spin={gearSpin}
+        onmouseenter={() => (gearSpin = true)}
+        onanimationend={() => (gearSpin = false)}
+        href="/settings"
+        aria-label={t('nav.settings')}
+        use:sideTips.trigger={t('nav.settings')}
+      >
+        <Icon name="settings-fill" size={24} />
+      </a>
+    </div>
   </aside>
   <MorphTip group={sideTips} />
 
@@ -971,9 +972,15 @@
   }
   .nav-item.active {
     color: var(--text-0);
-    background: var(--bg-2);
+    background: none;
   }
-  .nav-item.active::before {
+  nav > :global(.slide-pill),
+  .nav-bottom > :global(.slide-pill) {
+    background: var(--bg-2);
+    border-radius: var(--r-md);
+  }
+  nav > :global(.slide-pill::before),
+  .nav-bottom > :global(.slide-pill::before) {
     content: '';
     position: absolute;
     left: -12px;
@@ -984,11 +991,13 @@
     border-radius: 0 3px 3px 0;
     background: var(--accent);
   }
-  .games-tab {
+  .nav-bottom {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
     margin-top: auto;
-  }
-  .settings-tab {
-    margin-top: 6px;
   }
   /* Animación (no transición) disparada por una clase que se quita en animationend: la vuelta
      siempre se completa aunque el ratón salga antes. */

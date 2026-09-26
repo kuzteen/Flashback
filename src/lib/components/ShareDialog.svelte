@@ -13,6 +13,7 @@
   import { t } from '$lib/i18n.svelte';
   import MorphTip from './MorphTip.svelte';
   import { TipGroup } from '$lib/morph-tip.svelte';
+  import { pill } from '$lib/pill';
 
   const clip = $derived(shareState.clip);
   const sizeTips = new TipGroup('top');
@@ -96,7 +97,7 @@
       </header>
 
       <p class="label section">{t('share.sizeLabel')}</p>
-      <div class="sizes" role="group" aria-label={t('share.sizeLabel')}>
+      <div class="sizes" role="group" aria-label={t('share.sizeLabel')} use:pill={{ key: shareState.preset }}>
         <button class="size" class:on={shareState.preset === null} onclick={() => selectPreset(null)}>
           {t('share.original')}
         </button>
@@ -234,11 +235,10 @@
     height: 36px;
     font-size: 12.5px;
     color: var(--text-1);
-    background: var(--bg-0);
     border: 1px solid var(--line);
     border-radius: var(--r-sm);
     cursor: pointer;
-    transition: color 0.14s ease, background 0.14s ease, border-color 0.14s ease;
+    transition: color 0.18s ease 0.06s, background 0.14s ease, border-color 0.14s ease;
   }
   .size:hover:not(:disabled):not(.on) {
     color: var(--text-0);
@@ -246,11 +246,14 @@
   }
   .size.on {
     color: var(--on-accent);
-    background: var(--accent);
     border-color: transparent;
     font-weight: 560;
   }
-  .size.on:hover {
+  .sizes > :global(.slide-pill) {
+    background: var(--accent);
+    border-radius: var(--r-sm);
+  }
+  .sizes:has(.size.on:hover) > :global(.slide-pill) {
     background: var(--accent-deep);
   }
   .size:disabled {

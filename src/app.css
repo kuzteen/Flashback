@@ -225,3 +225,37 @@ input[type='range'].fader:focus-visible::-webkit-slider-thumb {
   transform: scaleX(1);
   transition: transform var(--hold-ms) cubic-bezier(0.4, 0, 0.6, 1);
 }
+
+/* Relleno que viaja al botón elegido de un grupo (use:pill). Cada grupo le da su color y radio. */
+[data-pill] {
+  isolation: isolate;
+}
+.slide-pill {
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.slide-pill.show {
+  opacity: 1;
+}
+.slide-pill.x.show {
+  transition:
+    opacity 0.15s ease,
+    background-color 0.15s ease,
+    left var(--ds) cubic-bezier(0.5, 0, 0.2, 1),
+    right var(--de) cubic-bezier(0.5, 0, 0.2, 1);
+}
+.slide-pill.y.show {
+  transition:
+    opacity 0.15s ease,
+    background-color 0.15s ease,
+    top var(--ds) cubic-bezier(0.5, 0, 0.2, 1),
+    bottom var(--de) cubic-bezier(0.5, 0, 0.2, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .slide-pill.show {
+    transition: opacity 0.15s ease;
+  }
+}

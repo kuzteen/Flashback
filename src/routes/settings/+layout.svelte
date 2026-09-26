@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { pill } from '$lib/pill';
   import type { Snippet } from 'svelte';
   import { page } from '$app/state';
   import { getVersion } from '@tauri-apps/api/app';
@@ -20,7 +21,7 @@
   <header><h1>{t('settings.title')}</h1></header>
 
   <div class="body">
-    <nav class="snav" aria-label={t('settings.title')}>
+    <nav class="snav" aria-label={t('settings.title')} use:pill={{ key: page.url.pathname, axis: 'y', selector: '.active' }}>
       {#each SETTINGS_SECTIONS as s (s.slug)}
         {@const href = `/settings/${s.slug}`}
         <a {href} class:active={page.url.pathname === href} aria-current={page.url.pathname === href ? 'page' : undefined}>
@@ -72,7 +73,7 @@
     font-weight: 500;
     color: var(--text-2);
     border-radius: var(--r-sm);
-    transition: background 0.15s ease, color 0.15s ease;
+    transition: background 0.15s ease, color 0.18s ease 0.06s;
   }
   .snav a:hover {
     color: var(--text-1);
@@ -84,7 +85,11 @@
   }
   .snav a.active {
     color: var(--text-0);
+    background: none;
+  }
+  .snav > :global(.slide-pill) {
     background: var(--bg-2);
+    border-radius: var(--r-sm);
   }
   /* Botón de las secciones (Abrir, Cambiar, Limpiar caché, Elegir…). La etiqueta va recortada a
      la altura de la mayúscula: sin descendentes, el hueco que la fuente les reserva la dejaba un

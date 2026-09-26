@@ -4,6 +4,7 @@
   import LibraryFilter from './LibraryFilter.svelte';
   import MorphTip from './MorphTip.svelte';
   import { TipGroup } from '$lib/morph-tip.svelte';
+  import { pill } from '$lib/pill';
   import type { Clip, LibraryFilter as Filter } from '$lib/clips';
   import { clipView, setClipView } from '$lib/library.svelte';
   import { t } from '$lib/i18n.svelte';
@@ -83,7 +84,7 @@
       </div>
     {/if}
   </div>
-  <div class="view" role="radiogroup" aria-label={t('clips.view')}>
+  <div class="view" role="radiogroup" aria-label={t('clips.view')} use:pill={{ key: clipView.mode }}>
     <button
       role="radio"
       aria-checked={clipView.mode === 'cards'}
@@ -240,6 +241,9 @@
   }
   .view button.on {
     color: var(--text-0);
+  }
+  .view > :global(.slide-pill) {
     background: var(--bg-3);
+    border-radius: 4px;
   }
 </style>
