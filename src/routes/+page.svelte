@@ -15,7 +15,6 @@
   import { hold, type HoldApi } from '$lib/hold';
   import { shareState } from '$lib/share.svelte';
   import { clipEdit, openClipEdit } from '$lib/clip-edit.svelte';
-  import { removeFavorite } from '$lib/library.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { t } from '$lib/i18n.svelte';
   import { TOAST_IN, TOAST_OUT, toastSlide } from '$lib/toast-motion';
@@ -118,7 +117,6 @@
 
   async function deleteSelected() {
     if (deleting || selected.size === 0) return;
-    const ids = [...selected];
     deleting = true;
     // Sobre la biblioteca completa, no sobre lo filtrado: si el usuario marca clips y luego
     // escribe en el buscador, el contador seguiría diciendo 5 pero solo se borrarían los
@@ -126,7 +124,6 @@
     const paths = library.clips.filter((c) => selected.has(c.id)).map((c) => c.path);
     try {
       await invoke('delete_clips', { paths });
-      for (const id of ids) removeFavorite(id);
       clearSelection();
       await refreshLibrary();
     } catch (err) {

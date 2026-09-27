@@ -264,6 +264,26 @@ export async function restoreToPlaylist(id: string, removed: RemovedClip[]) {
   }
 }
 
+// Quitar de una playlist no pregunta antes: se puede deshacer desde el aviso durante unos
+// segundos, tanto desde la barra de selección como desde el menú de una tarjeta. Quitar otra vez
+// cambia el aviso por uno nuevo (seq) y lo anterior ya no vuelve.
+export const playlistUndo = $state<{
+  current: { id: string; removed: RemovedClip[]; seq: number } | null;
+}>({ current: null });
+let undoSeq = 0;
+
+export async function removeWithUndo(id: string, paths: string[]) {
+  const removed = await removeFromPlaylist(id, paths);
+  if (removed.length > 0) playlistUndo.current = { id, removed, seq: ++undoSeq };
+}
+
+export async function undoPlaylistRemove() {
+  const u = playlistUndo.current;
+  if (!u) return;
+  playlistUndo.current = null;
+  await restoreToPlaylist(u.id, u.removed);
+}
+
 // Se aplica en memoria antes de escribir para que la tarjeta caiga en su hueco al soltar, sin
 // esperar al IPC. Si el backend falla se recarga el índice y vuelve el orden guardado.
 export async function reorderPlaylist(id: string, paths: string[]) {

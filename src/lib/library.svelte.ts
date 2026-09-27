@@ -14,19 +14,6 @@ type RawClip = {
   cover_ms: number;
 };
 
-const FAV_KEY = 'flashback.favorites';
-
-function loadFavs(): string[] {
-  if (typeof localStorage === 'undefined') return [];
-  try {
-    const raw = localStorage.getItem(FAV_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {
-    // localStorage corrupto o bloqueado
-  }
-  return [];
-}
-
 // Tarjetas grandes o lista compacta, en la biblioteca y en las playlists. Es preferencia de
 // quien mira, no de cada lista: una sola, recordada en este equipo.
 export type ClipView = 'cards' | 'list';
@@ -50,43 +37,6 @@ export function setClipView(mode: ClipView) {
 }
 
 export const library = $state<{ clips: Clip[]; loaded: boolean }>({ clips: [], loaded: false });
-
-// Los favoritos no viven en el archivo: se guardan por id de clip (= nombre del MP4,
-// estable) en localStorage. Cuando exista metadato real por clip se moverán al backend.
-export const favorites = $state<{ ids: string[] }>({ ids: loadFavs() });
-
-export function isFavorite(id: string): boolean {
-  return favorites.ids.includes(id);
-}
-
-function persistFavs() {
-  if (typeof localStorage !== 'undefined') {
-    try {
-      localStorage.setItem(FAV_KEY, JSON.stringify(favorites.ids));
-    } catch {
-      // sin persistencia disponible
-    }
-  }
-}
-
-export function toggleFavorite(id: string) {
-  favorites.ids = isFavorite(id) ? favorites.ids.filter((x) => x !== id) : [...favorites.ids, id];
-  persistFavs();
-}
-
-// Al renombrar/borrar un clip su id (= nombre del archivo) cambia o desaparece; se actualiza
-// la lista de favoritos para que el estado siga al clip.
-export function renameFavorite(oldId: string, newId: string) {
-  if (!isFavorite(oldId)) return;
-  favorites.ids = [...favorites.ids.filter((x) => x !== oldId), newId];
-  persistFavs();
-}
-
-export function removeFavorite(id: string) {
-  if (!isFavorite(id)) return;
-  favorites.ids = favorites.ids.filter((x) => x !== id);
-  persistFavs();
-}
 
 function toClip(r: RawClip, withEdits: Set<string>): Clip {
   return {

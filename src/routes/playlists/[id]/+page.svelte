@@ -6,6 +6,7 @@
   import SortableGrid from '$lib/components/SortableGrid.svelte';
   import ClipCard from '$lib/components/ClipCard.svelte';
   import ClipToolbar from '$lib/components/ClipToolbar.svelte';
+  import UndoToast from '$lib/components/UndoToast.svelte';
   import {
     formatDuration,
     sortClips,
@@ -20,9 +21,9 @@
     refreshPlaylists,
     findPlaylist,
     playlistClips,
-    removeFromPlaylist,
-    restoreToPlaylist,
-    type RemovedClip,
+    removeWithUndo,
+    playlistUndo,
+    undoPlaylistRemove,
     isFreshInPlaylist,
     markPlaylistClipSeen,
     openPlaylistEdit,
@@ -155,59 +156,12 @@
     else selectAll();
   }
 
-  // Quitar de la playlist no pregunta antes: se puede deshacer durante unos segundos. La barra
-  // ocupa el sitio de la de selección, que desaparece justo al quitar.
-  // La cuenta atrás se ve: cada punta del icono es un tramo, y al borrarse la última la barra
-  // se va. 8 tramos de 625 ms son los 5 s del deshacer.
-  const SPOKES = 8;
-  const SPOKE_MS = 625;
-  let undo = $state<{ id: string; removed: RemovedClip[] } | null>(null);
-  let spokesLeft = $state(SPOKES);
-  let undoTimer: ReturnType<typeof setInterval> | undefined;
-
-  function armUndo() {
-    clearInterval(undoTimer);
-    undoTimer = setInterval(() => {
-      spokesLeft -= 1;
-      if (spokesLeft <= 0) {
-        clearInterval(undoTimer);
-        undo = null;
-      }
-    }, SPOKE_MS);
-  }
-
-  function startUndo(next: { id: string; removed: RemovedClip[] }) {
-    undo = next;
-    spokesLeft = SPOKES;
-    armUndo();
-  }
-
-  async function undoRemove() {
-    const u = undo;
-    if (!u) return;
-    clearInterval(undoTimer);
-    undo = null;
-    await restoreToPlaylist(u.id, u.removed);
-  }
-
+  // El aviso de deshacer es de esta página: al cambiar de playlist o salir, lo quitado se queda.
   $effect(() => {
     id;
-    untrack(() => (undo = null));
-    return () => clearInterval(undoTimer);
+    untrack(() => (playlistUndo.current = null));
+    return () => (playlistUndo.current = null);
   });
-
-  // En el sentido de las agujas del reloj desde arriba. Se borran a partir de la segunda y la
-  // de arriba es la última en irse, como la manecilla que marca el final.
-  const SPOKE_PATHS = [
-    'M 68 30.75A 3.85 3.85 0 0 1 64.15 34.61L 63.89 34.61A 3.85 3.85 0 0 1 60.04 30.77L 60 10.57A 3.85 3.85 0 0 1 63.85 6.71L 64.11 6.71A 3.85 3.85 0 0 1 67.96 10.55L 68 30.75Z',
-    'M 101.42 32.31A 3.79 3.79 0 0 1 96.06 32.44L 95.74 32.14A 3.79 3.79 0 0 1 95.61 26.78L 98.8 23.43A 3.79 3.79 0 0 1 104.16 23.3L 104.48 23.6A 3.79 3.79 0 0 1 104.61 28.96L 101.42 32.31Z',
-    'M 121.25 64.2A 3.76 3.76 0 0 1 117.49 67.96L 108.29 67.96A 3.76 3.76 0 0 1 104.53 64.2L 104.53 63.8A 3.76 3.76 0 0 1 108.29 60.04L 117.49 60.04A 3.76 3.76 0 0 1 121.25 63.8L 121.25 64.2Z',
-    'M 104.5 98.96A 3.84 3.84 0 0 1 104.48 104.39L 104.28 104.58A 3.84 3.84 0 0 1 98.85 104.55L 89.44 95.04A 3.84 3.84 0 0 1 89.46 89.61L 89.66 89.42A 3.84 3.84 0 0 1 95.09 89.45L 104.5 98.96Z',
-    'M 67.96 117.45A 3.84 3.84 0 0 1 64.12 121.28L 63.84 121.28A 3.84 3.84 0 0 1 60 117.43L 60.04 99.49A 3.84 3.84 0 0 1 63.88 95.66L 64.16 95.66A 3.84 3.84 0 0 1 68 99.51L 67.96 117.45Z',
-    'M 43.28 84.85A 3.94 3.94 0 0 1 43.28 90.43L 29.2 104.51A 3.94 3.94 0 0 1 23.62 104.51L 23.5 104.39A 3.94 3.94 0 0 1 23.5 98.81L 37.58 84.73A 3.94 3.94 0 0 1 43.16 84.73L 43.28 84.85Z',
-    'M 34.61 64.14A 3.86 3.86 0 0 1 30.74 68L 10.56 67.96A 3.86 3.86 0 0 1 6.71 64.1L 6.71 63.86A 3.86 3.86 0 0 1 10.58 60L 30.76 60.04A 3.86 3.86 0 0 1 34.61 63.9L 34.61 64.14Z',
-    'M 43.09 43.21A 3.87 3.87 0 0 1 37.61 43.21L 23.51 29.11A 3.87 3.87 0 0 1 23.51 23.63L 23.65 23.49A 3.87 3.87 0 0 1 29.13 23.49L 43.23 37.59A 3.87 3.87 0 0 1 43.23 43.07L 43.09 43.21Z'
-  ];
 
   function onKey(e: KeyboardEvent) {
     if (editorState.clip || shareState.clip || confirmState.req) return;
@@ -221,9 +175,9 @@
     }
     if (typing) return;
     const ctrl = e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey;
-    if (ctrl && e.key.toLowerCase() === 'z' && undo) {
+    if (ctrl && e.key.toLowerCase() === 'z' && playlistUndo.current) {
       e.preventDefault();
-      undoRemove();
+      undoPlaylistRemove();
       return;
     }
     if (ctrl && e.key.toLowerCase() === 'a') {
@@ -243,11 +197,9 @@
 
   async function removeSelected() {
     if (!playlist || selected.size === 0) return;
-    const pid = playlist.id;
     const paths = clips.filter((c) => selected.has(c.id)).map((c) => c.path);
-    const removed = await removeFromPlaylist(pid, paths);
+    await removeWithUndo(playlist.id, paths);
     clearSelection();
-    if (removed.length > 0) startUndo({ id: pid, removed });
   }
 </script>
 
@@ -316,6 +268,7 @@
             {clip}
             compact={clipView.mode === 'list'}
             fresh={isFreshInPlaylist(refs.get(clip.path))}
+            playlistId={id}
           />
         {/snippet}
       </SortableGrid>
@@ -351,26 +304,16 @@
   </div>
 {/if}
 
-{#if undo && selected.size === 0}
-  <div
-    class="selbar undo"
-    use:hoverPill={{ selector: '.selbtn' }}
-    role="status"
-    in:toastSlide={{ from: 1, duration: TOAST_IN }}
-    out:toastSlide={{ from: 1, duration: TOAST_OUT }}
-  >
-    <svg class="countdown" viewBox="0 0 128 128" width="16" height="16" aria-hidden="true">
-      {#each SPOKE_PATHS as d, k (k)}
-        <path {d} class:gone={(k + SPOKES - 1) % SPOKES < SPOKES - spokesLeft} />
-      {/each}
-    </svg>
-    <span class="selcount mono">
-      {undo.removed.length === 1
-        ? t('pl.removedOne')
-        : t('pl.removedN', { n: String(undo.removed.length) })}
-    </span>
-    <button class="selbtn" onclick={undoRemove}>{t('pl.undo')}</button>
-  </div>
+{#if playlistUndo.current}
+  {@const undo = playlistUndo.current}
+  <UndoToast
+    seq={undo.seq}
+    title={undo.removed.length === 1
+      ? t('pl.removedOne')
+      : t('pl.removedN', { n: String(undo.removed.length) })}
+    onundo={undoPlaylistRemove}
+    ondone={() => (playlistUndo.current = null)}
+  />
 {/if}
 
 <style>
@@ -569,25 +512,6 @@
   }
   .selbar > :global(.slide-pill[data-tone='danger']) {
     background: color-mix(in srgb, var(--rec) 12%, transparent);
-  }
-  .undo {
-    padding-left: 14px;
-  }
-  .countdown {
-    flex: none;
-    fill: var(--text-1);
-    stroke: var(--text-1);
-  }
-  /* Las puntas miden 8 unidades de ancho sobre 128; el trazo de 8 las lleva a 16, que a 16 px
-     son 2 px justos centrados en el píxel 8. Las rectas caen así en píxeles enteros: a medio
-     píxel se repintaban con otro suavizado a cada fundido de las vecinas y parpadeaban. */
-  .countdown path {
-    stroke-width: 8;
-    stroke-linejoin: round;
-    transition: opacity 0.25s ease;
-  }
-  .countdown path.gone {
-    opacity: 0;
   }
   .selbtn.danger {
     color: var(--rec);

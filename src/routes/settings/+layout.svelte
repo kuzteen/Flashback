@@ -161,10 +161,12 @@
     scrollbar-gutter: stable both-edges;
   }
   /* Centrada respecto a la app, no al hueco que deja el menú: 616 = 960 / 2 + (224 + 48) / 2.
-     Si la ventana no da para tanto, se queda pegada al menú. */
+     Si la ventana no da para tanto, se queda pegada al menú. El margen derecho solo cuenta cuando
+     el ancho no llega a 960 y separa los controles de la barra de scroll. */
   .pane {
     max-width: 960px;
     margin-left: max(0px, calc(50% - 616px));
+    margin-right: 24px;
     padding-bottom: 48px;
   }
 

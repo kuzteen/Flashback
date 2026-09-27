@@ -1,5 +1,4 @@
 import { t } from './i18n.svelte';
-import { isFavorite } from './library.svelte';
 
 export type Clip = {
   id: string;
@@ -73,7 +72,6 @@ export function displaySource(source: string): string {
 
 export type LibraryFilter =
   | { kind: 'edited' }
-  | { kind: 'favorite' }
   | { kind: 'source'; value: string };
 
 export function sameFilter(a: LibraryFilter, b: LibraryFilter): boolean {
@@ -86,7 +84,6 @@ export function clipMatchesFilters(clip: Clip, selected: LibraryFilter[]): boole
   if (selected.length === 0) return true;
   return selected.some((f) => {
     if (f.kind === 'edited') return !!clip.edited || !!clip.exported;
-    if (f.kind === 'favorite') return isFavorite(clip.id);
     return clip.source === f.value;
   });
 }

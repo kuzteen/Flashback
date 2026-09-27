@@ -4,7 +4,6 @@
   import { invoke } from '@tauri-apps/api/core';
   import Icon from '$lib/components/Icon.svelte';
   import { isScreenSource, sameFilter, displaySource, type Clip, type LibraryFilter } from '$lib/clips';
-  import { isFavorite } from '$lib/library.svelte';
   import { groupCover, initial } from '$lib/source-badge';
   import { artSrc } from '$lib/artwork.svelte';
   import { t } from '$lib/i18n.svelte';
@@ -22,8 +21,6 @@
     [...new Set(clips.filter((c) => isScreenSource(c.source)).map((c) => c.source))].sort()
   );
   const hasEdited = $derived(clips.some((c) => c.edited || c.exported));
-  const hasFavorites = $derived(clips.some((c) => isFavorite(c.id)));
-
 
   function isOn(f: LibraryFilter): boolean {
     return selected.some((s) => sameFilter(s, f));
@@ -75,14 +72,6 @@
         <span class="txt">{t('filter.all')}</span>
         <span class="chk"><Icon name="check" size={13} sw={2.2} /></span>
       </button>
-
-      {#if hasFavorites}
-        <button class="item" class:on={isOn({ kind: 'favorite' })} onclick={() => toggle({ kind: 'favorite' })} role="menuitemcheckbox" aria-checked={isOn({ kind: 'favorite' })}>
-          <span class="lead"><Icon name="star-fill" size={15} /></span>
-          <span class="txt">{t('filter.favorites')}</span>
-          <span class="chk"><Icon name="check" size={13} sw={2.2} /></span>
-        </button>
-      {/if}
 
       {#if hasEdited}
         <button class="item" class:on={isOn({ kind: 'edited' })} onclick={() => toggle({ kind: 'edited' })} role="menuitemcheckbox" aria-checked={isOn({ kind: 'edited' })}>

@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Clip } from './clips';
 import type { CoverChange } from './components/CoverFormDialog.svelte';
 import { gameOverride } from './source-badge';
-import { refreshLibrary, renameFavorite } from './library.svelte';
+import { refreshLibrary } from './library.svelte';
 import { rekeyPlaylistClip } from './playlists.svelte';
 
 // Rutas de los clips que se están editando: una desde el menú de la tarjeta, varias desde la
@@ -33,7 +33,6 @@ export async function saveClipEdit(clips: Clip[], change: ClipEditChange) {
     const name = change.name.trim();
     if (name && name !== clip.title) {
       const newPath = await invoke<string>('rename_clip', { path: clip.path, newName: name });
-      renameFavorite(clip.id, newPath.split(/[\\/]/).pop() ?? clip.id);
       rekeyPlaylistClip(clip.path, newPath);
       paths = [newPath];
     }

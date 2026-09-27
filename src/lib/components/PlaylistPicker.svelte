@@ -68,11 +68,18 @@
           toggle(p.id);
         }}
       >
-        <span class="box" class:full={st === 'in'} class:half={st === 'partial'}>
-          <Icon name={st === 'partial' ? 'minus' : 'check'} size={11} sw={3} />
+        <span class="cover">
+          {#if p.coverSrc}
+            <img src={p.coverSrc} alt="" draggable="false" />
+          {:else}
+            <Icon name="heart-fill" size={11} />
+          {/if}
         </span>
         <span class="nm">{p.name}</span>
         <span class="n mono">{p.clips.length}</span>
+        <span class="box" class:full={st === 'in'} class:half={st === 'partial'}>
+          <Icon name={st === 'partial' ? 'minus' : 'check'} size={11} sw={3} />
+        </span>
       </button>
     {/each}
     {#if sorted.length === 0 && !creating}
@@ -156,6 +163,23 @@
     background: var(--bg-3);
     border-radius: 6px;
   }
+  .cover {
+    flex: none;
+    width: 20px;
+    height: 20px;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    border-radius: 5px;
+    color: var(--text-3);
+    background: var(--bg-2);
+  }
+  .cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
   .box {
     flex: none;
     width: 16px;
@@ -190,10 +214,11 @@
     font-size: 12.5px;
     color: var(--text-3);
   }
-  /* 16 px como la casilla de las filas de arriba: así el texto de todas las filas arranca en
-     la misma columna. */
+  /* El icono ocupa los 20 px de la portada de las filas de arriba: así el texto de todas las
+     filas arranca en la misma columna. */
   .new :global(svg) {
     flex-shrink: 0;
+    margin: 0 2px;
   }
   .new-input {
     width: 100%;

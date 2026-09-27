@@ -11,36 +11,36 @@
   import { menu } from '$lib/menu.svelte';
   import { formatDuration, formatRelative, displaySource, type Clip } from '$lib/clips';
   import { openClipEdit } from '$lib/clip-edit.svelte';
-  import {
-    isFavorite,
-    toggleFavorite,
-    requestThumb,
-    cachedThumb,
-    refreshLibrary,
-    removeFavorite
-  } from '$lib/library.svelte';
+  import { requestThumb, cachedThumb, refreshLibrary } from '$lib/library.svelte';
   import { openEditor } from '$lib/editor-state.svelte';
   import { openShare } from '$lib/share.svelte';
   import { selected, isSelected, pick } from '$lib/selection.svelte';
   import { hold } from '$lib/hold';
-  import { playlistsWith } from '$lib/playlists.svelte';
+  import { playlistsWith, removeWithUndo } from '$lib/playlists.svelte';
   import { t } from '$lib/i18n.svelte';
 
   // fresh solo lo enciende la vista de playlist: en la biblioteca no hay "añadido" que marcar.
   // playlistTag es lo contrario: en la biblioteca dice en qué playlist está el clip, y usa el
   // mismo hueco que fresh. compact es la vista en lista: la misma tarjeta con otro layout, así
   // que el menú, renombrar, seleccionar y la vista previa no se duplican en otro componente.
+  // playlistId es la playlist que se está viendo: añade al menú quitar el clip de ella.
   let {
     clip,
     fresh = false,
     playlistTag = false,
-    compact = false
-  }: { clip: Clip; fresh?: boolean; playlistTag?: boolean; compact?: boolean } = $props();
+    compact = false,
+    playlistId
+  }: {
+    clip: Clip;
+    fresh?: boolean;
+    playlistTag?: boolean;
+    compact?: boolean;
+    playlistId?: string;
+  } = $props();
 
   const open = $derived(menu.openId === clip.id);
   // Margen mínimo contra los bordes de la ventana, para el menú y su submenú.
   const EDGE = 8;
-  const favorite = $derived(isFavorite(clip.id));
   const sel = $derived(isSelected(clip.id));
   const picking = $derived(selected.size > 0);
 
@@ -211,7 +211,7 @@
     const p = panel.getBoundingClientRect();
     const i = item.getBoundingClientRect();
     const r = el.getBoundingClientRect();
-    const GAP = 6;
+    const GAP = 2;
     let x = p.right + GAP;
     if (x + r.width + EDGE > window.innerWidth) {
       const flipped = p.left - GAP - r.width;
@@ -283,16 +283,16 @@
     pick(clip.id, e.shiftKey);
   }
 
-  function favClick(e: MouseEvent) {
-    e.stopPropagation();
-    menu.openId = null;
-    toggleFavorite(clip.id);
-  }
-
   function editClip(e: MouseEvent) {
     e.stopPropagation();
     menu.openId = null;
     openClipEdit([clip.path]);
+  }
+
+  function removeFromThis(e: MouseEvent) {
+    e.stopPropagation();
+    menu.openId = null;
+    if (playlistId) removeWithUndo(playlistId, [clip.path]);
   }
 
   async function openLocation(e: MouseEvent) {
@@ -312,7 +312,6 @@
     try {
       await invoke('delete_clip', { path: clip.path });
       selected.delete(clip.id);
-      removeFavorite(clip.id);
       await refreshLibrary();
     } catch (err) {
       console.error('delete_clip', err);
@@ -384,8 +383,7 @@
     <div class="scrim"></div>
 
     <div class="badge mono">
-      <!-- El recorte es lineal y pesa menos que la estrella y la goma, macizas: va algo mayor. -->
-      {#if favorite}<span class="fav"><Icon name="star-fill" size={12} /></span>{/if}
+      <!-- El recorte es lineal y pesa menos que la goma, maciza: va algo mayor. -->
       {#if clip.exported}<Icon name="crop" size={13} />{/if}
       {#if clip.edited}<Icon name="eraser" size={12} />{/if}
       <span class="dur">{formatDuration(clip.durationSec)}</span>
@@ -478,8 +476,10 @@
           use:flip
           use:hoverPill={{ axis: 'y' }}
         >
-          <button role="menuitem" onclick={(e) => { e.stopPropagation(); openEditor(clip); }}><Icon name="editor" size={16} /> {t('card.openEditor')}</button>
-          <button role="menuitem" class:on={favorite} onclick={favClick}><Icon name="star-fill" size={16} /> {favorite ? t('card.favRemove') : t('card.favAdd')}</button>
+          <button role="menuitem" onclick={editClip}><Icon name="rename" size={16} sw={2} /> {t('card.editClip')}</button>
+          {#if playlistId}
+            <button role="menuitem" onclick={removeFromThis}><Icon name="minus" size={16} sw={2} /> {t('card.removeFromPlaylist')}</button>
+          {/if}
           <button
             class="sub-item"
             class:on-pl={inPlaylists}
@@ -501,7 +501,6 @@
             {t('pl.addTo')}
             <Icon name="chevron-down" size={13} sw={2.2} />
           </button>
-          <button role="menuitem" onclick={editClip}><Icon name="rename" size={16} sw={2} /> {t('card.editClip')}</button>
           <button role="menuitem" onclick={openLocation}><Icon name="folder-open" size={16} sw={2} /> {t('card.openLocation')}</button>
           <div class="sep"></div>
           <button role="menuitem" class="danger" data-tone="danger" use:hold={{ onconfirm: deleteClip, onhint: (on) => (deleteHint = on) }}>
@@ -627,12 +626,6 @@
   .badge :global(svg) {
     color: var(--bright);
     flex: none;
-  }
-  .fav {
-    display: flex;
-  }
-  .fav :global(svg) {
-    color: var(--gold);
   }
 
   .pick {
@@ -877,7 +870,8 @@
     top: calc(100% + 8px);
     right: 0;
     left: auto;
-    width: 196px;
+    width: max-content;
+    min-width: 196px;
     display: flex;
     flex-direction: column;
     gap: 1px;
@@ -904,6 +898,11 @@
     border-radius: 6px;
     transition: background 0.12s ease, color 0.12s ease;
   }
+  /* El menú crece con el texto más largo del idioma activo en vez de partirlo en dos líneas.
+     Solo los elementos propios: el submenú de playlists tiene su ancho y recorta los nombres. */
+  .menu > button {
+    white-space: nowrap;
+  }
   /* Hueco fijo para el icono: los glifos no miden lo mismo y sin esto los textos del menú no
      quedarían alineados entre sí. */
   .menu button :global(svg) {
@@ -919,9 +918,6 @@
   }
   .menu > :global(.slide-pill[data-tone='danger']) {
     background: color-mix(in srgb, var(--rec) 12%, transparent);
-  }
-  .menu button.on :global(svg) {
-    color: var(--gold);
   }
   .menu button.on-pl > :global(svg:first-child) {
     color: var(--bright);
