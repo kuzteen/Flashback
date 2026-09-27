@@ -208,7 +208,7 @@
     return () => cancelAnimationFrame(raf);
   });
 
-  let splitDrag = false;
+  let splitDrag = $state(false);
 
   function splitAt(clientX: number) {
     const st = stageEl?.getBoundingClientRect();
@@ -466,6 +466,7 @@
         <span class="tag after">{t('ed.compare.after')}</span>
         <div
           class="split"
+          class:dragging={splitDrag}
           style:left="{ui.split * 100}%"
           role="slider"
           tabindex="0"
@@ -598,8 +599,11 @@
     width: 24px;
     margin-left: -12px;
     pointer-events: auto;
-    cursor: ew-resize;
+    cursor: grab;
     outline: none;
+  }
+  .split.dragging {
+    cursor: grabbing;
   }
   .split::before {
     content: '';

@@ -146,8 +146,7 @@
     flex: none;
     width: var(--format-w);
     padding: 10px 3px 14px 14px;
-    background: var(--bg-0);
-    border-right: 1px solid var(--line);
+    background: var(--base);
     /* Con la ventana baja las opciones no caben: el panel se desplaza en vez de cortarlas. El hueco
        de la barra (11px) va siempre reservado y sale del relleno derecho, así las opciones quedan a
        14px de ambos bordes y no se mueven cuando aparece. */

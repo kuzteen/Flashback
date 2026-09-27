@@ -178,6 +178,15 @@ input[type='range'].fader::-webkit-slider-thumb {
     var(--text-0);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
 }
+/* Mano abierta sobre el tirador y cerrada mientras se arrastra; la pista sigue con el dedo porque
+   un clic en ella salta al valor. */
+input[type='range'].fader::-webkit-slider-thumb {
+  cursor: grab;
+}
+input[type='range'].fader:active,
+input[type='range'].fader:active::-webkit-slider-thumb {
+  cursor: grabbing;
+}
 input[type='range'].fader:focus-visible {
   outline: none;
 }

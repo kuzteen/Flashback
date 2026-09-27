@@ -584,7 +584,11 @@
     height: 14px;
     background: var(--accent);
     border-radius: 50%;
-    cursor: pointer;
+    cursor: grab;
+  }
+  .zoom:active,
+  .zoom:active::-webkit-slider-thumb {
+    cursor: grabbing;
   }
   .crop-hint {
     font-size: 10.5px;
