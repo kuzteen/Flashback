@@ -30,6 +30,7 @@ pub fn init(app: &AppHandle) {
     let prefs = crate::config::get_capture_prefs(app);
     if let Some(p) = &prefs {
         crate::sound::set_gain(p.sound_gain());
+        crate::denoise::configure(p.noise_suppression, p.noise_level);
     }
     state().prefs = prefs.clone();
     let (tx, rx) = channel::<()>();
@@ -65,6 +66,7 @@ pub fn set_prefs(app: &AppHandle, prefs: CapturePrefs) -> Result<Vec<String>, St
     crate::config::set_capture_prefs(app, &prefs)?;
     let before = state().prefs.replace(prefs.clone());
     crate::sound::set_gain(prefs.sound_gain());
+    crate::denoise::configure(prefs.noise_suppression, prefs.noise_level);
     let failed = if before.as_ref().map(|b| &b.hotkeys) != Some(&prefs.hotkeys) {
         crate::hotkeys::apply(app, &prefs.hotkeys)
     } else {
@@ -111,15 +113,17 @@ fn reconcile(app: &AppHandle) {
     let key = match (&target, prefs.replay) {
         (Some(t), true) => {
             // En modo Aplicación el objetivo siempre es "window": el juego va en la clave para que
-            // cambiar de juego reconstruya la captura contra la ventana nueva.
+            // cambiar de juego reconstruya la captura contra la ventana nueva. La intensidad de la
+            // supresión de ruido no va: se aplica en vivo; encenderla o apagarla mueve el retardo
+            // del micro y sí reconstruye.
             let t = if t == "window" {
                 format!("window:{}", crate::detect::current_game().map(|g| g.name).unwrap_or_default())
             } else {
                 t.clone()
             };
             format!(
-                "{t}|{}|{}|{}|{}|{}|{mic}",
-                prefs.seconds, prefs.fps, prefs.quality, prefs.resolution, prefs.mic
+                "{t}|{}|{}|{}|{}|{}|{mic}|{}",
+                prefs.seconds, prefs.fps, prefs.quality, prefs.resolution, prefs.mic, prefs.noise_suppression
             )
         }
         _ => "off".to_string(),

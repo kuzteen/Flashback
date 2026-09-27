@@ -33,9 +33,20 @@ pub struct AudioInput {
     pub name: String,
 }
 
+#[derive(Serialize, Clone, Default)]
+pub struct EncoderOptions {
+    pub available: Vec<String>,
+    pub auto: String,
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn encoder_options() -> EncoderOptions {
+    EncoderOptions { available: Vec::new(), auto: "Software".into() }
+}
+
 #[cfg(target_os = "windows")]
 pub use win::{
-    begin_save_replay, list_audio_inputs, list_monitors, replay_active, replay_target, save_replay, start,
+    begin_save_replay, encoder_options, list_audio_inputs, list_monitors, replay_active, replay_target, save_replay, start,
     start_replay, status, stop, stop_replay,
 };
 

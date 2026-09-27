@@ -1,10 +1,12 @@
 mod artwork;
+mod autostart;
 #[cfg(target_os = "windows")]
 mod audio;
 mod cache;
 mod capture;
 mod clipmeta;
 mod config;
+mod denoise;
 mod detect;
 mod discord;
 mod dragdrop;
@@ -84,8 +86,23 @@ fn get_encoder(app: tauri::AppHandle) -> String {
 }
 
 #[tauri::command]
+async fn encoder_options() -> Result<capture::EncoderOptions, String> {
+    tokio::task::spawn_blocking(capture::encoder_options).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn set_encoder(app: tauri::AppHandle, enc: String) -> Result<(), String> {
     config::set_encoder(&app, &enc)
+}
+
+#[tauri::command]
+fn get_autostart() -> bool {
+    autostart::enabled()
+}
+
+#[tauri::command]
+fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    autostart::set(&app, enabled)
 }
 
 #[tauri::command]
@@ -795,6 +812,26 @@ fn clear_save_sound(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn mic_test_record(device: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || denoise::test_record(&device)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn mic_test_play(level: u32) -> Result<u64, String> {
+    tokio::task::spawn_blocking(move || denoise::test_stop_and_play(level)).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn mic_test_stop() {
+    denoise::test_stop_playback();
+}
+
+#[tauri::command]
+fn mic_test_discard() {
+    denoise::test_discard();
+}
+
+#[tauri::command]
 async fn pick_folder() -> Result<Option<String>, String> {
     tokio::task::spawn_blocking(config::pick_folder)
         .await
@@ -906,6 +943,7 @@ pub fn run() {
             let version = app.package_info().version.to_string();
             std::thread::spawn(move || {
                 logs::log_system(&version);
+                autostart::reconcile(&handle);
                 share::cleanup(&share_dir);
                 cache::prune_editor_audio(&handle, std::time::Duration::from_secs(7 * 24 * 3600));
                 if let Some(dir) = search_icons {
@@ -979,6 +1017,9 @@ pub fn run() {
             set_language,
             list_monitors,
             list_audio_inputs,
+            get_autostart,
+            set_autostart,
+            encoder_options,
             toggle_recording,
             stop_capture,
             capture_status,
@@ -996,6 +1037,10 @@ pub fn run() {
             accept_save_sound,
             discard_save_sound,
             clear_save_sound,
+            mic_test_record,
+            mic_test_play,
+            mic_test_stop,
+            mic_test_discard,
             clear_cache,
             open_clips_dir,
             open_logs_dir,

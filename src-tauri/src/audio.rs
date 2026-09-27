@@ -42,6 +42,7 @@ pub enum TrackKind {
 
 pub enum Encoding {
     Aac(u32),
+    Pcm,
 }
 
 // Toma del PCM ya downmezclado (post-downmix, antes de codificar) de una pista, para
@@ -172,6 +173,7 @@ pub fn spawn_track(
     channels: u16,
     sink: Arc<dyn AudioSink>,
     pcm_tap: Option<Arc<dyn PcmTap>>,
+    denoise: bool,
 ) -> TrackHandle {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_t = stop.clone();
@@ -190,7 +192,7 @@ pub fn spawn_track(
             // hilo termina sin más: el sink no recibe nada, pero no compromete el resto
             // de la captura (CLAUDE.md §4.4).
             if let Err(e) =
-                run_track(&kind, encoding, sample_rate, channels, &sink, pcm_tap.as_ref(), &stop_t)
+                run_track(&kind, encoding, sample_rate, channels, &sink, pcm_tap.as_ref(), denoise, &stop_t)
             {
                 log::warn!("la pista de captura terminó con error: {e:?}");
             }
@@ -301,6 +303,7 @@ enum StreamEnd {
 // cascos, cambiar la salida por defecto o desenchufar el micro se reabre contra el dispositivo
 // que toque, sin reiniciar la captura. El encoder AAC y el formato de la pista son fijos, así que
 // el clip sigue siendo una sola pista continua; solo queda el hueco del cambio.
+#[allow(clippy::too_many_arguments)]
 fn run_track(
     kind: &TrackKind,
     encoding: Encoding,
@@ -308,9 +311,10 @@ fn run_track(
     channels: u16,
     sink: &Arc<dyn AudioSink>,
     pcm_tap: Option<&Arc<dyn PcmTap>>,
+    denoise: bool,
     stop: &Arc<AtomicBool>,
 ) -> Result<()> {
-    let (rate, dst_ch) = aac_target_format(sample_rate, channels);
+    let (rate, dst_ch) = track_format(kind, sample_rate, channels);
     let mut aac = match encoding {
         Encoding::Aac(bitrate) => match build_aac_encoder(rate, dst_ch, bitrate) {
             Ok(mut enc) => {
@@ -322,6 +326,7 @@ fn run_track(
                 return Err(e);
             }
         },
+        Encoding::Pcm => None,
     };
 
     let mut open_err_logged = false;
@@ -329,7 +334,9 @@ fn run_track(
         match open_stream(kind, rate, dst_ch) {
             Ok(stream) => {
                 open_err_logged = false;
-                match pump_stream(&stream, kind, rate, dst_ch, &mut aac, sink, pcm_tap, stop) {
+                // Uno nuevo por stream: tras reabrir el dispositivo no debe arrastrar audio del anterior.
+                let mut denoiser = (denoise && rate == crate::denoise::RATE).then(|| crate::denoise::Denoiser::new(dst_ch));
+                match pump_stream(&stream, kind, rate, dst_ch, &mut aac, &mut denoiser, sink, pcm_tap, stop) {
                     StreamEnd::Stopped => break,
                     StreamEnd::Lost => log::info!("el dispositivo cambió o se perdió; reabriendo la pista"),
                 }
@@ -358,6 +365,7 @@ fn pump_stream(
     sample_rate: u32,
     dst_ch: u16,
     aac: &mut Option<AacEncoder>,
+    denoiser: &mut Option<crate::denoise::Denoiser>,
     sink: &Arc<dyn AudioSink>,
     pcm_tap: Option<&Arc<dyn PcmTap>>,
     stop: &Arc<AtomicBool>,
@@ -422,9 +430,13 @@ fn pump_stream(
             }
 
             if !pcm16.is_empty() && frames > 0 {
-                let out = downmix(&pcm16, stream.channels as usize, dst_ch as usize);
+                let mut out = downmix(&pcm16, stream.channels as usize, dst_ch as usize);
                 let dur = (frames as i64 * 10_000_000) / sample_rate.max(1) as i64;
-                let time = qpc as i64;
+                let mut time = qpc as i64;
+                if let Some(d) = denoiser {
+                    d.process_live(&mut out);
+                    time -= crate::denoise::DELAY_100NS;
+                }
                 if let Some(tap) = pcm_tap {
                     tap.on_pcm(&out, time, dur);
                 }
@@ -485,8 +497,9 @@ fn target_channels(channels: u16) -> u16 {
 // El encoder AAC de Media Foundation solo admite 1-2 canales y 44100/48000 Hz. Dado el
 // formato nativo del dispositivo, devuelve el formato de la pista: su misma frecuencia si el AAC
 // la admite y 48 kHz si no (Windows remuestrea al abrir, ver open_stream), en mono o estéreo.
-pub fn aac_target_format(rate: u32, channels: u16) -> (u32, u16) {
-    let rate = if rate == 44100 || rate == 48000 { rate } else { 48000 };
+// El micro va siempre a 48 kHz, la única frecuencia que admite la supresión de ruido.
+pub fn track_format(kind: &TrackKind, rate: u32, channels: u16) -> (u32, u16) {
+    let rate = if matches!(kind, TrackKind::SystemLoopback) && rate == 44100 { rate } else { 48000 };
     (rate, target_channels(channels))
 }
 

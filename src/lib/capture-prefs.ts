@@ -14,6 +14,8 @@ type CapturePrefs = {
   resolution: number;
   mic: boolean;
   micDevice: string;
+  noiseSuppression: boolean;
+  noiseLevel: number;
   sound: SoundLevel;
   hotkeys: { save: string; record: string; open: string };
 };
@@ -29,6 +31,8 @@ function current(): CapturePrefs {
     resolution: captureConfig.resolution,
     mic: captureConfig.mic,
     micDevice: captureConfig.micDevice,
+    noiseSuppression: captureConfig.noiseSuppression,
+    noiseLevel: captureConfig.noiseLevel,
     sound: replaySound.level,
     hotkeys: { save: hotkeys.saveReplay, record: hotkeys.record, open: hotkeys.open }
   };
@@ -42,7 +46,9 @@ function apply(p: CapturePrefs) {
     quality: p.quality,
     resolution: p.resolution,
     mic: p.mic,
-    micDevice: p.micDevice
+    micDevice: p.micDevice,
+    noiseSuppression: p.noiseSuppression,
+    noiseLevel: p.noiseLevel
   });
   replaySound.level = p.sound;
   Object.assign(hotkeys, { saveReplay: p.hotkeys.save, record: p.hotkeys.record, open: p.hotkeys.open });

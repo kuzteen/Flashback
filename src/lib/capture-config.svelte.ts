@@ -71,12 +71,16 @@ export const captureConfig = $state<{
   resolution: number;
   mic: boolean;
   micDevice: string;
+  noiseSuppression: boolean;
+  noiseLevel: number;
 }>({
   fps: loadFps(),
   quality: loadQuality(),
   resolution: loadResolution(),
   mic: loadMic(),
-  micDevice: loadMicDevice()
+  micDevice: loadMicDevice(),
+  noiseSuppression: true,
+  noiseLevel: 50
 });
 
 export function qualityLabel(key: QualityKey): string {
@@ -155,5 +159,15 @@ export function setMic(enabled: boolean) {
 
 export function setMicDevice(id: string) {
   captureConfig.micDevice = id;
+  pushCapturePrefs();
+}
+
+export function setNoiseSuppression(enabled: boolean) {
+  captureConfig.noiseSuppression = enabled;
+  pushCapturePrefs();
+}
+
+export function setNoiseLevel(level: number) {
+  captureConfig.noiseLevel = level;
   pushCapturePrefs();
 }

@@ -126,6 +126,21 @@ pub fn preview_draft(start_ms: u64, len_ms: u64) {
     s.preview = Some(buf);
 }
 
+// Reproduce PCM16 tal cual (la prueba de voz), sin el volumen del aviso.
+pub fn play_pcm(pcm: Vec<u8>, sr: u32, ch: u16) {
+    let mut s = state();
+    stop_playback();
+    let buf = Arc::new(wav_bytes(&pcm, sr, ch));
+    start_playback(&buf);
+    s.preview = Some(buf);
+}
+
+pub fn stop() {
+    let mut s = state();
+    stop_playback();
+    s.preview = None;
+}
+
 pub fn accept_draft(app: &tauri::AppHandle, start_ms: u64, len_ms: u64) -> Result<String, String> {
     let draft = DRAFT.lock().unwrap_or_else(|e| e.into_inner()).take().ok_or("No hay sonido elegido")?;
     let bytes = wav_bytes(&cut(&draft, start_ms, len_ms), draft.sr, draft.ch);

@@ -37,6 +37,7 @@ urlencoding = "2"
 discord-rich-presence = "0.2"
 # time 0.3.48 rompe la coherencia con cookie 0.18.1 (que arrastra Tauri): error E0119.
 time = "=0.3.47"
+nnnoiseless = { version = "0.5", default-features = false }
 
 # Prioridad #1 del proyecto: binario ligero y rápido. panic="unwind" (default) a propósito:
 # el pipeline de captura contiene los panics con catch_unwind para auto-recuperarse (§4.4).

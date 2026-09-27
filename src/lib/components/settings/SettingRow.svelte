@@ -6,6 +6,8 @@
     desc,
     disabled = false,
     sub = false,
+    muted = false,
+    lead,
     info,
     children
   }: {
@@ -13,12 +15,16 @@
     desc?: string;
     disabled?: boolean;
     sub?: boolean;
+    // Atenúa el texto y el icono pero deja el control usable (un juego con la captura apagada).
+    muted?: boolean;
+    lead?: Snippet;
     info?: Snippet;
     children?: Snippet;
   } = $props();
 </script>
 
-<div class="row" class:disabled class:sub inert={disabled}>
+<div class="row" class:disabled class:sub class:muted inert={disabled}>
+  {#if lead}<div class="lead">{@render lead()}</div>{/if}
   <div class="info">
     <h3>{title}</h3>
     {#if info}{@render info()}{/if}
@@ -33,35 +39,46 @@
     align-items: center;
     justify-content: space-between;
     gap: 24px;
-    min-height: 72px;
-    padding: 16px 0;
-  }
-  .row + :global(.row) {
-    border-top: 1px solid var(--line);
+    min-height: 70px;
+    padding: 14px 0;
   }
   .disabled {
     opacity: 0.45;
   }
   .sub {
-    min-height: 52px;
-    padding: 10px 0 10px 18px;
+    min-height: 56px;
+    padding: 8px 0 8px 20px;
   }
   .sub h3 {
     margin-bottom: 0;
-    font-size: 13.5px;
+    font-size: 15px;
     font-weight: 500;
     color: var(--text-1);
   }
+  .lead {
+    display: flex;
+    flex-shrink: 0;
+    margin-right: -8px;
+  }
   .info {
+    flex: 1;
     min-width: 0;
   }
+  .muted .lead,
+  .muted .info {
+    opacity: 0.55;
+  }
+  .lead,
+  .info {
+    transition: opacity 0.15s ease;
+  }
   h3 {
-    font-size: 14.5px;
+    font-size: 16px;
     font-weight: 560;
-    margin-bottom: 3px;
+    margin-bottom: 4px;
   }
   p {
-    font-size: 12.5px;
+    font-size: 14px;
     color: var(--text-2);
   }
   .control {

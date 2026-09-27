@@ -94,7 +94,7 @@
   $effect(() => () => clearTimeout(freedTimer));
 </script>
 
-<SettingGroup title={t('settings.group.clips')}>
+<SettingGroup id="clips" title={t('settings.group.clips')}>
   <SettingRow title={t('settings.clipsFolder')} desc={t('settings.clipsFolder.desc')}>
     {#snippet info()}<p class="path mono" title={folder}>{folder}</p>{/snippet}
     <button class="btn" onclick={openFolder}><Icon name="folder-open" size={16} sw={2} /><span class="txt">{t('settings.open')}</span></button>
@@ -102,7 +102,7 @@
   </SettingRow>
 </SettingGroup>
 
-<SettingGroup title={t('settings.group.cache')}>
+<SettingGroup id="cache" title={t('settings.group.cache')}>
   <SettingRow title={t('settings.cache')} desc={t('settings.cache.desc')}>
     <span class="total mono">{usage ? size(shownTotal.current) : '—'}</span>
     <button class="btn clear" class:busy={clearing || freed !== null} onclick={clear} disabled={clearing || freed !== null || !usage || total === 0}>

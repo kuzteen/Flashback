@@ -18,7 +18,6 @@
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import Stepper from '$lib/components/Stepper.svelte';
   import MorphTip from '$lib/components/MorphTip.svelte';
-  import Switch from '$lib/components/settings/Switch.svelte';
   import ExportToast from '$lib/components/ExportToast.svelte';
   import { TipGroup } from '$lib/morph-tip.svelte';
   import { hoverPill, pill } from '$lib/pill';
@@ -30,8 +29,6 @@
     setFps,
     setQuality,
     setResolution,
-    setMic,
-    setMicDevice,
     qualityLabel,
     resolutionLabel,
     estimatedClipSize,
@@ -77,7 +74,6 @@
     primary: boolean;
     thumb: string | null;
   };
-  type AudioInput = { id: string; name: string };
 
   let monitors = $state<Monitor[]>([]);
   // La pantalla elegida la guarda Rust: sobrevive a que la interfaz se descargue en la bandeja.
@@ -90,11 +86,6 @@
   invoke<{ running: boolean }>('capture_status')
     .then((s) => (recording = s.running))
     .catch(() => {});
-  let micOn = $state(captureConfig.mic);
-  let audioInputs = $state<AudioInput[]>([]);
-  let micInput = $state(captureConfig.micDevice);
-  let micPressed = $state(false);
-  let micDDOpen = $state(false);
   let settingsOpen = $state(false);
   let gearSpin = $state(false);
 
@@ -159,7 +150,6 @@
   );
 
   const activeMonitor = $derived(monitors.find((m) => m.id === selectedMonitor) ?? null);
-  const micName = $derived(audioInputs.find((d) => d.id === micInput)?.name ?? t('cap.noMicsShort'));
   // El recorrido es scrollWidth - clientWidth para que el final quede al ras del borde
   // y nunca se salga de vista; la duración escala con la distancia para velocidad constante.
   function marquee(node: HTMLElement, _text: string) {
@@ -183,30 +173,14 @@
     }
   }
 
-  async function loadAudioInputs() {
-    try {
-      audioInputs = await invoke<AudioInput[]>('list_audio_inputs');
-      if (!audioInputs.some((d) => d.id === micInput)) {
-        micInput = audioInputs[0]?.id ?? '';
-        setMicDevice(micInput);
-      }
-    } catch {
-      // fuera de Tauri (preview en navegador)
-    }
-  }
-
   function togglePicker(e: MouseEvent) {
     e.stopPropagation();
     pickerOpen = !pickerOpen;
-    if (pickerOpen) {
-      loadMonitors();
-      loadAudioInputs();
-    }
+    if (pickerOpen) loadMonitors();
   }
 
   function closeAll() {
     pickerOpen = false;
-    micDDOpen = false;
     settingsOpen = false;
   }
 
@@ -254,17 +228,6 @@
     };
     apply();
   });
-
-  function toggleMicDD(e: MouseEvent) {
-    e.stopPropagation();
-    micDDOpen = !micDDOpen;
-  }
-  function pickMic(e: MouseEvent, id: string) {
-    e.stopPropagation();
-    micInput = id;
-    setMicDevice(id);
-    micDDOpen = false;
-  }
 
   function toggleSettings(e: MouseEvent) {
     e.stopPropagation();
@@ -388,7 +351,6 @@
   $effect(() => {
     refresh();
     loadMonitors();
-    loadAudioInputs();
     loadDisabledGames();
     const un = listen('game-changed', () => refresh());
     return () => {
@@ -472,15 +434,6 @@
     </nav>
 
     <div class="nav-bottom" inert={!!editorState.clip} use:pill={{ key: page.url.pathname, axis: 'y', selector: '.active' }}>
-      <a
-        class="nav-item"
-        class:active={isActive('/juegos')}
-        href="/juegos"
-        aria-label={t('nav.games')}
-        use:sideTips.trigger={t('nav.games')}
-      >
-        <Icon name="gamepad" size={24} />
-      </a>
       <a
         class="nav-item settings-tab"
         class:active={isActive('/settings')}
@@ -572,65 +525,6 @@
               </span>
               {#if !selectedMonitor}<span class="opt-check"><Icon name="check" size={15} sw={2.2} /></span>{/if}
             </button>
-
-            <button
-              class="cap-opt mic-opt"
-              class:on={micOn}
-              role="menuitemcheckbox"
-              aria-checked={micOn}
-              onclick={(e) => {
-                e.stopPropagation();
-                micOn = !micOn;
-                setMic(micOn);
-              }}
-              onpointerdown={(e) => e.button === 0 && (micPressed = true)}
-              onpointerup={() => (micPressed = false)}
-              onpointerleave={() => (micPressed = false)}
-            >
-              <span class="opt-ico"><Icon name="mic" size={21} /></span>
-              <span class="mic-label">
-                {t('cap.micCapture')}
-                <span class="help" aria-label={t('cap.whatOption')}>
-                  ?
-                  <span class="help-tip" role="tooltip">{t('cap.micTip')}</span>
-                </span>
-              </span>
-              <Switch visual size="sm" checked={micOn} pressed={micPressed} label={t('cap.micCapture')} />
-            </button>
-
-            <div class="mic-input">
-              <div class="mic-dd" class:open={micDDOpen}>
-                <button
-                  class="mic-trigger"
-                  aria-haspopup="listbox"
-                  aria-expanded={micDDOpen}
-                  aria-label={t('cap.micInput')}
-                  onclick={toggleMicDD}
-                >
-                  <span class="mic-value">{micName}</span>
-                  <span class="mic-chev"><Icon name="chevron-down" size={13} sw={2} /></span>
-                </button>
-                {#if micDDOpen}
-                  <div class="mic-list" role="listbox" use:flip use:hoverPill={{ selector: '.mic-item', axis: 'y' }}>
-                    {#each audioInputs as inp (inp.id)}
-                      <button
-                        class="mic-item"
-                        class:on={micInput === inp.id}
-                        role="option"
-                        aria-selected={micInput === inp.id}
-                        onclick={(e) => pickMic(e, inp.id)}
-                      >
-                        {inp.name}
-                        <span class="mic-check"><Icon name="check" size={13} sw={2.2} /></span>
-                      </button>
-                    {/each}
-                    {#if audioInputs.length === 0}
-                      <button class="mic-item" disabled>{t('cap.noMics')}</button>
-                    {/if}
-                  </div>
-                {/if}
-              </div>
-            </div>
 
             <div class="cap-sep"></div>
             <span class="cap-group">{t('cap.screens')}</span>
@@ -1194,14 +1088,6 @@
     color: var(--text-1);
   }
 
-  .mic-label {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    font-size: 13px;
-    line-height: 1.15;
-  }
   .help {
     position: relative;
     display: inline-grid;
@@ -1245,96 +1131,6 @@
     opacity: 1;
     visibility: visible;
   }
-
-  .mic-input {
-    margin-top: 2px;
-    padding: 0 8px 2px;
-  }
-  .mic-dd {
-    position: relative;
-  }
-  .mic-trigger {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    width: 100%;
-    height: 30px;
-    padding: 6px;
-    font-size: 11px;
-    color: var(--text-0);
-    background: var(--bg-0);
-    border: 1px solid var(--line);
-    border-radius: 4px;
-    cursor: pointer;
-    text-align: left;
-    transition: border-color 0.14s ease;
-  }
-  .mic-trigger:hover,
-  .mic-dd.open .mic-trigger {
-    border-color: var(--line-strong);
-  }
-  .mic-value {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .mic-chev {
-    display: inline-flex;
-    color: var(--text-3);
-    flex-shrink: 0;
-    transition: transform 0.15s ease;
-  }
-  .mic-dd.open .mic-chev {
-    transform: rotate(180deg);
-  }
-  .mic-list {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    right: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    padding: 5px;
-    background: var(--surface);
-    border: 1px solid var(--line-strong);
-    border-radius: 8px;
-    box-shadow: var(--shadow-pop);
-    z-index: 70;
-  }
-  .mic-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 8px 9px;
-    font-size: 11px;
-    border-radius: 6px;
-    color: var(--text-1);
-    text-align: left;
-    white-space: nowrap;
-    transition: background 0.12s ease, color 0.12s ease;
-  }
-  .mic-item:hover {
-    color: var(--text-0);
-  }
-  .mic-list > :global(.slide-pill) {
-    background: var(--bg-3);
-    border-radius: 6px;
-  }
-  .mic-item.on {
-    color: var(--bright);
-  }
-  .mic-item .mic-check {
-    opacity: 0;
-    flex-shrink: 0;
-    color: var(--bright);
-  }
-  .mic-item.on .mic-check {
-    opacity: 1;
-  }
-
 
   .quick {
     margin-left: auto;

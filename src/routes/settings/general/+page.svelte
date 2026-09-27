@@ -32,9 +32,12 @@
   let picking = $state(false);
   let trimDraft = $state<SoundDraft | null>(null);
   let soundError = $state(false);
-  let toastsOpen = $state(false);
+  let autostart = $state(false);
   let toasts = $state<ToastPrefs>({ enabled: true, saved: true, ready: true, recording: true, problems: true });
 
+  invoke<boolean>('get_autostart')
+    .then((v) => (autostart = v))
+    .catch(() => {});
   invoke<boolean>('get_discord_rpc')
     .then((v) => (discordRpc = v))
     .catch(() => {});
@@ -44,6 +47,14 @@
   invoke<ToastPrefs>('get_toast_prefs')
     .then((v) => (toasts = v))
     .catch(() => {});
+
+  function setAutostart(on: boolean) {
+    autostart = on;
+    invoke('set_autostart', { enabled: on }).catch((e) => {
+      console.error('set_autostart', e);
+      autostart = !on;
+    });
+  }
 
   function setDiscordRpc(on: boolean) {
     discordRpc = on;
@@ -87,13 +98,13 @@
   }
 </script>
 
-<SettingGroup title={t('settings.group.interface')}>
+<SettingGroup id="interface" title={t('settings.group.interface')}>
   <SettingRow title={t('settings.language')} desc={t('settings.language.desc')}>
     <Stepper value={getLocale()} options={languageOptions} onchange={(v) => setLocale(v as Locale)} ariaLabel={t('settings.language')} />
   </SettingRow>
 </SettingGroup>
 
-<SettingGroup title={t('settings.group.notifications')}>
+<SettingGroup id="notifications" title={t('settings.group.notifications')}>
   <SettingRow title={t('settings.saveSound')} desc={t('settings.saveSound.desc')}>
     <Stepper value={replaySound.level} options={soundOptions} onchange={setReplaySoundLevel} ariaLabel={t('settings.soundVolume')} />
     <button
@@ -122,29 +133,10 @@
     </button>
   </SettingRow>
 
-  <SettingRow title={t('settings.toasts')}>
-    {#snippet info()}
-      <p class="desc">{t('settings.toasts.desc')}</p>
-      <span class="more-wrap">
-        <button
-          class="more"
-          class:open={toastsOpen && toasts.enabled}
-          aria-expanded={toastsOpen && toasts.enabled}
-          aria-disabled={!toasts.enabled}
-          aria-describedby={toasts.enabled ? undefined : 'toasts-tip'}
-          onclick={() => toasts.enabled && (toastsOpen = !toastsOpen)}
-        >
-          <span class="txt">{t('settings.toasts.customize')}</span>
-          <Icon name="chevron-down" size={11} sw={2.2} />
-        </button>
-        {#if !toasts.enabled}
-          <span class="tip" id="toasts-tip" role="tooltip">{t('settings.toasts.customizeOff')}</span>
-        {/if}
-      </span>
-    {/snippet}
+  <SettingRow title={t('settings.toasts')} desc={t('settings.toasts.desc')}>
     <Switch checked={toasts.enabled} onchange={(v) => setToast('enabled', v)} label={t('settings.toasts')} />
   </SettingRow>
-  {#if toastsOpen && toasts.enabled}
+  {#if toasts.enabled}
     {#each toastRows as row (row.key)}
       <SettingRow title={t(row.labelKey)} sub>
         <Switch checked={toasts[row.key]} onchange={(v) => setToast(row.key, v)} label={t(row.labelKey)} />
@@ -157,13 +149,19 @@
   <SoundTrimDialog draft={trimDraft} onclose={closeTrim} />
 {/if}
 
-<SettingGroup title={t('settings.group.integrations')}>
+<SettingGroup id="integrations" title={t('settings.group.integrations')}>
   <SettingRow title={t('settings.discordRpc')} desc={t('settings.discordRpc.desc')}>
     <Switch checked={discordRpc} onchange={setDiscordRpc} label={t('settings.discordRpc')} />
   </SettingRow>
 </SettingGroup>
 
-<SettingGroup title={t('settings.group.support')}>
+<SettingGroup id="system" title={t('settings.group.system')}>
+  <SettingRow title={t('settings.autostart')} desc={t('settings.autostart.desc')}>
+    <Switch checked={autostart} onchange={setAutostart} label={t('settings.autostart')} />
+  </SettingRow>
+</SettingGroup>
+
+<SettingGroup id="support" title={t('settings.group.support')}>
   <SettingRow title={t('settings.logs')} desc={t('settings.logs.desc')}>
     <button class="btn" onclick={openLogs}><Icon name="folder-open" size={16} sw={2} /><span class="txt">{t('settings.open')}</span></button>
   </SettingRow>
@@ -205,67 +203,6 @@
   }
   .file.none {
     color: var(--text-3);
-  }
-  .desc {
-    font-size: 12.5px;
-    color: var(--text-2);
-  }
-  .more-wrap {
-    position: relative;
-    display: inline-flex;
-    margin-top: 8px;
-  }
-  .more {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 0;
-    font-size: 12.5px;
-    color: var(--text-1);
-    text-decoration: underline;
-    text-underline-offset: 3px;
-    text-decoration-color: var(--line-strong);
-    transition: color 0.15s ease, text-decoration-color 0.15s ease;
-  }
-  .more .txt {
-    line-height: 1;
-    text-box: trim-both cap alphabetic;
-  }
-  .more :global(svg) {
-    transition: transform 0.15s ease;
-  }
-  .more.open :global(svg) {
-    transform: rotate(180deg);
-  }
-  .more:hover:not([aria-disabled='true']) {
-    color: var(--text-0);
-    text-decoration-color: currentColor;
-  }
-  .more[aria-disabled='true'] {
-    color: var(--text-3);
-    cursor: default;
-  }
-  /* Sin retardo a propósito: explica al momento por qué el enlace no responde. */
-  .tip {
-    position: absolute;
-    top: calc(100% + 7px);
-    left: 0;
-    z-index: 10;
-    width: max-content;
-    max-width: 260px;
-    padding: 8px 10px;
-    font-size: 11.5px;
-    line-height: 1.35;
-    color: var(--text-1);
-    background: var(--bg-0);
-    border: 1px solid var(--line-strong);
-    border-radius: 8px;
-    box-shadow: var(--shadow-float);
-    pointer-events: none;
-    visibility: hidden;
-  }
-  .more-wrap:hover .tip {
-    visibility: visible;
   }
   .err {
     margin-bottom: 4px;

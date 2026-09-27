@@ -191,6 +191,23 @@ fn read_bool(app: &tauri::AppHandle, key: &str) -> Option<bool> {
 }
 
 // Rich Presence de Discord: opt-in, desactivado por defecto.
+// None mientras el usuario no lo haya tocado: manda lo que dejó el instalador.
+pub fn get_autostart(app: &tauri::AppHandle) -> Option<bool> {
+    read_bool(app, "autostart")
+}
+
+pub fn set_autostart(app: &tauri::AppHandle, on: bool) -> Result<(), String> {
+    write_setting(app, "autostart", serde_json::json!(on))
+}
+
+pub fn get_autostart_command(app: &tauri::AppHandle) -> Option<String> {
+    read_setting(app, "autostart_command")
+}
+
+pub fn set_autostart_command(app: &tauri::AppHandle, cmd: &str) -> Result<(), String> {
+    write_setting(app, "autostart_command", serde_json::json!(cmd))
+}
+
 pub fn get_discord_rpc(app: &tauri::AppHandle) -> bool {
     read_bool(app, "discord_rpc").unwrap_or(false)
 }
@@ -290,6 +307,8 @@ pub struct CapturePrefs {
     pub resolution: u32,
     pub mic: bool,
     pub mic_device: String,
+    pub noise_suppression: bool,
+    pub noise_level: u32,
     pub sound: String,
     pub hotkeys: HotkeyPrefs,
 }
@@ -312,6 +331,8 @@ impl Default for CapturePrefs {
             resolution: 1080,
             mic: true,
             mic_device: String::new(),
+            noise_suppression: true,
+            noise_level: 50,
             sound: "normal".into(),
             hotkeys: HotkeyPrefs::default(),
         }
@@ -344,6 +365,7 @@ impl CapturePrefs {
         if !["off", "low", "normal", "high"].contains(&self.sound.as_str()) {
             self.sound = d.sound;
         }
+        self.noise_level = self.noise_level.min(100);
         self
     }
 

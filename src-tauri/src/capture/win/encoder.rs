@@ -96,11 +96,9 @@ pub(super) fn build_encoder(
     Ok((encoder, None))
 }
 
-// Enumera todos los encoders H.264 por hardware y devuelve el que coincide con la
-// preferencia de vendor. "Auto" devuelve el primero (MF ya los ordena por calidad).
-// Si la preferencia no coincide con ningún encoder disponible, devuelve el primero
-// como fallback en lugar de fallar.
-fn pick_hw_encoder(pref: &str) -> Result<Option<IMFActivate>> {
+// Encoders H.264 por hardware que se pueden usar, en el orden de calidad de MF, con su nombre.
+// Los inservibles se descartan: si solo queda uno así, mejor el software que clips sin imagen.
+fn usable_hw_encoders() -> Result<Vec<(IMFActivate, String)>> {
     let info = MFT_REGISTER_TYPE_INFO {
         guidMajorType: MFMediaType_Video,
         guidSubtype: MFVideoFormat_H264,
@@ -118,42 +116,53 @@ fn pick_hw_encoder(pref: &str) -> Result<Option<IMFActivate>> {
         )?;
     }
     if count == 0 || activates.is_null() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
-
-    let keywords: &[&str] = match pref.to_lowercase().as_str() {
-        "nvenc" => &["nvenc", "nvidia"],
-        "amf" => &["amf", "amd"],
-        "quick sync" => &["quick sync", "intel"],
-        _ => &[],
-    };
-
-    let mut chosen: Option<IMFActivate> = None;
+    let mut out = Vec::new();
     for i in 0..count as usize {
-        let act = unsafe { &*activates.add(i) };
-        if let Some(act) = act {
-            // Si solo queda uno inservible, mejor el encoder por software que clips sin imagen.
-            if encoder_name(act).is_some_and(|n| crate::capture::unusable_h264_encoder(&n)) {
-                continue;
-            }
-            if chosen.is_none() {
-                // Siempre guardamos el primero como fallback.
-                chosen = Some(act.clone());
-            }
-            if !keywords.is_empty() && encoder_name_matches(act, keywords) {
-                chosen = Some(act.clone());
-                break;
+        if let Some(act) = unsafe { &*activates.add(i) } {
+            let name = encoder_name(act).unwrap_or_default();
+            if !crate::capture::unusable_h264_encoder(&name) {
+                out.push((act.clone(), name));
             }
         }
     }
-
     // Liberar el array de activates: drop_in_place decrementa el refcount de cada uno.
     for i in 0..count as usize {
         unsafe { std::ptr::drop_in_place(activates.add(i)) };
     }
     unsafe { CoTaskMemFree(Some(activates as *const _)) };
+    Ok(out)
+}
 
-    Ok(chosen)
+// Devuelve el encoder que coincide con la preferencia de vendor. "Auto" devuelve el primero
+// (MF ya los ordena por calidad). Si la preferencia no coincide con ningún encoder disponible,
+// devuelve el primero como fallback en lugar de fallar.
+fn pick_hw_encoder(pref: &str) -> Result<Option<IMFActivate>> {
+    let encoders = usable_hw_encoders()?;
+    let chosen = encoders
+        .iter()
+        .find(|(_, name)| vendor_of(name).is_some_and(|v| v.eq_ignore_ascii_case(pref)))
+        .or(encoders.first());
+    Ok(chosen.map(|(act, _)| act.clone()))
+}
+
+const VENDORS: [(&str, &[&str]); 3] =
+    [("NVENC", &["nvenc", "nvidia"]), ("AMF", &["amf", "amd"]), ("Quick Sync", &["quick sync", "intel"])];
+
+fn vendor_of(name: &str) -> Option<&'static str> {
+    let name = name.to_lowercase();
+    VENDORS.iter().find(|(_, keys)| keys.iter().any(|k| name.contains(k))).map(|(v, _)| *v)
+}
+
+// Opciones que ofrece Ajustes: los vendors con encoder usable en este equipo y el que elegiría
+// "Auto" (Software si no hay ninguno por hardware).
+pub(super) fn encoder_options() -> (Vec<&'static str>, &'static str) {
+    let encoders = usable_hw_encoders().unwrap_or_default();
+    let found: Vec<&str> = encoders.iter().filter_map(|(_, n)| vendor_of(n)).collect();
+    let available = VENDORS.iter().map(|(v, _)| *v).filter(|v| found.contains(v)).collect();
+    let auto = encoders.first().and_then(|(_, n)| vendor_of(n)).unwrap_or("Software");
+    (available, auto)
 }
 
 fn encoder_name(activate: &IMFActivate) -> Option<String> {
@@ -162,13 +171,6 @@ fn encoder_name(activate: &IMFActivate) -> Option<String> {
     let mut len = 0u32;
     unsafe { attrs.GetString(&MFT_FRIENDLY_NAME_Attribute, &mut buf, Some(&mut len)) }.ok()?;
     Some(String::from_utf16_lossy(&buf[..len as usize]))
-}
-
-fn encoder_name_matches(activate: &IMFActivate, keywords: &[&str]) -> bool {
-    encoder_name(activate).is_some_and(|n| {
-        let name = n.to_lowercase();
-        keywords.iter().any(|k| name.contains(k))
-    })
 }
 
 // Primer encoder H.264 que cumple los flags, o None si no hay ninguno.
@@ -267,6 +269,29 @@ mod tests {
         for pref in ["Auto", "NVENC", "AMF", "Quick Sync"] {
             let name = pick_hw_encoder(pref).unwrap().and_then(|a| encoder_name(&a));
             assert!(!name.as_deref().is_some_and(crate::capture::unusable_h264_encoder), "{pref}: {name:?}");
+        }
+    }
+
+    #[test]
+    fn encoders_are_grouped_by_the_vendor_names_settings_offers() {
+        assert_eq!(vendor_of("NVIDIA H.264 Encoder MFT"), Some("NVENC"));
+        assert_eq!(vendor_of("AMDh264Encoder"), Some("AMF"));
+        assert_eq!(vendor_of("Intel® Quick Sync Video H.264 Encoder MFT"), Some("Quick Sync"));
+        assert_eq!(vendor_of("H264 Encoder MFT"), None);
+    }
+
+    // Lo que lista Ajustes sale de la misma enumeración que usa la captura: si hay un encoder por
+    // hardware usable, "Auto" apunta a su vendor y ese vendor aparece entre las opciones.
+    #[test]
+    fn settings_list_the_vendor_auto_would_pick() {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        }
+        let (available, auto) = encoder_options();
+        let picked = pick_hw_encoder("Auto").unwrap().and_then(|a| encoder_name(&a)).and_then(|n| vendor_of(&n));
+        assert_eq!(auto, picked.unwrap_or("Software"));
+        if auto != "Software" {
+            assert!(available.contains(&auto));
         }
     }
 }

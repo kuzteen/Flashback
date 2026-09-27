@@ -61,6 +61,19 @@ use crate::audio;
 
 mod encoder;
 use encoder::{build_converter, build_encoder};
+
+pub fn encoder_options() -> super::EncoderOptions {
+    std::thread::spawn(|| {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        }
+        let (available, auto) = encoder::encoder_options();
+        unsafe { CoUninitialize() };
+        super::EncoderOptions { available: available.into_iter().map(String::from).collect(), auto: auto.into() }
+    })
+    .join()
+    .unwrap_or_default()
+}
 mod monitors;
 use monitors::{
     enum_monitors, monitor_info, resolve_game_window, resolve_target_item, screen_number,
@@ -1543,8 +1556,8 @@ fn build_replay(
         }
         None
     };
-    let sys_target = sys_native.map(|(r, c)| audio::aac_target_format(r, c));
-    let mic_target = mic_native.map(|(r, c)| audio::aac_target_format(r, c));
+    let sys_target = sys_native.map(|(r, c)| audio::track_format(&audio::TrackKind::SystemLoopback, r, c));
+    let mic_target = mic_native.map(|(r, c)| audio::track_format(&audio::TrackKind::Microphone(mic_device.clone()), r, c));
 
     let core = build_pipeline_core(
         stats, item, fps, factor, resolution, bitrate_override, encoder_pref, window_mode,
@@ -1573,6 +1586,7 @@ fn build_replay(
             ch,
             sink,
             None,
+            false,
         ));
     }
     if let (Some((rate, ch)), Some((_, dst_ch))) = (mic_native, mic_target) {
@@ -1588,6 +1602,7 @@ fn build_replay(
             ch,
             sink,
             None,
+            crate::denoise::enabled(),
         ));
     }
     pipe.audio_tracks = audio_tracks;
@@ -1624,8 +1639,8 @@ fn build_manual(
         }
         None
     };
-    let sys_target = sys_native.map(|(r, c)| audio::aac_target_format(r, c));
-    let mic_target = mic_native.map(|(r, c)| audio::aac_target_format(r, c));
+    let sys_target = sys_native.map(|(r, c)| audio::track_format(&audio::TrackKind::SystemLoopback, r, c));
+    let mic_target = mic_native.map(|(r, c)| audio::track_format(&audio::TrackKind::Microphone(mic_device.clone()), r, c));
 
     let core = build_pipeline_core(
         stats, item, fps, factor, resolution, bitrate_override, encoder_pref, false, None, false,
@@ -1645,6 +1660,7 @@ fn build_manual(
             ch,
             sink,
             None,
+            false,
         ));
     }
     if let (Some((rate, ch)), Some((_, dst_ch))) = (mic_native, mic_target) {
@@ -1656,6 +1672,7 @@ fn build_manual(
             ch,
             sink,
             None,
+            crate::denoise::enabled(),
         ));
     }
     pipe.audio_tracks = audio_tracks;
