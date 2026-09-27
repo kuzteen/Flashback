@@ -64,7 +64,8 @@ pub fn register(app: &AppHandle, save: &str, record: &str) -> Vec<String> {
                 });
             }
         });
-        if r.is_err() {
+        if let Err(e) = r {
+            log::warn!("atajos: no se pudo registrar {accel}: {e}");
             failed.push(accel.to_string());
         }
     }

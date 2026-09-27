@@ -106,7 +106,7 @@ fn resolve_device(kind: &TrackKind) -> Result<IMMDevice> {
         let mut last = LAST.lock().unwrap();
         if last[idx].as_deref() != Some(did.as_str()) {
             last[idx] = Some(did.clone());
-            eprintln!("audio: dispositivo de {label}: {did}");
+            log::info!("dispositivo de {label}: {did}");
         }
     }
     Ok(device)
@@ -159,7 +159,7 @@ fn mmcss_register(task: &str) -> Option<MmcssGuard> {
         }
         Ok(_) => None,
         Err(e) => {
-            eprintln!("mmcss: no se pudo registrar el hilo de audio en '{task}': {e:?}");
+            log::warn!("mmcss: no se pudo registrar el hilo de audio en '{task}': {e:?}");
             None
         }
     }
@@ -192,7 +192,7 @@ pub fn spawn_track(
             if let Err(e) =
                 run_track(&kind, encoding, sample_rate, channels, &sink, pcm_tap.as_ref(), &stop_t)
             {
-                eprintln!("audio: la pista de captura terminó con error: {e:?}");
+                log::warn!("la pista de captura terminó con error: {e:?}");
             }
             unsafe { CoUninitialize() };
         })
@@ -318,7 +318,7 @@ fn run_track(
                 Some(enc)
             }
             Err(e) => {
-                eprintln!("audio: el encoder AAC rechazó el formato (rate={rate} ch={dst_ch} bitrate={bitrate}): {e:?}");
+                log::warn!("el encoder AAC rechazó el formato (rate={rate} ch={dst_ch} bitrate={bitrate}): {e:?}");
                 return Err(e);
             }
         },
@@ -331,12 +331,12 @@ fn run_track(
                 open_err_logged = false;
                 match pump_stream(&stream, kind, rate, dst_ch, &mut aac, sink, pcm_tap, stop) {
                     StreamEnd::Stopped => break,
-                    StreamEnd::Lost => eprintln!("audio: el dispositivo cambió o se perdió; reabriendo la pista"),
+                    StreamEnd::Lost => log::info!("el dispositivo cambió o se perdió; reabriendo la pista"),
                 }
             }
             Err(e) => {
                 if !open_err_logged {
-                    eprintln!("audio: no se pudo abrir el dispositivo; se reintenta cada segundo: {e:?}");
+                    log::warn!("no se pudo abrir el dispositivo; se reintenta cada segundo: {e:?}");
                     open_err_logged = true;
                 }
             }

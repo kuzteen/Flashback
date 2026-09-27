@@ -64,6 +64,11 @@ pub(super) fn build_encoder(
 
     if !force_sw {
         if let Some(activate) = pick_hw_encoder(encoder_pref)? {
+            log::info!(
+                "encoder: {} ({width}x{height}, {fps} fps, {} kbps, preferencia {encoder_pref})",
+                encoder_name(&activate).unwrap_or_else(|| "hardware sin nombre".into()),
+                bitrate / 1000
+            );
             let encoder: IMFTransform = unsafe { activate.ActivateObject()? };
             unsafe {
                 let attrs = encoder.GetAttributes()?;
@@ -79,6 +84,11 @@ pub(super) fn build_encoder(
     }
 
     // Fallback por software: MFT síncrono, sin device manager (codifica en CPU).
+    log::info!(
+        "encoder: software ({width}x{height}, {fps} fps, {} kbps, preferencia {encoder_pref}{})",
+        bitrate / 1000,
+        if force_sw { "" } else { ", sin encoder por hardware utilizable" }
+    );
     let activate = enum_encoder(MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_TRANSCODE_ONLY)?
         .ok_or_else(|| windows::core::Error::from_hresult(MF_E_TOPO_CODEC_NOT_FOUND))?;
     let encoder: IMFTransform = unsafe { activate.ActivateObject()? };

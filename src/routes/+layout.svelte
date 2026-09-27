@@ -46,6 +46,7 @@
   import { displaySource, isScreenSource } from '$lib/clips';
   import { artSrc, ensureGameHero, gameHero } from '$lib/artwork.svelte';
   import { t, initLocale } from '$lib/i18n.svelte';
+  import { installUiLog } from '$lib/ui-log';
   import {
     updater,
     checkForUpdate,
@@ -57,6 +58,7 @@
 
   let { children } = $props();
 
+  installUiLog();
   initLocale();
 
   const nav = [

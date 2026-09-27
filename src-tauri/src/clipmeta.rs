@@ -133,7 +133,7 @@ fn read_all(index: &Path) -> Index {
         Ok(map) => map,
         Err(e) => {
             let aside = index.with_extension(format!("bad-{}.json", now_ms()));
-            eprintln!("clipmeta: índice ilegible ({e}), se aparta a {}", aside.display());
+            log::warn!("clipmeta: índice ilegible ({e}), se aparta a {}", aside.display());
             let _ = std::fs::rename(index, &aside);
             Index::new()
         }

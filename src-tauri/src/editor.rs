@@ -829,6 +829,13 @@ mod win {
         std::thread::spawn(move || {
             unsafe { let _ = CoInitializeEx(None, COINIT_MULTITHREADED); }
             ensure_mf();
+            let kept = edit.segments.iter().filter(|s| !s.disabled.unwrap_or(false)).count();
+            log::info!(
+                "export: {} -> {} ({kept} tramo(s), marca de agua={}, bitrate={bitrate:?}, alto máx={max_height:?})",
+                file_name(&src),
+                file_name(&dst),
+                watermark.is_some()
+            );
             let r = do_export(&src, &dst, &edit, watermark.as_deref(), bitrate, max_height, cancel.as_deref(), &progress);
             // Un export abortado deja un MP4 a medias sin finalizar: se borra para que nadie lo
             // encuentre luego y lo tome por un clip válido.
@@ -847,6 +854,11 @@ mod win {
             });
             // El clip editado hereda el origen del original (juego/monitor) embebiéndolo igual que
             // en la captura, para que conserve su etiqueta en la biblioteca.
+            match &r {
+                Err(e) if e == super::CANCELLED => log::info!("export: cancelado"),
+                Err(e) => log::error!("export: falló: {e}"),
+                Ok(()) => {}
+            }
             if r.is_ok() {
                 let source = crate::library::clip_source(std::path::Path::new(&src))
                     .unwrap_or_default();
@@ -861,6 +873,10 @@ mod win {
         })
         .join()
         .map_err(|_| "El hilo de exportación terminó inesperadamente".to_string())?
+    }
+
+    fn file_name(path: &str) -> &str {
+        path.rsplit(['/', '\\']).next().unwrap_or(path)
     }
 
     #[derive(Clone)]
@@ -1320,15 +1336,30 @@ mod win {
             match r {
                 Ok(()) => {
                     progress.force(1.0);
-                    eprintln!(
+                    log::info!(
                         "export: copia sin recodificar · {}x{} · sonda {:?} · total {:?}",
                         meta.width, meta.height, probed, started.elapsed()
                     );
                     return Ok(());
                 }
                 Err(e) if e == super::CANCELLED => return Err(e),
-                Err(e) => eprintln!("export: la copia sin recodificar falló ({e}); se recodifica"),
+                Err(e) => log::warn!("export: la copia sin recodificar falló ({e}); se recodifica"),
             }
+        } else {
+            let why: Vec<&str> = [
+                (!meta.h264, "el origen no es H.264"),
+                (watermark.is_some(), "marca de agua"),
+                (vertical, "formato vertical"),
+                (graded, "ajustes de imagen"),
+                (bitrate.is_some(), "bitrate objetivo"),
+                (scaled, "reescalado"),
+                (!clip.in_order, "fotogramas fuera de orden"),
+            ]
+            .into_iter()
+            .filter_map(|(on, why)| on.then_some(why))
+            .collect();
+            let why = if why.is_empty() { "un corte fuera de keyframe".to_string() } else { why.join(", ") };
+            log::info!("export: se recodifica ({why})");
         }
 
         let gpu = create_gpu();
@@ -1346,7 +1377,7 @@ mod win {
         );
         if r.is_ok() {
             progress.force(1.0);
-            eprintln!(
+            log::info!(
                 "export: recodificado (decodificación en {}) · {}x{} {} kbps · sonda {:?} · total {:?}",
                 if gpu.is_some() { "GPU" } else { "CPU" },
                 meta.width,
@@ -1585,7 +1616,7 @@ mod win {
             match crate::watermark::Logo::rasterize(enc_w, enc_h, crate::watermark::Corner::parse(c)) {
                 Ok(l) => Some(l),
                 Err(e) => {
-                    eprintln!("watermark: rasterización falló, exporto sin marca: {e:?}");
+                    log::warn!("watermark: rasterización falló, exporto sin marca: {e:?}");
                     None
                 }
             }
@@ -1619,11 +1650,15 @@ mod win {
         let (sink, v_stream) = match open_video(true)? {
             (sink, v_stream) if sink_encoder(&sink, v_stream).is_some_and(|n| crate::capture::unusable_h264_encoder(&n)) => {
                 drop(sink);
-                eprintln!("export: el encoder por hardware disponible no sirve; se codifica por software");
+                log::warn!("export: el encoder por hardware disponible no sirve; se codifica por software");
                 open_video(false)?
             }
             ok => ok,
         };
+        log::info!(
+            "export: encoder {}",
+            sink_encoder(&sink, v_stream).unwrap_or_else(|| "desconocido".into())
+        );
 
         let a_reader = open_reader(src).map_err(mf)?;
         // El audio se recodifica siempre por este camino: cuesta una fracción de lo que cuesta el

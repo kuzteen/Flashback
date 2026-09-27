@@ -178,7 +178,7 @@ impl LiveMux {
             return;
         }
         let Some(video) = Track::h264(self.width, self.height, &st.seq_header) else {
-            eprintln!("grabación manual: cabecera de vídeo sin SPS/PPS; no se puede abrir el MP4");
+            log::warn!("grabación manual: cabecera de vídeo sin SPS/PPS; no se puede abrir el MP4");
             st.failed = true;
             st.pending.clear();
             return;
@@ -208,7 +208,7 @@ impl LiveMux {
                 }
             }
             Err(e) => {
-                eprintln!("grabación manual: no se pudo crear el hilo del muxer: {e}");
+                log::warn!("grabación manual: no se pudo crear el hilo del muxer: {e}");
                 st.failed = true;
                 st.pending.clear();
             }
@@ -244,7 +244,7 @@ impl LiveMux {
         let Some(tx) = &st.tx else { return };
         if tx.send(MuxSample { track, data, time: ts, dur, key }).is_err() && !st.failed {
             st.failed = true;
-            eprintln!("grabación manual: el hilo del muxer terminó; se deja de escribir");
+            log::warn!("grabación manual: el hilo del muxer terminó; se deja de escribir");
         }
     }
 
@@ -264,7 +264,7 @@ impl LiveMux {
             Ok(true) => Some(self.path.clone()),
             Ok(false) => None,
             Err(_) => {
-                eprintln!("grabación manual: el hilo del muxer terminó con un panic");
+                log::error!("grabación manual: el hilo del muxer terminó con un panic");
                 None
             }
         }
@@ -276,12 +276,12 @@ fn audio_track(format: Option<(u32, u16)>, hdr: &Option<(Vec<u8>, u32)>) -> Opti
     let (ud, payload_type) = hdr.as_ref()?;
     // El muxer escribe AAC crudo; el encoder se elige con payload 0 (ver build_aac_encoder).
     if *payload_type != 0 {
-        eprintln!("grabación manual: pista AAC con framing {payload_type}; se omite");
+        log::warn!("grabación manual: pista AAC con framing {payload_type}; se omite");
         return None;
     }
     let track = Track::aac(rate, ch, aac_bitrate(ch), ud);
     if track.is_none() {
-        eprintln!("grabación manual: pista AAC sin AudioSpecificConfig ({} bytes); se omite", ud.len());
+        log::warn!("grabación manual: pista AAC sin AudioSpecificConfig ({} bytes); se omite", ud.len());
     }
     track
 }
@@ -291,21 +291,21 @@ fn write_hybrid(path: &str, tracks: Vec<Track>, rx: mpsc::Receiver<MuxSample>) -
     let file = match OpenOptions::new().read(true).write(true).create(true).truncate(true).open(path) {
         Ok(f) => f,
         Err(e) => {
-            eprintln!("grabación manual: no se pudo crear {path}: {e}");
+            log::error!("grabación manual: no se pudo crear {path}: {e}");
             return false;
         }
     };
     let mut mux = match Hybrid::new(BufWriter::with_capacity(WRITE_BUFFER, file), tracks) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("grabación manual: no se pudo escribir la cabecera del MP4: {e}");
+            log::warn!("grabación manual: no se pudo escribir la cabecera del MP4: {e}");
             return false;
         }
     };
     let mut ok = true;
     for s in rx.iter() {
         if let Err(e) = mux.push(s.track, s.data, s.time, s.dur, s.key) {
-            eprintln!("grabación manual: fallo al escribir: {e}");
+            log::error!("grabación manual: fallo al escribir: {e}");
             ok = false;
             break;
         }
@@ -313,7 +313,7 @@ fn write_hybrid(path: &str, tracks: Vec<Track>, rx: mpsc::Receiver<MuxSample>) -
     if ok {
         match mux.finish() {
             Ok(()) => return true,
-            Err(e) => eprintln!("grabación manual: no se pudo cerrar el MP4: {e}"),
+            Err(e) => log::error!("grabación manual: no se pudo cerrar el MP4: {e}"),
         }
     }
     keep_written(mux)

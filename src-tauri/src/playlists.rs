@@ -101,7 +101,7 @@ fn read_all(index: &Path) -> Vec<Playlist> {
         Ok(list) => list,
         Err(e) => {
             let aside = index.with_extension(format!("bad-{}.json", now_ms()));
-            eprintln!("playlists: índice ilegible ({e}), se aparta a {}", aside.display());
+            log::warn!("playlists: índice ilegible ({e}), se aparta a {}", aside.display());
             let _ = std::fs::rename(index, &aside);
             Vec::new()
         }

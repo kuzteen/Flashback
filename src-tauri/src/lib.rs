@@ -12,6 +12,7 @@ mod editor;
 mod hotkeys;
 mod edits;
 mod library;
+mod logs;
 mod look;
 mod mp4index;
 mod mp4mux;
@@ -746,6 +747,24 @@ fn open_clips_dir(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_logs_dir() -> Result<(), String> {
+    let file = logs::file().ok_or("Sin carpeta de logs")?;
+    if file.is_file() {
+        tauri_plugin_opener::reveal_item_in_dir(&file).map_err(|e| e.to_string())
+    } else {
+        let dir = logs::dir().ok_or("Sin carpeta de logs")?;
+        tauri_plugin_opener::open_path(dir, None::<&str>).map_err(|e| e.to_string())
+    }
+}
+
+// Errores de la interfaz que nadie capturó: sin esto un fallo del frontend no deja rastro.
+#[tauri::command]
+fn log_ui(message: String) {
+    let message: String = message.chars().take(2000).collect();
+    log::error!(target: "ui", "{message}");
+}
+
+#[tauri::command]
 fn get_toast_prefs(app: tauri::AppHandle) -> config::ToastPrefs {
     config::get_toast_prefs(&app)
 }
@@ -897,6 +916,9 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             use tauri::Manager;
+            if let Ok(dir) = app.path().app_log_dir() {
+                logs::init(dir);
+            }
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_global_shortcut::Builder::new().build())?;
@@ -910,7 +932,9 @@ pub fn run() {
             let share_dir = share::dir(app.handle());
             let search_icons = artwork::search_cache_dir(app.handle());
             let handle = app.handle().clone();
+            let version = app.package_info().version.to_string();
             std::thread::spawn(move || {
+                logs::log_system(&version);
                 share::cleanup(&share_dir);
                 cache::prune_editor_audio(&handle, std::time::Duration::from_secs(7 * 24 * 3600));
                 if let Some(dir) = search_icons {
@@ -1011,6 +1035,8 @@ pub fn run() {
             clear_save_sound,
             clear_cache,
             open_clips_dir,
+            open_logs_dir,
+            log_ui,
             edit_dest,
             prepare_clip_audio,
             load_clip_edit,

@@ -77,6 +77,10 @@
       .catch((e) => console.error('clear_save_sound', e));
   }
 
+  function openLogs() {
+    invoke('open_logs_dir').catch((e) => console.error('open_logs_dir', e));
+  }
+
   function setToast(key: keyof ToastPrefs, on: boolean) {
     toasts[key] = on;
     invoke('set_toast_prefs', { prefs: $state.snapshot(toasts) }).catch(() => {});
@@ -156,6 +160,12 @@
 <SettingGroup title={t('settings.group.integrations')}>
   <SettingRow title={t('settings.discordRpc')} desc={t('settings.discordRpc.desc')}>
     <Switch checked={discordRpc} onchange={setDiscordRpc} label={t('settings.discordRpc')} />
+  </SettingRow>
+</SettingGroup>
+
+<SettingGroup title={t('settings.group.support')}>
+  <SettingRow title={t('settings.logs')} desc={t('settings.logs.desc')}>
+    <button class="btn" onclick={openLogs}><Icon name="folder-open" size={16} sw={2} /><span class="txt">{t('settings.open')}</span></button>
   </SettingRow>
 </SettingGroup>
 

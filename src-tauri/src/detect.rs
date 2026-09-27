@@ -375,6 +375,10 @@ pub fn refresh_current() {
     // Solo al cambiar: el watcher pasa por aquí en cada cambio de ventana, también entre dos
     // ventanas del mismo juego o entre dos programas que no lo son.
     if before != after {
+        match &after {
+            Some(name) => log::info!("juego detectado: {name}"),
+            None => log::info!("sin juego en primer plano"),
+        }
         if let Some(app) = APP.get() {
             use tauri::Emitter;
             let _ = app.emit("game-changed", after);

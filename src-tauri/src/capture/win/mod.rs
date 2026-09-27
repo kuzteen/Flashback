@@ -127,7 +127,7 @@ impl<T> LockRecover<T> for Mutex<T> {
 // tumba el proceso ni contamina la siguiente sesión de captura.
 fn contain_panic(label: &str, body: impl FnOnce()) {
     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)).is_err() {
-        eprintln!("{label}: hilo terminado por panic (contenido)");
+        log::error!("{label}: hilo terminado por panic (contenido)");
     }
 }
 
@@ -215,12 +215,16 @@ pub fn start(
         // el arranque) no hay desde dónde empezar: se cae al pipeline propio.
         let attached = buffer.lock_ok().attach_recording(&out_dir);
         if attached.is_some() {
+            log::info!("grabación manual: iniciada sobre el replay ({source})");
             *guard = Some(Manual::Tapped { buffer, started: Instant::now(), source });
             return Ok(true);
         }
     }
 
     let fps = clamp_fps(fps);
+    log::info!(
+        "grabación manual: iniciando pipeline propio ({source}; objetivo={target}, {fps} fps, calidad={quality}, {resolution}p, bitrate={bitrate}, mic={mic}, encoder={encoder_pref})"
+    );
     let factor = bitrate_factor(&quality);
     let stats = Arc::new(Stats::default());
     let stop = Arc::new((Mutex::new(false), Condvar::new()));
@@ -258,9 +262,13 @@ pub fn start(
         }
         Ok(Err(e)) => {
             let _ = handle.join();
+            log::error!("grabación manual: no se pudo iniciar: {e}");
             Err(e)
         }
-        Err(_) => Err("El hilo de captura terminó inesperadamente".into()),
+        Err(_) => {
+            log::error!("grabación manual: el hilo de captura terminó antes de arrancar");
+            Err("El hilo de captura terminó inesperadamente".into())
+        }
     }
 }
 
@@ -276,22 +284,38 @@ pub fn stop() -> Option<String> {
                 let _ = h.join();
             }
             let path = running.result.lock_ok().take();
+            log_manual_stop(path.as_deref(), running.started, 1);
             super::tag_source(path.as_deref(), &running.source);
             path
         }
         // Se suelta del buffer bajo su lock y se cierra fuera de él: el Finalize del MP4 no debe
         // frenar al encoder, que sigue alimentando el replay.
-        Some(Manual::Tapped { buffer, source, .. }) => {
-            let rec = buffer.lock_ok().recording.take()?;
+        Some(Manual::Tapped { buffer, source, started }) => {
+            let Some(rec) = buffer.lock_ok().recording.take() else {
+                log::warn!("grabación manual: el replay ya no tenía la grabación enganchada");
+                return None;
+            };
             let mut paths = rec.parts.clone();
             let path = rec.finish();
             if let Some(p) = path.as_ref().filter(|p| !paths.contains(p)) {
                 paths.push(p.clone());
             }
+            log_manual_stop(path.as_deref(), started, paths.len());
             super::tag_source(paths.iter().map(String::as_str), &source);
             path
         }
         None => None,
+    }
+}
+
+fn log_manual_stop(path: Option<&str>, started: Instant, parts: usize) {
+    let secs = started.elapsed().as_secs();
+    match path {
+        Some(p) => log::info!(
+            "grabación manual: parada tras {secs} s, {parts} archivo(s), {:.1} MB",
+            std::fs::metadata(p).map(|m| m.len() as f64 / 1e6).unwrap_or(0.0)
+        ),
+        None => log::error!("grabación manual: parada tras {secs} s sin archivo final"),
     }
 }
 
@@ -793,6 +817,9 @@ pub fn start_replay(
     }
 
     let fps = clamp_fps(fps);
+    log::info!(
+        "replay: iniciando (objetivo={target}, {seconds} s, {fps} fps, calidad={quality}, {resolution}p, bitrate={bitrate}, mic={mic}, encoder={encoder_pref})"
+    );
     let factor = bitrate_factor(&quality);
     let stop = Arc::new(AtomicBool::new(false));
     let stats = Arc::new(Stats::default());
@@ -828,15 +855,20 @@ pub fn start_replay(
         }
         Ok(Err(e)) => {
             let _ = handle.join();
+            log::error!("replay: no se pudo iniciar: {e}");
             Err(e)
         }
-        Err(_) => Err("El hilo de replay terminó inesperadamente".into()),
+        Err(_) => {
+            log::error!("replay: el hilo terminó antes de arrancar");
+            Err("El hilo de replay terminó inesperadamente".into())
+        }
     }
 }
 
 pub fn stop_replay() {
     let running = REPLAY_STATE.lock_ok().take();
     if let Some(mut r) = running {
+        log::info!("replay: detenido");
         r.stop.store(true, Ordering::SeqCst);
         if let Some(h) = r.handle.take() {
             let _ = h.join();
@@ -907,9 +939,9 @@ pub fn begin_save_replay(source: &str) -> Option<PendingReplay> {
     // Sin keyframe en el buffer aún no se puede empezar el MP4 en un IDR.
     if packets.is_empty() {
         if total == 0 {
-            eprintln!("save_replay: el ring buffer de vídeo está vacío (el encoder aún no ha producido ningún paquete)");
+            log::warn!("save_replay: el ring buffer de vídeo está vacío (el encoder aún no ha producido ningún paquete)");
         } else {
-            eprintln!("save_replay: {total} paquetes en el buffer pero ninguno es keyframe todavía");
+            log::warn!("save_replay: {total} paquetes en el buffer pero ninguno es keyframe todavía");
         }
         return None;
     }
@@ -920,7 +952,7 @@ pub fn begin_save_replay(source: &str) -> Option<PendingReplay> {
     let sys_audio = match sys_audio {
         Some(t) if !t.user_data.is_empty() && !t.packets.is_empty() => Some(t),
         Some(_) => {
-            eprintln!("save_replay: pista de sistema omitida (sin config AAC válida)");
+            log::warn!("save_replay: pista de sistema omitida (sin config AAC válida)");
             None
         }
         None => None,
@@ -928,7 +960,7 @@ pub fn begin_save_replay(source: &str) -> Option<PendingReplay> {
     let mic_audio = match mic_audio {
         Some(t) if !t.user_data.is_empty() && !t.packets.is_empty() => Some(t),
         Some(_) => {
-            eprintln!("save_replay: pista de micrófono omitida (sin config AAC válida)");
+            log::warn!("save_replay: pista de micrófono omitida (sin config AAC válida)");
             None
         }
         None => None,
@@ -949,15 +981,33 @@ pub fn begin_save_replay(source: &str) -> Option<PendingReplay> {
 impl PendingReplay {
     pub fn write(self) -> Option<String> {
         let path = reserve_clip_path(&self.out_dir);
+        let started = Instant::now();
+        let secs = match (self.packets.first(), self.packets.last()) {
+            (Some(a), Some(b)) => (b.1 + b.2 - a.1) as f64 / 1e7,
+            _ => 0.0,
+        };
+        let audio = match (self.sys_audio.is_some(), self.mic_audio.is_some()) {
+            (true, true) => "sistema + micro",
+            (true, false) => "sistema",
+            (false, true) => "micro",
+            (false, false) => "sin audio",
+        };
+        let (width, height) = (self.width, self.height);
         match mux_replay(&path, &self.packets, &self.seq_header, self.width, self.height, self.sys_audio, self.mic_audio) {
             Ok(()) => {
+                log::info!(
+                    "replay guardado: {secs:.1} s, {width}x{height}, {audio}, {:.1} MB en {} ms ({})",
+                    std::fs::metadata(&path).map(|m| m.len() as f64 / 1e6).unwrap_or(0.0),
+                    started.elapsed().as_millis(),
+                    if self.source.is_empty() { "?" } else { &self.source }
+                );
                 if !self.source.is_empty() {
                     let _ = crate::library::write_embedded_source(std::path::Path::new(&path), &self.source);
                 }
                 Some(path)
             }
             Err(e) => {
-                eprintln!("save_replay: fallo al escribir el MP4: {e}");
+                log::error!("save_replay: fallo al escribir el MP4: {e}");
                 // Un MP4 a medio escribir con el índice delante apuntaría a datos que no están:
                 // se borra para no dejar un clip roto en la biblioteca.
                 let _ = std::fs::remove_file(&path);
@@ -1005,6 +1055,9 @@ fn replay_thread(
     // El pump anterior salió por retarget: la próxima reconstrucción exitosa apunta a otra
     // ventana del juego, así que al lograrla se avisa a la UI (toast "Listo para clipear").
     let mut retargeting = false;
+    // En modo ventana el bucle reintenta cada 400 ms mientras el juego está minimizado o cerrado:
+    // solo se registra cuando el motivo cambia, o el archivo se llenaría de la misma línea.
+    let mut last_err: Option<String> = None;
     loop {
         if stop.load(Ordering::SeqCst) {
             break;
@@ -1018,6 +1071,7 @@ fn replay_thread(
         });
         match built {
             Ok(pipe) => {
+                last_err = None;
                 if !announced {
                     let _ = ready.send(Ok(()));
                     announced = true;
@@ -1040,9 +1094,21 @@ fn replay_thread(
                 if !window_mode && !lost && !resized {
                     break;
                 }
+                let why = if lost {
+                    "device D3D perdido"
+                } else if resized {
+                    "cambio de tamaño"
+                } else {
+                    "otra ventana del juego"
+                };
+                log::info!("replay: reconstruyendo la captura ({why})");
                 retargeting = retargeted;
             }
             Err(e) => {
+                if last_err.as_deref() != Some(e.as_str()) {
+                    log::warn!("replay: no se pudo construir la captura ({target}): {e}");
+                    last_err = Some(e.clone());
+                }
                 // Fallo al (re)construir. Si aún no habíamos arrancado es un fallo inicial: en
                 // monitor es definitivo (se reporta y se sale); en ventana se deja armado y se
                 // espera a que el juego sea capturable. Si ya habíamos arrancado (reconstrucción
@@ -1400,7 +1466,7 @@ fn build_pipeline_core(
                 Some(Card { overlay, tex })
             }
             Err(e) => {
-                eprintln!("overlay: no se pudo crear el cartel de fuera de foco: {e:?}");
+                log::warn!("overlay: no se pudo crear el cartel de fuera de foco: {e:?}");
                 None
             }
         }
@@ -1466,12 +1532,12 @@ fn build_replay(
     let mic_native = if mic && !mic_device.is_empty() {
         let f = audio::probe_format(&audio::TrackKind::Microphone(mic_device.clone()));
         if f.is_none() {
-            eprintln!("audio: no se pudo abrir el micrófono (device='{mic_device}')");
+            log::warn!("audio: no se pudo abrir el micrófono (device='{mic_device}')");
         }
         f
     } else {
         if mic {
-            eprintln!("audio: micrófono activado pero sin dispositivo seleccionado");
+            log::warn!("audio: micrófono activado pero sin dispositivo seleccionado");
         }
         None
     };
@@ -1547,12 +1613,12 @@ fn build_manual(
     let mic_native = if mic && !mic_device.is_empty() {
         let f = audio::probe_format(&audio::TrackKind::Microphone(mic_device.clone()));
         if f.is_none() {
-            eprintln!("audio: no se pudo abrir el micrófono (device='{mic_device}')");
+            log::warn!("audio: no se pudo abrir el micrófono (device='{mic_device}')");
         }
         f
     } else {
         if mic {
-            eprintln!("audio: micrófono activado pero sin dispositivo seleccionado");
+            log::warn!("audio: micrófono activado pero sin dispositivo seleccionado");
         }
         None
     };
@@ -1974,7 +2040,7 @@ fn run_encoder_thread(
     let events = match pipe.enc_events.as_ref() {
         Some(e) => e,
         None => {
-            eprintln!("replay: hilo encoder async sin eventos, abortando");
+            log::warn!("replay: hilo encoder async sin eventos, abortando");
             return;
         }
     };
@@ -2038,12 +2104,12 @@ fn run_encoder_thread(
                     // salga y el hilo de replay reconstruya el pipeline con un device nuevo
                     // (§4.4). Cualquier otro fallo se reporta una sola vez y se sigue.
                     if device_removed(&pipe._device) {
-                        eprintln!("replay: device D3D perdido (convert), reconstruyendo");
+                        log::warn!("replay: device D3D perdido (convert), reconstruyendo");
                         pipe.device_lost.store(true, Ordering::Relaxed);
                         return;
                     }
                     if !convert_err_logged {
-                        eprintln!("replay: fallo del conversor: {e:?}");
+                        log::warn!("replay: fallo del conversor: {e:?}");
                         convert_err_logged = true;
                     }
                     continue;
@@ -2056,7 +2122,7 @@ fn run_encoder_thread(
                 pts_fifo.push_back(item.pts);
                 did = true;
             } else if device_removed(&pipe._device) {
-                eprintln!("replay: device D3D perdido (encoder), reconstruyendo");
+                log::warn!("replay: device D3D perdido (encoder), reconstruyendo");
                 pipe.device_lost.store(true, Ordering::Relaxed);
                 return;
             }
@@ -2192,7 +2258,7 @@ fn encode_one(
             // Device D3D perdido (TDR/reset): marca la pérdida para que el pump síncrono
             // salga y el hilo de replay reconstruya con un device nuevo (§4.4).
             if device_removed(&pipe._device) {
-                eprintln!("replay: device D3D perdido (convert sw), reconstruyendo");
+                log::warn!("replay: device D3D perdido (convert sw), reconstruyendo");
                 pipe.device_lost.store(true, Ordering::Relaxed);
             }
             return;
@@ -2310,7 +2376,7 @@ impl FocusState {
                         // Emitir el primero de inmediato.
                         self.last_card_emit = std::time::Instant::now() - CARD_INTERVAL;
                     }
-                    Err(e) => eprintln!("overlay: fallo al componer el cartel: {e:?}"),
+                    Err(e) => log::warn!("overlay: fallo al componer el cartel: {e:?}"),
                 }
             }
         } else if !now_min && self.minimized {
@@ -2854,7 +2920,7 @@ impl MmcssTask {
             }
             Ok(_) => None,
             Err(e) => {
-                eprintln!("mmcss: no se pudo registrar el hilo en '{task}': {e:?}");
+                log::warn!("mmcss: no se pudo registrar el hilo en '{task}': {e:?}");
                 None
             }
         }
@@ -2993,9 +3059,9 @@ fn log_encoder_quality(codec: &ICodecAPI, label: &str, mean_bitrate: u32, gop: u
         .ok()
         .map(|v| unsafe { (*v.Anonymous.Anonymous).Anonymous.ulVal });
     if real_failed.is_empty() {
-        eprintln!("encoder[{label}]: calidad aplicada (VBR mean={mean_bitrate} pico={} gop={gop}); rate control leído={mode:?} (1=VBR)", peak_bitrate(mean_bitrate));
+        log::info!("encoder[{label}]: calidad aplicada (VBR mean={mean_bitrate} pico={} gop={gop}); rate control leído={mode:?} (1=VBR)", peak_bitrate(mean_bitrate));
     } else {
-        eprintln!("encoder[{label}]: ajustes rechazados {real_failed:?}; rate control leído={mode:?} (1=VBR)");
+        log::warn!("encoder[{label}]: ajustes rechazados {real_failed:?}; rate control leído={mode:?} (1=VBR)");
     }
 }
 
