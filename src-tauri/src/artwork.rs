@@ -83,6 +83,13 @@ fn slug(name: &str) -> String {
     s.trim_matches('-').to_string()
 }
 
+// El hash del icono va en el nombre: cuando Discord cambia el icono de un juego, la lista trae
+// otro hash y se descarga el nuevo en vez de servir para siempre el que quedó en caché.
+fn discord_icon_file(url: &str) -> String {
+    let hash = url.rsplit('/').next().unwrap_or(url).trim_end_matches(".png");
+    format!("art-discord-{hash}")
+}
+
 fn mime_of(bytes: &[u8]) -> &'static str {
     if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
         "image/jpeg"
@@ -375,23 +382,17 @@ pub async fn game_icon(
 ) -> Option<String> {
     let dir = app.path().app_cache_dir().ok()?.join("artwork");
     let _ = std::fs::create_dir_all(&dir);
-    // El prefijo acompaña al orden de fuentes: al cambiarlo, el arte ya cacheado con el orden
-    // anterior deja de usarse en vez de quedarse pegado para siempre.
-    let cache_key = match steam_appid {
-        Some(id) => format!("art-steam-{id}"),
-        None => format!("art-{}", slug(name)),
-    };
-    let path = dir.join(&cache_key);
-
-    if let Some(src) = cached(&path) {
-        return Some(src);
-    }
 
     let client = http();
     // Discord primero: su lista detectable ya está cacheada para el detector de juegos, así que
     // sale gratis, y su arte es homogéneo entre juegos. SteamGridDB queda de respaldo.
+    // Se consulta antes que la caché porque el icono de Discord se cachea por su hash.
     let list_art = crate::detect::art_for(app, name).await;
     if let Some(url) = list_art.as_ref().and_then(|a| a.icon_url.as_deref()) {
+        let path = dir.join(discord_icon_file(url));
+        if let Some(src) = cached(&path) {
+            return Some(src);
+        }
         // 256 px: el original del CDN puede ser de 1024 y esto viaja al frontend como data URL
         // para verse a 30. El Rich Presence sigue usando la URL sin recortar.
         if let Some(bytes) = download(client, &format!("{url}?size=256")).await {
@@ -399,6 +400,17 @@ pub async fn game_icon(
                 return Some(store(&path, &bytes));
             }
         }
+    }
+
+    // El prefijo acompaña al orden de fuentes: al cambiarlo, el arte ya cacheado con el orden
+    // anterior deja de usarse en vez de quedarse pegado para siempre.
+    let cache_key = match steam_appid {
+        Some(id) => format!("art-steam-{id}"),
+        None => format!("art-{}", slug(name)),
+    };
+    let path = dir.join(&cache_key);
+    if let Some(src) = cached(&path) {
+        return Some(src);
     }
     // El AppID de la lista también sirve aquí: con él el respaldo va por búsqueda exacta en vez
     // de por nombre, que es lo que confunde remasters y secuelas.
@@ -442,16 +454,19 @@ async fn name_icon(client: &reqwest::Client, app: &tauri::AppHandle, name: &str)
 // entra en la caché normal; los demás caducan (ver prune_search_cache).
 pub async fn search_icon(app: &tauri::AppHandle, name: &str) -> Option<String> {
     let cache = app.path().app_cache_dir().ok()?;
-    let main = cache.join("artwork").join(format!("art-{}", slug(name)));
-    if let Some(src) = cached(&main) {
+    let art = crate::detect::art_for(app, name).await;
+    let Some(url) = art.and_then(|a| a.icon_url) else {
+        return cached(&cache.join("artwork").join(format!("art-{}", slug(name))));
+    };
+    let file = discord_icon_file(&url);
+    if let Some(src) = cached(&cache.join("artwork").join(&file)) {
         return Some(src);
     }
     let dir = search_cache_dir(app)?;
-    let path = dir.join(slug(name));
+    let path = dir.join(&file);
     if let Some(src) = cached(&path) {
         return Some(src);
     }
-    let url = crate::detect::art_for(app, name).await?.icon_url?;
     let bytes = download(http(), &format!("{url}?size=64")).await?;
     if bytes.is_empty() {
         return None;
@@ -484,6 +499,14 @@ pub fn prune_search_cache(dir: &std::path::Path, max_age: std::time::Duration) {
 mod search_cache_tests {
     use super::*;
     use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn a_new_discord_icon_hash_gets_a_new_cache_file() {
+        let old = discord_icon_file("https://cdn.discordapp.com/app-icons/700/11f8.png");
+        let new = discord_icon_file("https://cdn.discordapp.com/app-icons/700/e55f.png");
+        assert_eq!(old, "art-discord-11f8");
+        assert_ne!(old, new);
+    }
 
     #[test]
     fn cached_art_is_served_by_path() {
