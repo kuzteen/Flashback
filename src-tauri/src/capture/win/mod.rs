@@ -328,6 +328,7 @@ pub fn status() -> CaptureStatus {
             width: r.stats.width.load(Ordering::Relaxed),
             height: r.stats.height.load(Ordering::Relaxed),
             seconds: r.started.elapsed().as_secs_f64(),
+            tapped: false,
         },
         Some(Manual::Tapped { buffer, started, .. }) => {
             let b = buffer.lock_ok();
@@ -337,6 +338,7 @@ pub fn status() -> CaptureStatus {
                 width: b.width,
                 height: b.height,
                 seconds: started.elapsed().as_secs_f64(),
+                tapped: true,
             }
         }
         None => CaptureStatus::default(),

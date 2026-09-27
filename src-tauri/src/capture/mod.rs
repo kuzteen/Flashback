@@ -9,6 +9,8 @@ pub struct CaptureStatus {
     pub width: u32,
     pub height: u32,
     pub seconds: f64,
+    // Grabación colgada del replay: se corta si el replay se re-arma.
+    pub tapped: bool,
 }
 
 #[derive(Serialize, Clone, Default)]

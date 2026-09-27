@@ -1,4 +1,7 @@
 import { t } from './i18n.svelte';
+import { pushCapturePrefs } from './capture-prefs';
+
+// Se leen del localStorage solo para migrar a Rust la primera vez (ver capture-prefs.ts).
 
 const FPS_KEY = 'flashback.capture.fps';
 const QUALITY_KEY = 'flashback.capture.quality';
@@ -132,34 +135,25 @@ export function estimatedClipSize(
 
 export function setFps(fps: number) {
   captureConfig.fps = fps;
-  persist(FPS_KEY, String(fps));
+  pushCapturePrefs();
 }
 
 export function setQuality(quality: QualityKey) {
   captureConfig.quality = quality;
-  persist(QUALITY_KEY, quality);
+  pushCapturePrefs();
 }
 
 export function setResolution(height: number) {
   captureConfig.resolution = height;
-  persist(RESOLUTION_KEY, String(height));
+  pushCapturePrefs();
 }
 
 export function setMic(enabled: boolean) {
   captureConfig.mic = enabled;
-  persist(MIC_KEY, enabled ? '1' : '0');
+  pushCapturePrefs();
 }
 
 export function setMicDevice(id: string) {
   captureConfig.micDevice = id;
-  persist(MIC_DEVICE_KEY, id);
-}
-
-function persist(key: string, value: string) {
-  if (typeof localStorage === 'undefined') return;
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    // sin persistencia disponible
-  }
+  pushCapturePrefs();
 }

@@ -18,6 +18,7 @@ mod mp4index;
 mod mp4mux;
 mod playlists;
 mod reframe;
+mod session;
 mod share;
 mod sound;
 #[cfg(target_os = "windows")]
@@ -62,7 +63,9 @@ fn get_disabled_games(app: tauri::AppHandle) -> Vec<String> {
 
 #[tauri::command]
 fn set_disabled_games(app: tauri::AppHandle, games: Vec<String>) -> Result<(), String> {
-    config::set_disabled_games(&app, games)
+    config::set_disabled_games(&app, games)?;
+    session::poke();
+    Ok(())
 }
 
 #[tauri::command]
@@ -134,23 +137,10 @@ async fn off_main<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
     tokio::task::spawn_blocking(f).await.map_err(|e| format!("Error interno: {e}"))
 }
 
+// Botón de grabar de la barra: mismo camino que el atajo, con los ajustes que ya tiene Rust.
 #[tauri::command]
-async fn start_capture(
-    app: tauri::AppHandle,
-    target: String,
-    fps: u32,
-    quality: String,
-    resolution: u32,
-    bitrate: u32,
-    mic: bool,
-    mic_device: String,
-) -> Result<bool, String> {
-    let dir = config::clips_dir(&app).to_string_lossy().into_owned();
-    let encoder_pref = config::get_encoder(&app);
-    off_main(move || {
-        capture::start(target, dir, fps, quality, resolution, bitrate, mic, mic_device, encoder_pref)
-    })
-    .await?
+async fn toggle_recording(app: tauri::AppHandle) -> Result<(), String> {
+    off_main(move || hotkeys::toggle_recording(&app)).await
 }
 
 #[tauri::command]
@@ -164,63 +154,49 @@ fn capture_status() -> capture::CaptureStatus {
 }
 
 #[tauri::command]
-async fn start_replay(
-    app: tauri::AppHandle,
-    target: String,
-    seconds: u32,
-    fps: u32,
-    quality: String,
-    resolution: u32,
-    bitrate: u32,
-    mic: bool,
-    mic_device: String,
-) -> Result<(), String> {
-    let dir = config::clips_dir(&app).to_string_lossy().into_owned();
-    let encoder_pref = config::get_encoder(&app);
-    let app_ev = app.clone();
-    let on_retarget = Box::new(move || {
-        use tauri::Emitter;
-        let _ = app_ev.emit("replay-retargeted", ());
-    });
-    let card_text = match config::get_language(&app).as_str() {
-        "es" => "Aquí estaremos cuando vuelvas",
-        _ => "We'll be here when you're back",
+fn get_capture_prefs() -> Option<config::CapturePrefs> {
+    session::prefs()
+}
+
+// Asíncrono: registrar los atajos pasa por el hilo principal y espera su respuesta, y un comando
+// síncrono ya corre en él.
+#[tauri::command]
+async fn set_capture_prefs(app: tauri::AppHandle, prefs: config::CapturePrefs) -> Result<Vec<String>, String> {
+    session::set_prefs(&app, prefs)
+}
+
+#[tauri::command]
+fn get_capture_monitor() -> Option<String> {
+    session::monitor()
+}
+
+#[tauri::command]
+fn set_capture_monitor(monitor: Option<String>) {
+    session::set_monitor(monitor);
+}
+
+#[tauri::command]
+async fn pause_hotkeys(app: tauri::AppHandle, paused: bool) {
+    hotkeys::set_paused(&app, paused);
+}
+
+#[tauri::command]
+fn hotkey_failures() -> Vec<String> {
+    hotkeys::failed()
+}
+
+// La interfaz lo pide al quedar oculta, después de guardar lo pendiente y de que acabe un export.
+// Destruir el webview cierra sus procesos y libera su memoria (unos 370 MB); al volver a abrir la
+// ventana se crea de nuevo.
+#[tauri::command]
+fn release_ui(app: tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(w) = app.get_webview_window("main") {
+        if !w.is_visible().unwrap_or(true) {
+            log::info!("interfaz descargada (ventana en la bandeja)");
+            let _ = w.destroy();
+        }
     }
-    .to_string();
-    off_main(move || {
-        capture::start_replay(
-            target,
-            dir,
-            seconds,
-            fps,
-            quality,
-            resolution,
-            bitrate,
-            mic,
-            mic_device,
-            encoder_pref,
-            on_retarget,
-            card_text,
-        )
-    })
-    .await?
-}
-
-// Atajos de guardar y grabar: los atiende Rust directamente (ver hotkeys.rs). Asíncrono porque el
-// registro del plugin pasa por el hilo principal y espera su respuesta.
-#[tauri::command]
-async fn set_native_hotkeys(app: tauri::AppHandle, save: String, record: String) -> Vec<String> {
-    hotkeys::register(&app, &save, &record)
-}
-
-#[tauri::command]
-fn set_record_prefs(prefs: hotkeys::RecordPrefs) {
-    hotkeys::set_record_prefs(prefs);
-}
-
-#[tauri::command]
-fn set_save_sound(gain: f32) {
-    sound::set_gain(gain);
 }
 
 #[tauri::command]
@@ -851,52 +827,47 @@ fn free_path(dir: &std::path::Path, stem: &str, ext: &str) -> std::path::PathBuf
         .unwrap_or_else(|| dir.join(format!("{stem}.{ext}")))
 }
 
-#[derive(serde::Deserialize)]
-struct ToastPayload {
-    title: String,
-    body: String,
-    #[serde(default)]
-    keys: Vec<String>,
-    kind: String,
-    topic: config::ToastTopic,
-}
-
-#[cfg(target_os = "windows")]
-#[tauri::command]
-fn toast(app: tauri::AppHandle, toast: tauri::State<'_, toast::Toast>, payload: ToastPayload) {
-    if !config::get_toast_prefs(&app).allows(payload.topic) {
-        return;
-    }
-    toast.show(toast::ToastData {
-        title: payload.title,
-        body: payload.body,
-        keys: payload.keys,
-        kind: toast::ToastKind::from_str(&payload.kind),
-    });
-}
-
-#[cfg(not(target_os = "windows"))]
-#[tauri::command]
-fn toast(_payload: ToastPayload) {}
-
-#[cfg(target_os = "windows")]
-#[tauri::command]
-fn dismiss_toast(toast: tauri::State<'_, toast::Toast>) {
-    toast.hide();
-}
-
-#[cfg(not(target_os = "windows"))]
-#[tauri::command]
-fn dismiss_toast() {}
-
-// Trae la ventana principal al frente (desde la bandeja o el atajo de abrir).
-fn show_main(app: &tauri::AppHandle) {
+// Trae la ventana principal al frente (desde la bandeja o el atajo de abrir). Si la interfaz se
+// descargó al cerrarla, se vuelve a crear.
+pub(crate) fn show_main(app: &tauri::AppHandle) {
     use tauri::Manager;
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.show();
-        let _ = w.unminimize();
-        let _ = w.set_focus();
-    }
+    let w = match app.get_webview_window("main") {
+        Some(w) => w,
+        None => match create_main(app) {
+            Some(w) => w,
+            None => return,
+        },
+    };
+    let _ = w.show();
+    let _ = w.unminimize();
+    let _ = w.set_focus();
+}
+
+// La ventana no se crea desde tauri.conf.json ("create": false): con el autoarranque la app
+// empieza en la bandeja sin interfaz. Nace oculta (visible: false) para no parpadear.
+fn create_main(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
+    let conf = app.config().app.windows.first()?.clone();
+    let w = match tauri::WebviewWindowBuilder::from_config(app, &conf).and_then(|b| b.build()) {
+        Ok(w) => w,
+        Err(e) => {
+            log::error!("no se pudo crear la ventana: {e}");
+            return None;
+        }
+    };
+    let _ = w.set_min_size(Some(tauri::LogicalSize { width: 1366.0, height: 768.0 }));
+    let _ = w.set_size(tauri::LogicalSize { width: 1366.0, height: 768.0 });
+    // Cerrar la ventana (botón X) no termina la app: la oculta y pide a la interfaz que se
+    // descargue cuando pueda (ver release_ui). Salir de verdad es solo desde la bandeja.
+    let handle = w.clone();
+    w.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            use tauri::Emitter;
+            api.prevent_close();
+            let _ = handle.hide();
+            let _ = handle.emit("ui-release-request", ());
+        }
+    });
+    Some(w)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -946,15 +917,19 @@ pub fn run() {
             // el webview oculto). En un arranque normal la ventana nace oculta (visible:false
             // para no parpadear) y aquí se muestra.
             let autostart = std::env::args().any(|a| a == "--autostart");
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.set_min_size(Some(tauri::LogicalSize { width: 1366.0, height: 768.0 }));
-                let _ = w.set_size(tauri::LogicalSize { width: 1366.0, height: 768.0 });
-                if !autostart {
-                    let _ = w.show();
-                }
-            }
             #[cfg(target_os = "windows")]
             app.manage(toast::Toast::spawn());
+            session::init(app.handle());
+            // Sin ajustes de captura en Rust (instalación anterior) la interfaz tiene que arrancar
+            // aunque sea oculta: sus ajustes están en su localStorage y los migra al montar.
+            if !autostart || session::prefs().is_none() {
+                let w = create_main(app.handle());
+                if !autostart {
+                    if let Some(w) = w {
+                        let _ = w.show();
+                    }
+                }
+            }
 
             // Watcher de juego en primer plano: mantiene fresco el juego rastreado para que el
             // replay pueda cambiar de objetivo al cambiar de juego (no seguir capturando el que
@@ -987,18 +962,6 @@ pub fn run() {
                 tray = tray.icon(icon.clone());
             }
             tray.build(app)?;
-
-            // Cerrar la ventana (botón X) no termina la app: la oculta a la bandeja. Salir de
-            // verdad es solo desde el menú de la bandeja ("Cerrar" → app.exit).
-            if let Some(main) = app.get_webview_window("main") {
-                let main_c = main.clone();
-                main.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        let _ = main_c.hide();
-                    }
-                });
-            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1016,7 +979,7 @@ pub fn run() {
             set_language,
             list_monitors,
             list_audio_inputs,
-            start_capture,
+            toggle_recording,
             stop_capture,
             capture_status,
             list_clips,
@@ -1078,18 +1041,26 @@ pub fn run() {
             playlist_restore_clips,
             playlist_mark_seen,
             reorder_playlists,
-            start_replay,
             stop_replay,
             save_replay,
             replay_active,
-            set_native_hotkeys,
-            set_record_prefs,
-            set_save_sound,
-            toast,
-            dismiss_toast
+            get_capture_prefs,
+            set_capture_prefs,
+            get_capture_monitor,
+            set_capture_monitor,
+            pause_hotkeys,
+            hotkey_failures,
+            release_ui
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|_app, event| {
+            // Destruir la ventana al descargar la interfaz deja la app sin ventanas, y Tauri
+            // saldría. Solo sale de verdad con app.exit (menú de la bandeja), que trae código.
+            if let tauri::RunEvent::ExitRequested { code: None, api, .. } = event {
+                api.prevent_exit();
+            }
+        });
 }
 
 #[cfg(test)]

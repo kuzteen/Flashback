@@ -278,6 +278,97 @@ pub fn set_watermark_corner(app: &tauri::AppHandle, corner: &str) -> Result<(), 
     write_setting(app, "watermark_corner", serde_json::json!(corner))
 }
 
+// Ajustes de captura, replay, sonido y atajos. Viven aquí y no en el localStorage de la interfaz
+// porque el replay se arma sin ella: con la ventana cerrada el webview no existe.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CapturePrefs {
+    pub replay: bool,
+    pub seconds: u32,
+    pub fps: u32,
+    pub quality: String,
+    pub resolution: u32,
+    pub mic: bool,
+    pub mic_device: String,
+    pub sound: String,
+    pub hotkeys: HotkeyPrefs,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[serde(default)]
+pub struct HotkeyPrefs {
+    pub save: String,
+    pub record: String,
+    pub open: String,
+}
+
+impl Default for CapturePrefs {
+    fn default() -> Self {
+        CapturePrefs {
+            replay: true,
+            seconds: 60,
+            fps: 60,
+            quality: "high".into(),
+            resolution: 1080,
+            mic: true,
+            mic_device: String::new(),
+            sound: "normal".into(),
+            hotkeys: HotkeyPrefs::default(),
+        }
+    }
+}
+
+impl Default for HotkeyPrefs {
+    fn default() -> Self {
+        HotkeyPrefs { save: "Alt+F8".into(), record: "Alt+F9".into(), open: "Alt+F10".into() }
+    }
+}
+
+impl CapturePrefs {
+    // Mismas opciones que ofrece la interfaz: un valor fuera de ellas (archivo editado a mano o de
+    // otra versión) vuelve al de por defecto en vez de llegar a la captura.
+    pub fn normalized(mut self) -> Self {
+        let d = CapturePrefs::default();
+        if ![30, 60, 120, 180, 300, 600, 900].contains(&self.seconds) {
+            self.seconds = d.seconds;
+        }
+        if ![20, 30, 60, 120, 240].contains(&self.fps) {
+            self.fps = d.fps;
+        }
+        if !["low", "normal", "high", "veryhigh", "ultra"].contains(&self.quality.as_str()) {
+            self.quality = d.quality;
+        }
+        if ![480, 720, 1080, 1440, 2160].contains(&self.resolution) {
+            self.resolution = d.resolution;
+        }
+        if !["off", "low", "normal", "high"].contains(&self.sound.as_str()) {
+            self.sound = d.sound;
+        }
+        self
+    }
+
+    pub fn sound_gain(&self) -> f32 {
+        match self.sound.as_str() {
+            "off" => 0.0,
+            "low" => 0.25,
+            "high" => 1.0,
+            _ => 0.55,
+        }
+    }
+}
+
+// None hasta que la interfaz pasa por primera vez sus ajustes del localStorage (instalaciones
+// anteriores a que vivieran aquí).
+pub fn get_capture_prefs(app: &tauri::AppHandle) -> Option<CapturePrefs> {
+    let s = std::fs::read_to_string(settings_path(app)?).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&s).ok()?;
+    serde_json::from_value::<CapturePrefs>(v.get("capture")?.clone()).ok().map(CapturePrefs::normalized)
+}
+
+pub fn set_capture_prefs(app: &tauri::AppHandle, prefs: &CapturePrefs) -> Result<(), String> {
+    write_setting(app, "capture", serde_json::to_value(prefs).map_err(|e| e.to_string())?)
+}
+
 // Idioma de la interfaz: "en" por defecto. Lo lee también el backend (estados del RPC).
 pub fn get_language(app: &tauri::AppHandle) -> String {
     read_setting(app, "language").unwrap_or_else(|| "en".into())

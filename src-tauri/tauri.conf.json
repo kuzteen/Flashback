@@ -13,6 +13,8 @@
     "withGlobalTauri": true,
     "windows": [
       {
+        "label": "main",
+        "create": false,
         "title": "Flashback",
         "width": 1366,
         "height": 768,

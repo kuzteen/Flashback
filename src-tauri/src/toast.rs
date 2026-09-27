@@ -84,7 +84,6 @@ mod win {
 
     enum Cmd {
         Show(ToastData),
-        Hide,
     }
 
     const WM_APP_WAKE: u32 = WM_APP + 1;
@@ -188,12 +187,6 @@ mod win {
 
         pub fn show(&self, data: ToastData) {
             if self.tx.send(Cmd::Show(data)).is_ok() {
-                self.wake();
-            }
-        }
-
-        pub fn hide(&self) {
-            if self.tx.send(Cmd::Hide).is_ok() {
                 self.wake();
             }
         }
@@ -720,15 +713,6 @@ mod win {
             SetTimer(Some(self.hwnd), TIMER_ID, FRAME_MS, None);
         }
 
-        // Cierre suave: si el toast está a la vista, arranca la fase Out en lugar de
-        // ocultarlo de golpe; el timer de animación completa el fundido.
-        unsafe fn hide(&mut self) {
-            if self.phase == Phase::In || self.phase == Phase::Visible {
-                self.phase = Phase::Out;
-                self.start = Instant::now();
-            }
-        }
-
         unsafe fn tick(&mut self) {
             let scale = self.cur_scale;
             let (w, h) = (self.cur_w, self.cur_h);
@@ -880,10 +864,8 @@ mod win {
                         while let Ok(cmd) = rx.try_recv() {
                             RENDERER.with(|r| {
                                 if let Some(rend) = r.borrow_mut().as_mut() {
-                                    match cmd {
-                                        Cmd::Show(data) => rend.show(data),
-                                        Cmd::Hide => rend.hide(),
-                                    }
+                                    let Cmd::Show(data) = cmd;
+                                    rend.show(data);
                                 }
                             });
                         }

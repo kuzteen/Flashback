@@ -1,3 +1,6 @@
+import { pushCapturePrefs } from './capture-prefs';
+
+// Se leen del localStorage solo para migrar a Rust la primera vez (ver capture-prefs.ts).
 const ENABLED_KEY = 'flashback.replay.enabled';
 const SECONDS_KEY = 'flashback.replay.seconds';
 
@@ -30,22 +33,10 @@ export const replay = $state<{ enabled: boolean; seconds: number }>({
 
 export function setReplayEnabled(v: boolean) {
   replay.enabled = v;
-  if (typeof localStorage !== 'undefined') {
-    try {
-      localStorage.setItem(ENABLED_KEY, v ? '1' : '0');
-    } catch {
-      // sin persistencia disponible
-    }
-  }
+  pushCapturePrefs();
 }
 
 export function setReplaySeconds(s: number) {
   replay.seconds = s;
-  if (typeof localStorage !== 'undefined') {
-    try {
-      localStorage.setItem(SECONDS_KEY, String(s));
-    } catch {
-      // sin persistencia disponible
-    }
-  }
+  pushCapturePrefs();
 }

@@ -371,7 +371,8 @@ pub fn refresh_current() {
         return;
     };
     let before = current_game().map(|g| g.name);
-    let after = detect_with(&map).map(|g| g.name);
+    let game = detect_with(&map);
+    let after = game.as_ref().map(|g| g.name.clone());
     // Solo al cambiar: el watcher pasa por aquí en cada cambio de ventana, también entre dos
     // ventanas del mismo juego o entre dos programas que no lo son.
     if before != after {
@@ -381,8 +382,12 @@ pub fn refresh_current() {
         }
         if let Some(app) = APP.get() {
             use tauri::Emitter;
+            if let Some(g) = &game {
+                crate::config::record_seen_game(app, &g.name, g.steam_appid);
+            }
             let _ = app.emit("game-changed", after);
         }
+        crate::session::poke();
     }
 }
 
@@ -392,17 +397,32 @@ pub fn refresh_current() {
 // replay contra la nueva ventana.
 #[cfg(target_os = "windows")]
 pub fn spawn_watcher(app: tauri::AppHandle) {
-    let _ = APP.set(app);
-    std::thread::spawn(|| {
-        let mut last_fg = 0u32;
-        loop {
-            std::thread::sleep(Duration::from_millis(1000));
-            let fg = foreground_pid().unwrap_or(0);
-            if fg != last_fg {
-                last_fg = fg;
-                refresh_current();
-            }
+    let _ = APP.set(app.clone());
+    // La lista se carga aquí y no al primer detect_game de la interfaz: con la ventana cerrada
+    // no hay interfaz, y sin lista el watcher no reconoce ningún juego.
+    tauri::async_runtime::spawn(async move {
+        if ensure_map(&app).await.is_none() {
+            log::warn!("no se pudo cargar la lista de juegos detectables");
         }
+        std::thread::spawn(|| {
+            let mut last_fg = 0u32;
+            let mut ticks = 0u32;
+            loop {
+                refresh_current();
+                // Cada segundo solo si cambió el primer plano; cada 10 s de todos modos, por si
+                // el juego se cierra sin que cambie el foco (lo que antes cubría el sondeo de la
+                // interfaz).
+                loop {
+                    std::thread::sleep(Duration::from_millis(1000));
+                    ticks += 1;
+                    let fg = foreground_pid().unwrap_or(0);
+                    if fg != last_fg || ticks.is_multiple_of(10) {
+                        last_fg = fg;
+                        break;
+                    }
+                }
+            }
+        });
     });
 }
 

@@ -1,5 +1,8 @@
+import { pushCapturePrefs } from './capture-prefs';
+
 export type HotkeyAction = 'saveReplay' | 'record' | 'open';
 
+// Se lee del localStorage solo para migrar a Rust la primera vez (ver capture-prefs.ts).
 const STORAGE_KEY = 'flashback.hotkeys';
 
 const defaults: Record<HotkeyAction, string> = {
@@ -31,13 +34,7 @@ export const hotkeyFailed = $state<Record<HotkeyAction, boolean>>({ saveReplay: 
 
 export function setHotkey(action: HotkeyAction, accel: string) {
   hotkeys[action] = accel;
-  if (typeof localStorage !== 'undefined') {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(hotkeys));
-    } catch {
-      // sin persistencia disponible
-    }
-  }
+  pushCapturePrefs();
 }
 
 const MODS = ['Control', 'Alt', 'Shift', 'Super'];

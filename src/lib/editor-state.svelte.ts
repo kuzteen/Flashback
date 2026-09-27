@@ -239,6 +239,13 @@ async function load(clip: Clip) {
   }
 }
 
+// Antes de descargar la interfaz: el guardado diferido del último cambio se perdería con ella.
+export async function flushEdit() {
+  if (!persistTimer) return;
+  cancelPersist();
+  await persistEdit();
+}
+
 export async function persistEdit() {
   const path = editorState.clip?.path;
   if (!path || editorState.durationMs <= 0 || !settled) return;

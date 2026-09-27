@@ -9,12 +9,10 @@
   import WindowControls from '$lib/components/WindowControls.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
-  import { register, unregisterAll } from '@tauri-apps/plugin-global-shortcut';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { hotkeys, capture, hotkeyFailed, labelFor, labelTokens, type HotkeyAction } from '$lib/hotkeys.svelte';
+  import { hotkeys, capture, labelFor } from '$lib/hotkeys.svelte';
   import { refreshLibrary } from '$lib/library.svelte';
   import { replay, setReplaySeconds, BUFFER_OPTIONS } from '$lib/replay.svelte';
-  import { gainFor, replaySound } from '$lib/replay-sound.svelte';
   import Editor from '$lib/components/editor/Editor.svelte';
   import ShareDialog from '$lib/components/ShareDialog.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
@@ -47,6 +45,7 @@
   import { artSrc, ensureGameHero, gameHero } from '$lib/artwork.svelte';
   import { t, initLocale } from '$lib/i18n.svelte';
   import { installUiLog } from '$lib/ui-log';
+  import { releaseWhenIdle } from '$lib/ui-release';
   import {
     updater,
     checkForUpdate,
@@ -81,11 +80,16 @@
   type AudioInput = { id: string; name: string };
 
   let monitors = $state<Monitor[]>([]);
+  // La pantalla elegida la guarda Rust: sobrevive a que la interfaz se descargue en la bandeja.
   let selectedMonitor = $state<string | null>(null);
+  invoke<string | null>('get_capture_monitor')
+    .then((m) => (selectedMonitor = m))
+    .catch(() => {});
   let pickerOpen = $state(false);
   let recording = $state(false);
-  // La grabación va colgada del replay (mismo encoder): si el replay se reinicia, se cierra antes.
-  let recordingTapped = false;
+  invoke<{ running: boolean }>('capture_status')
+    .then((s) => (recording = s.running))
+    .catch(() => {});
   let micOn = $state(captureConfig.mic);
   let audioInputs = $state<AudioInput[]>([]);
   let micInput = $state(captureConfig.micDevice);
@@ -153,14 +157,6 @@
       captureConfig.fps
     )
   );
-
-  // El feedback se muestra como toast en una ventana overlay (transparente, siempre
-  // encima, click-through) para que sea visible también sobre el juego en modo Aplicación.
-  type ToastKind = 'info' | 'ready' | 'saved' | 'error';
-  type ToastTopic = 'saved' | 'ready' | 'recording' | 'problems';
-  function toast(text: string, topic: ToastTopic, kind: ToastKind = 'info', keys: string[] = []) {
-    invoke('toast', { payload: { title: 'Flashback', body: text, keys, kind, topic } }).catch(() => {});
-  }
 
   const activeMonitor = $derived(monitors.find((m) => m.id === selectedMonitor) ?? null);
   const micName = $derived(audioInputs.find((d) => d.id === micInput)?.name ?? t('cap.noMicsShort'));
@@ -282,60 +278,27 @@
     if (id === selectedMonitor) return;
     if (recording) await stopRecording();
     selectedMonitor = id;
+    invoke('set_capture_monitor', { monitor: id }).catch(() => {});
   }
 
   async function backToApp(e: MouseEvent) {
     e.stopPropagation();
     if (recording) await stopRecording();
     selectedMonitor = null;
+    invoke('set_capture_monitor', { monitor: null }).catch(() => {});
   }
 
-  async function startRecording() {
-    if (recording) return;
-    const target = captureTarget;
-    if (!target) {
-      toast(t('toast.selectScreen'), 'problems');
-      return;
-    }
+  // Mismo camino que el atajo: Rust elige el objetivo, avisa y emite recording-changed.
+  async function toggleRecording() {
     try {
-      recordingTapped = await invoke<boolean>('start_capture', {
-        target,
-        fps: captureConfig.fps,
-        quality: captureConfig.quality,
-        resolution: captureConfig.resolution,
-        bitrate: 0,
-        mic: micOn,
-        micDevice: micInput
-      });
-      recording = true;
-      toast(t('toast.recording'), 'recording', 'ready');
+      await invoke('toggle_recording');
     } catch (e) {
-      toast(t('toast.startFailed', { e: String(e) }), 'problems', 'error');
-      console.error('start_capture', e);
+      console.error('toggle_recording', e);
     }
   }
 
   async function stopRecording() {
-    if (!recording) return;
-    recording = false;
-    recordingTapped = false;
-    try {
-      const path = await invoke<string | null>('stop_capture');
-      if (path) {
-        toast(t('toast.clipSaved'), 'saved', 'saved');
-        await refreshLibrary();
-      } else {
-        toast(t('toast.recStopped'), 'recording', 'info');
-      }
-    } catch (e) {
-      toast(t('toast.stopFailed', { e: String(e) }), 'problems', 'error');
-      console.error('stop_capture', e);
-    }
-  }
-
-  function toggleRecording() {
-    if (recording) stopRecording();
-    else startRecording();
+    if (recording) await toggleRecording();
   }
 
   function editHotkey() {
@@ -348,7 +311,6 @@
     const saved = listen('clip-saved', () => refreshLibrary());
     const rec = listen<{ recording: boolean; tapped: boolean; path: string | null }>('recording-changed', (e) => {
       recording = e.payload.recording;
-      recordingTapped = e.payload.tapped;
       if (e.payload.path) refreshLibrary();
     });
     return () => {
@@ -356,34 +318,6 @@
       rec.then((u) => u());
     };
   });
-
-  // Lo que Rust necesita para grabar con el atajo y para el sonido de guardado.
-  $effect(() => {
-    const prefs = {
-      target: captureTarget,
-      fps: captureConfig.fps,
-      quality: captureConfig.quality,
-      resolution: captureConfig.resolution,
-      mic: micOn,
-      micDevice: micInput
-    };
-    invoke('set_record_prefs', { prefs }).catch(() => {});
-  });
-
-  $effect(() => {
-    invoke('set_save_sound', { gain: gainFor(replaySound.level) }).catch(() => {});
-  });
-
-  async function openFlashback() {
-    try {
-      const w = getCurrentWindow();
-      await w.show();
-      await w.unminimize();
-      await w.setFocus();
-    } catch (e) {
-      console.error('open window', e);
-    }
-  }
 
   type Detected = { name: string; steam_appid: number | null };
 
@@ -395,7 +329,6 @@
   // espera a que el banner esté listo para que el título y el fondo entren a la vez.
   let shown = $state('');
 
-  const gameDisabled = $derived(!!game && gameSettings.isDisabled(game));
   const capSource = $derived(
     selectedMonitor
       ? (activeMonitor?.label ? displaySource(activeMonitor.label) : t('cap.screen'))
@@ -413,11 +346,6 @@
   $effect(() => {
     if (editorGame) ensureGameHero(editorGame);
   });
-
-  // Objetivo de captura: una pantalla concreta, o la ventana del juego detectado en
-  // modo Aplicación. Si es modo Aplicación y NO hay juego (o está deshabilitado), no hay
-  // objetivo (null): el usuario debe elegir una pantalla.
-  const captureTarget = $derived(selectedMonitor ? selectedMonitor : (game && !gameDisabled) ? 'window' : null);
 
   async function refresh() {
     try {
@@ -455,125 +383,39 @@
     }
   }
 
-  // El watcher nativo avisa al cambiar de juego, así que el fondo y el nombre aparecen al
-  // instante en vez de esperar al siguiente sondeo. El intervalo se queda de red de seguridad
-  // por si algún cambio no genera evento (y de paso barre procesos mucho menos a menudo).
+  // El watcher nativo avisa al cambiar de juego (y re-comprueba cada 10 s por su cuenta), así
+  // que el fondo y el nombre aparecen al instante sin sondear desde aquí.
   $effect(() => {
     refresh();
     loadMonitors();
     loadAudioInputs();
     loadDisabledGames();
     const un = listen('game-changed', () => refresh());
-    const id = setInterval(refresh, 10000);
     return () => {
-      clearInterval(id);
       un.then((u) => u());
     };
   });
 
-  // Registro de atajos globales: depende de las combinaciones del store y de si se
-  // está reasignando alguna (en ese caso se sueltan todos para que el SO no intercepte
-  // las teclas). `unregisterAll` al entrar evita callbacks colgados de instancias
-  // previas de `tauri dev`; el flag `cancelled` evita que un re-run viejo pise al nuevo.
+  // Los atajos los registra Rust. Mientras se reasigna uno en Ajustes se sueltan todos para que
+  // Windows no se trague la combinación antes de que llegue al campo.
+  let hotkeysPaused = false;
   $effect(() => {
-    const { saveReplay: sr, record: rec, open: op } = hotkeys;
     const paused = capture.active;
-    let cancelled = false;
-    (async () => {
-      try {
-        await unregisterAll();
-      } catch (e) {
-        console.error('unregisterAll', e);
-      }
-      if (cancelled || paused) return;
-      const bad: Record<HotkeyAction, boolean> = { saveReplay: false, record: false, open: false };
-      // Cada atajo se registra por separado: en Windows RegisterHotKey falla si la combinación
-      // ya la tiene otra app, y antes ese fallo (dentro de un try común) abortaba el registro de
-      // los siguientes, tumbando los tres atajos. Aislado, un conflicto solo pierde ese atajo.
-      // Guardar y grabar se registran en Rust, que los atiende sin pasar por el webview.
-      const failed: string[] = [];
-      try {
-        const rejected = await invoke<string[]>('set_native_hotkeys', { save: sr, record: rec });
-        bad.saveReplay = rejected.includes(sr);
-        bad.record = rejected.includes(rec);
-        if (bad.saveReplay) failed.push(`${t('hk.name.saveClip')} (${labelFor(sr)})`);
-        if (bad.record) failed.push(`${t('hk.name.recording')} (${labelFor(rec)})`);
-      } catch (e) {
-        console.error('set_native_hotkeys', e);
-      }
-      const binds: { action: HotkeyAction; accel: string; name: string; run: () => void }[] = [
-        { action: 'open', accel: op, name: t('hk.name.openFlashback'), run: openFlashback }
-      ];
-      for (const b of binds) {
-        if (cancelled) return;
-        try {
-          await register(b.accel, (e) => {
-            if (e.state === 'Pressed') b.run();
-          });
-        } catch (e) {
-          console.error('register hotkey', b.accel, e);
-          failed.push(`${b.name} (${labelFor(b.accel)})`);
-          bad[b.action] = true;
-        }
-      }
-      if (cancelled) return;
-      Object.assign(hotkeyFailed, bad);
-      if (!cancelled && failed.length) {
-        toast(t('toast.hotkeyInUse', { failed: failed.join(', ') }), 'problems', 'error');
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    if (paused === hotkeysPaused) return;
+    hotkeysPaused = paused;
+    invoke('pause_hotkeys', { paused }).catch(() => {});
   });
 
-  // Instant replay: se codifica en segundo plano mientras el toggle esté activo. El
-  // efecto reacciona al toggle, a la duración, a la calidad/FPS y a la pantalla objetivo;
-  // `lastReplayKey` evita reinicios redundantes cuando nada relevante cambia.
-  let lastReplayKey = '';
+  // Al cerrar la ventana (queda en la bandeja) Rust pide descargar la interfaz. También si nace
+  // oculta: solo arranca así para migrar los ajustes de una versión anterior.
   $effect(() => {
-    const enabled = replay.enabled;
-    const seconds = replay.seconds;
-    const fps = captureConfig.fps;
-    const quality = captureConfig.quality;
-    const resolution = captureConfig.resolution;
-    const bitrate = 0;
-    const target = captureTarget;
-    const mic = micOn;
-    const micDevice = micInput;
-    // En modo Aplicación el objetivo es siempre 'window', pero debe re-armarse al cambiar de juego:
-    // se mete la identidad del juego en la key para que cambiar de juego reconstruya la captura
-    // contra la nueva ventana (si no, seguiría capturando el juego anterior/minimizado). El relevo
-    // launcher → juego con el mismo nombre lo resuelve el backend re-apuntando la captura solo.
-    const targetKey = target === 'window' ? `window:${game}` : target;
-    const key = enabled && target ? `${targetKey}|${seconds}|${fps}|${quality}|${resolution}|${bitrate}|${mic}|${micDevice}` : 'off';
-    if (key === lastReplayKey) return;
-    // Solo avisamos "Listo para clipear" al armar el replay desde apagado, no en cada
-    // reconfiguración (cambiar calidad/fps reinicia el replay pero no es un evento nuevo).
-    const wasOff = lastReplayKey === '' || lastReplayKey === 'off';
-    lastReplayKey = key;
-    (async () => {
-      try {
-        if (recording && recordingTapped) await stopRecording();
-        await invoke('stop_replay');
-        if (key !== 'off') {
-          await invoke('start_replay', { target, seconds, fps, quality, resolution, bitrate, mic, micDevice });
-          if (wasOff) toast(t('toast.replayReadyHint'), 'ready', 'ready', labelTokens(hotkeys.saveReplay));
-        }
-      } catch (e) {
-        toast(t('toast.replayStartFailed', { e: String(e) }), 'problems', 'error');
-        console.error('replay', e);
-      }
-    })();
-  });
-
-  // El backend re-apunta la captura solo (modo Aplicación) cuando la ventana del juego cambia
-  // (relevo launcher → juego, recreación al alternar fullscreen). Al reconstruirse contra la
-  // nueva ventana emite este evento y volvemos a mostrar el toast "Listo para clipear".
-  $effect(() => {
-    const un = listen('replay-retargeted', () => {
-      toast(t('toast.replayReadyHint'), 'ready', 'ready', labelTokens(hotkeys.saveReplay));
-    });
+    const un = listen('ui-release-request', () => releaseWhenIdle());
+    getCurrentWindow()
+      .isVisible()
+      .then((visible) => {
+        if (!visible) releaseWhenIdle();
+      })
+      .catch(() => {});
     return () => {
       un.then((u) => u());
     };

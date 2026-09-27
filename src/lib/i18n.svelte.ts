@@ -192,19 +192,7 @@ const en: Record<string, string> = {
   'cap.fps': 'FPS',
 
   // Toasts / atajos
-  'toast.selectScreen': 'Select a screen to record, or open a game for Application mode.',
-  'toast.recording': 'Recording',
-  'toast.startFailed': 'Could not start recording: {e}',
-  'toast.clipSaved': 'Clip saved',
-  'toast.recStopped': 'Recording stopped',
-  'toast.stopFailed': 'Error stopping the recording: {e}',
   'toast.replayReady': 'Ready to clip',
-  'toast.replayReadyHint': 'to save a clip',
-  'toast.replayStartFailed': 'Could not start the replay: {e}',
-  'toast.hotkeyInUse': 'Shortcut in use by another app: {failed}. Change it in Settings.',
-  'hk.name.saveClip': 'save clip',
-  'hk.name.recording': 'recording',
-  'hk.name.openFlashback': 'open Flashback',
 
   // Biblioteca de clips
   'clips.title': 'All clips',
@@ -581,19 +569,7 @@ const es: Record<string, string> = {
   'cap.resolution': 'Resolución',
   'cap.fps': 'FPS',
 
-  'toast.selectScreen': 'Selecciona una pantalla para grabar, o abre un juego para el modo Aplicación.',
-  'toast.recording': 'Grabando',
-  'toast.startFailed': 'No se pudo iniciar la grabación: {e}',
-  'toast.clipSaved': 'Clip guardado',
-  'toast.recStopped': 'Grabación detenida',
-  'toast.stopFailed': 'Error al detener la grabación: {e}',
   'toast.replayReady': 'Listo para clipear',
-  'toast.replayReadyHint': 'para guardar un clip',
-  'toast.replayStartFailed': 'No se pudo iniciar el replay: {e}',
-  'toast.hotkeyInUse': 'Atajo en uso por otra app: {failed}. Cámbialo en Ajustes.',
-  'hk.name.saveClip': 'guardar clip',
-  'hk.name.recording': 'grabación',
-  'hk.name.openFlashback': 'abrir Flashback',
 
   'clips.title': 'Todos los clips',
   'clips.search': 'Buscar clips',
