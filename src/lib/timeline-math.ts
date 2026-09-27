@@ -10,9 +10,11 @@ export function clampZoom(z: number): number {
   return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
 }
 
-// Pasos multiplicativos: el zoom se siente igual de lejos que de cerca.
+// Pasos multiplicativos: el zoom se siente igual de lejos que de cerca. Proporcional al giro: una
+// muesca de rueda (100) es un 25 %, y un panel táctil, que manda deltas pequeños, avanza poco a poco.
 export function zoomBy(zoom: number, deltaY: number): number {
-  return clampZoom(deltaY < 0 ? zoom * 1.15 : zoom / 1.15);
+  const d = Math.max(-300, Math.min(300, deltaY));
+  return clampZoom(zoom * Math.pow(1.25, -d / 100));
 }
 
 // A zoom 1 el clip entero cabe en el ancho visible. Por debajo sobra sitio a la derecha para
@@ -27,6 +29,12 @@ export function msPerPx(totalMs: number, viewW: number, zoom: number): number {
 
 export function extentMs(totalMs: number, zoom: number): number {
   return totalMs / Math.min(1, zoom);
+}
+
+// Donde acaba el último bloque: puede pasar del final del clip si se soltó ahí con el zoom
+// alejado, y la línea de tiempo tiene que seguir llegando hasta él al acercarse.
+export function blocksEnd(segs: Segment[]): number {
+  return segs.reduce((m, s) => Math.max(m, s.posMs + segLen(s)), 0);
 }
 
 export function outStartOf(segs: Segment[], index: number): number {
@@ -94,20 +102,37 @@ export function frameStepTarget(ft: number[], srcMs: number, dir: 1 | -1, frameM
 const STEPS = [100, 200, 500, 1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000];
 const LABEL_MIN_PX = 72;
 
-export type Tick = { ms: number; major: boolean };
+// pos: dónde va en la línea de tiempo; out: el tiempo que marca, el del vídeo exportado.
+export type Tick = { pos: number; out: number; major: boolean };
 
 export function rulerStep(mpp: number): number {
   for (const s of STEPS) if (s / mpp >= LABEL_MIN_PX) return s;
   return STEPS[STEPS.length - 1];
 }
 
-export function rulerTicks(extent: number, mpp: number): Tick[] {
-  if (mpp <= 0 || extent <= 0) return [];
-  const step = rulerStep(mpp);
-  const minor = step / 5;
-  const out: Tick[] = [];
-  for (let i = 0; i * minor <= extent + 1e-6; i++) out.push({ ms: i * minor, major: i % 5 === 0 });
-  return out;
+// La regla cuenta el tiempo del resultado, no la posición: solo hay marcas sobre los bloques
+// activos, y cada una dice el segundo que tendrá en el vídeo exportado. En los huecos y sobre los
+// bloques desactivados no hay nada, porque no se exportan. Los bloques van en orden de salida y
+// los huecos solo separan, así que las etiquetas nunca quedan más juntas que el paso.
+export function rulerTicks(segs: Segment[], mpp: number, from = -Infinity, to = Infinity): Tick[] {
+  if (mpp <= 0) return [];
+  const minor = rulerStep(mpp) / 5;
+  const ticks: Tick[] = [];
+  const active = segs.filter((s) => !s.disabled);
+  let acc = 0;
+  for (const [n, s] of active.entries()) {
+    const len = segLen(s);
+    // El segundo que cae justo en una unión es del bloque que empieza ahí; el final solo se marca
+    // en el último, que no tiene siguiente.
+    const end = n === active.length - 1 ? acc + len + 1e-6 : acc + len - 1e-6;
+    for (let k = Math.max(0, Math.ceil(acc / minor - 1e-6)); k * minor <= end; k++) {
+      const pos = s.posMs + k * minor - acc;
+      if (pos > to) break;
+      if (pos >= from) ticks.push({ pos, out: k * minor, major: k % 5 === 0 });
+    }
+    acc += len;
+  }
+  return ticks;
 }
 
 const two = (n: number) => String(Math.floor(n)).padStart(2, '0');

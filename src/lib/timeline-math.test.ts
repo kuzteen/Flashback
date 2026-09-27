@@ -14,6 +14,7 @@ import {
   posToOut,
   rulerStep,
   rulerTicks,
+  blocksEnd,
   zoomBy,
 } from './timeline-math';
 
@@ -30,11 +31,14 @@ const seg = (startMs: number, endMs: number, posMs: number, extra: Partial<Segme
 });
 
 describe('zoom y escala', () => {
-  it('limita el zoom y avanza por pasos multiplicativos', () => {
+  it('limita el zoom y avanza por pasos multiplicativos proporcionales al giro', () => {
     expect(clampZoom(100)).toBe(40);
     expect(clampZoom(0.1)).toBe(0.5);
-    expect(zoomBy(1, -1)).toBeCloseTo(1.15);
-    expect(zoomBy(1, 1)).toBeCloseTo(1 / 1.15);
+    expect(zoomBy(1, -100)).toBeCloseTo(1.25);
+    expect(zoomBy(1, 100)).toBeCloseTo(1 / 1.25);
+    expect(zoomBy(1, -10)).toBeCloseTo(Math.pow(1.25, 0.1));
+    expect(zoomBy(1, -1000)).toBeCloseTo(Math.pow(1.25, 3));
+    expect(zoomBy(39, -100)).toBe(40);
   });
 
   it('a zoom 1 el clip cabe justo; por debajo sobra sitio y por encima crece', () => {
@@ -106,14 +110,38 @@ describe('regla', () => {
   });
 
   it('marca cinco subdivisiones por paso', () => {
-    const ticks = rulerTicks(10_000, 10);
+    const ticks = rulerTicks([seg(0, 10_000, 0)], 10);
     expect(ticks).toHaveLength(51);
     expect(ticks.filter((t) => t.major)).toHaveLength(11);
-    expect(ticks[1]).toEqual({ ms: 200, major: false });
+    expect(ticks[1]).toEqual({ pos: 200, out: 200, major: false });
+  });
+
+  it('cuenta el tiempo exportado: nada en huecos ni en bloques desactivados', () => {
+    const segs = [
+      seg(0, 3000, 0),
+      seg(3000, 5000, 6000),
+      seg(5000, 8000, 9000, { disabled: true }),
+    ];
+    const majors = rulerTicks(segs, 10).filter((t) => t.major);
+    expect(majors.map((t) => t.out)).toEqual([0, 1000, 2000, 3000, 4000, 5000]);
+    expect(majors.find((t) => t.out === 4000)?.pos).toBe(7000);
+    expect(rulerTicks(segs, 10).some((t) => t.pos > 3000 && t.pos < 6000)).toBe(false);
+    expect(rulerTicks(segs, 10).some((t) => t.pos > 8000)).toBe(false);
+  });
+
+  it('solo devuelve las marcas del tramo pedido', () => {
+    const ticks = rulerTicks([seg(0, 10_000, 0)], 10, 2000, 3000);
+    expect(ticks[0].pos).toBe(2000);
+    expect(ticks[ticks.length - 1].pos).toBe(3000);
+  });
+
+  it('el final del último bloque puede pasar del clip', () => {
+    expect(blocksEnd([seg(0, 3000, 0), seg(3000, 5000, 12_000)])).toBe(14_000);
+    expect(blocksEnd([])).toBe(0);
   });
 
   it('sin escala no hay marcas', () => {
-    expect(rulerTicks(10_000, 0)).toEqual([]);
+    expect(rulerTicks([seg(0, 10_000, 0)], 0)).toEqual([]);
   });
 });
 

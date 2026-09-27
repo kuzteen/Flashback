@@ -1,6 +1,8 @@
 <script lang="ts">
   import Icon from '../Icon.svelte';
   import ValueInput from './ValueInput.svelte';
+  import BlockLane from './BlockLane.svelte';
+  import WaveTiles from './WaveTiles.svelte';
   import { beginGesture, commit, editorState, endGesture, preview } from '$lib/editor-state.svelte';
   import { segLen, type MixerState } from '$lib/edit-model';
   import { t } from '$lib/i18n.svelte';
@@ -11,8 +13,17 @@
     width,
     viewX,
     viewW,
-  }: { kind: 'sys' | 'mic'; mpp: number; width: number; viewX: number; viewW: number } = $props();
-
+    posAt,
+    headPos,
+  }: {
+    kind: 'sys' | 'mic';
+    mpp: number;
+    width: number;
+    viewX: number;
+    viewW: number;
+    posAt: (clientX: number) => number;
+    headPos: number;
+  } = $props();
 
   const mixer = $derived(editorState.edit.mixer);
   const vol = $derived(kind === 'sys' ? mixer.sys_vol : mixer.mic_vol);
@@ -92,68 +103,7 @@
     commit(withMixer(volPatch(v)));
   }
 
-  let canvas = $state<HTMLCanvasElement | null>(null);
-  // El lienzo pegado a la izquierda no puede salirse del carril: al principio y al final se queda
-  // en su borde en vez de seguir a la ventana, igual que hace el navegador con el sticky.
-  const canvasW = $derived(Math.max(0, Math.floor(Math.min(width, viewW))));
-  const canvasX = $derived(Math.max(0, Math.min(viewX, width - canvasW)));
-
-  // Solo se pinta el tramo visible: con zoom alto un lienzo del ancho completo pasaría de los
-  // 30.000 px. La capa base es la onda original sin editar, para que los huecos no queden
-  // vacíos; los bloques se pintan encima (atenuados si están desactivados o la pista muda).
-  function draw() {
-    const c = canvas;
-    if (!c) return;
-    const w = canvasW;
-    const h = c.clientHeight;
-    const dpr = window.devicePixelRatio || 1;
-    c.width = Math.round(w * dpr);
-    c.height = Math.round(h * dpr);
-    const ctx = c.getContext('2d');
-    if (!ctx) return;
-    ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, w, h);
-    const p = peaks;
-    const dur = editorState.durationMs;
-    if (!p || dur <= 0 || mpp <= 0 || w === 0) return;
-    const mid = h / 2;
-    const amp = h * 0.44;
-    const bar = (src: number) => {
-      const b = Math.min(p.length - 1, Math.max(0, Math.floor((src / dur) * p.length)));
-      return Math.max(0.5, Math.min(1, p[b] * 1.8) * amp * vol);
-    };
-    const ordered = [...editorState.edit.segments].sort((a, b) => a.posMs - b.posMs);
-    const base = new Path2D();
-    const on = new Path2D();
-    const off = new Path2D();
-    let k = 0;
-    for (let x = 0; x < w; x++) {
-      const pos = (canvasX + x) * mpp;
-      if (pos < dur) {
-        const y = bar(pos);
-        base.rect(x, mid - y, 1, y * 2);
-      }
-      while (k < ordered.length && ordered[k].posMs + segLen(ordered[k]) <= pos) k++;
-      const s = ordered[k];
-      if (s && pos >= s.posMs) {
-        const y = bar(s.startMs + (pos - s.posMs));
-        (s.disabled || muted ? off : on).rect(x, mid - y, 1, y * 2);
-      }
-    }
-    // El lienzo no entiende var(): los colores se leen de los tokens del tema al pintar.
-    const css = getComputedStyle(c);
-    ctx.fillStyle = css.getPropertyValue('--wave-base').trim();
-    ctx.fill(base);
-    ctx.fillStyle = css.getPropertyValue('--wave-off').trim();
-    ctx.fill(off);
-    ctx.fillStyle = css.getPropertyValue('--wave').trim();
-    ctx.fill(on);
-  }
-
-  $effect(() => {
-    void [canvas, peaks, editorState.edit.segments, editorState.durationMs, muted, vol, mpp, canvasX, canvasW];
-    draw();
-  });
+  const px = (ms: number) => (mpp > 0 ? ms / mpp : 0);
 </script>
 
 <div class="row" class:muted>
@@ -186,6 +136,7 @@
       </span>
       <div
           class="rail"
+          class:dragging
           bind:this={rail}
           role="slider"
           tabindex="0"
@@ -208,14 +159,26 @@
       </div>
     {/if}
   </div>
-  <div class="lane" style:width="{width}px">
-    <canvas bind:this={canvas} class="wave" class:ready={!!peaks} style:width="{canvasW}px"></canvas>
+  <BlockLane track={kind} {mpp} {width} {posAt} {headPos}>
+    {#snippet block(s)}
+      <WaveTiles
+        {peaks}
+        startMs={s.startMs}
+        left={px(s.posMs)}
+        width={px(segLen(s))}
+        {mpp}
+        {viewX}
+        {viewW}
+        {vol}
+        dim={muted}
+      />
+    {/snippet}
     {#if noAudio}
       <span class="note mono">{t('ed.noAudio')}</span>
     {:else if !peaks}
       <div class="skeleton"></div>
     {/if}
-  </div>
+  </BlockLane>
 </div>
 
 <style>
@@ -223,7 +186,7 @@
   .row {
     position: relative;
     display: flex;
-    height: 52px;
+    height: 59px;
   }
   .row::after {
     content: '';
@@ -334,6 +297,7 @@
     background: var(--text-0);
     transform: translate(-50%, -50%);
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+    cursor: grab;
   }
   .thumb::after {
     content: '';
@@ -346,26 +310,12 @@
     background: var(--bg-3);
     transform: translate(-50%, -50%);
   }
+  .rail.dragging,
+  .rail.dragging .thumb {
+    cursor: grabbing;
+  }
   .rail:focus-visible .thumb {
     box-shadow: 0 0 0 3px var(--accent-glow);
-  }
-  .lane {
-    position: relative;
-    flex: none;
-    margin-left: var(--pad);
-    clip-path: var(--lane-clip);
-  }
-  /* Pegado al borde izquierdo visible: el lienzo mide lo que se ve y se repinta al hacer scroll. */
-  .wave {
-    position: sticky;
-    left: calc(var(--gutter) + var(--pad));
-    display: block;
-    height: 100%;
-    opacity: 0;
-    transition: opacity 0.25s ease;
-  }
-  .wave.ready {
-    opacity: 1;
   }
   .note {
     position: absolute;
@@ -387,8 +337,8 @@
     position: absolute;
     left: 0;
     right: 0;
-    top: 14px;
-    bottom: 14px;
+    top: 2px;
+    height: 54px;
     border-radius: 6px;
   }
   .sk-ico {

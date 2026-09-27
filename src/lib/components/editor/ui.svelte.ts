@@ -24,6 +24,34 @@ function saveOpen(key: string, open: boolean) {
   } catch {}
 }
 
+export type Track = 'video' | 'sys' | 'mic';
+
+// Colores del marco y los tiradores de cada pista, para distinguirlas de un vistazo. El primero es
+// el acento del tema; se guarda el índice y no el color para que ese siga al tema.
+export const GRIP_COLORS = [
+  { value: 'var(--accent)', name: 'color.default' },
+  { value: '#f4c95d', name: 'color.gold' },
+  { value: '#ff9f43', name: 'color.orange' },
+  { value: '#ff5c5c', name: 'color.red' },
+  { value: '#ff6fb5', name: 'color.pink' },
+  { value: '#a78bfa', name: 'color.violet' },
+  { value: '#4da3ff', name: 'color.blue' },
+  { value: '#3ddc97', name: 'color.green' }
+];
+const GRIP_KEY = 'flashback.editor.gripColors';
+
+function readGrips(): Record<Track, number> {
+  const out: Record<Track, number> = { video: 0, sys: 0, mic: 0 };
+  try {
+    const saved = JSON.parse(localStorage.getItem(GRIP_KEY) ?? '{}');
+    for (const k of Object.keys(out) as Track[]) {
+      const i = saved[k];
+      if (Number.isInteger(i) && i >= 0 && i < GRIP_COLORS.length) out[k] = i;
+    }
+  } catch {}
+  return out;
+}
+
 class EditorUi {
   fs = $state(false);
   fsCtrlShow = $state(true);
@@ -36,7 +64,16 @@ class EditorUi {
   // clip porque es una preferencia de quien edita, no del clip.
   dockH = $state<number | null>(null);
   toolsOpen = $state(false);
-  blockMenu = $state<{ x: number; y: number; index: number } | null>(null);
+  blockMenu = $state<{ x: number; y: number; index: number; track: Track } | null>(null);
+  // Gesto en curso sobre un bloque, compartido por los tres carriles: los bloques de vídeo y audio
+  // son el mismo tramo y tienen que moverse a la vez, sin que los otros carriles lo animen.
+  lifted = $state<number | null>(null);
+  trimming = $state(false);
+  // Justo al soltar un bloque movido: se queda donde se soltó y vuelve a su tamaño sin animar.
+  settling = $state(false);
+  // Mientras el zoom anima: los bloques no deben animar su posición, que cambia en cada fotograma.
+  zooming = $state(false);
+  grips = $state(readGrips());
   // Preferencia de quien edita: plegado por defecto y recordado entre sesiones.
   formatOpen = $state(readOpen(FORMAT_KEY));
   lookOpen = $state(readOpen(LOOK_KEY));
@@ -52,6 +89,13 @@ class EditorUi {
   toggleLook() {
     this.lookOpen = !this.lookOpen;
     saveOpen(LOOK_KEY, this.lookOpen);
+  }
+
+  setGrip(track: Track, index: number) {
+    this.grips[track] = index;
+    try {
+      localStorage.setItem(GRIP_KEY, JSON.stringify(this.grips));
+    } catch {}
   }
 
   private wasMaximized = false;
@@ -71,6 +115,10 @@ class EditorUi {
     this.zoom = 1;
     this.toolsOpen = false;
     this.blockMenu = null;
+    this.lifted = null;
+    this.trimming = false;
+    this.settling = false;
+    this.zooming = false;
     this.compare = false;
     this.split = 0.5;
   }

@@ -2,6 +2,7 @@
   import { tick } from 'svelte';
   import { editorState } from '$lib/editor-state.svelte';
   import {
+    blocksEnd,
     contentWidth,
     extentMs,
     formatRulerLabel,
@@ -33,14 +34,18 @@
   const total = $derived(editorState.durationMs);
   const segs = $derived(editorState.edit.segments);
   const mpp = $derived(msPerPx(total, viewW, ui.zoom));
-  const width = $derived(contentWidth(viewW, ui.zoom));
   const extent = $derived(extentMs(total, ui.zoom));
+  // Hasta el final del clip o del último bloque, lo que llegue más lejos: con el zoom alejado se
+  // pueden soltar bloques más allá del final, y al acercarse quedaban fuera del ancho y el recorte
+  // los tapaba con una franja negra. La escala no cambia; solo crece lo que se puede recorrer.
+  const reach = $derived(Math.max(extent, blocksEnd(segs)));
+  const width = $derived(Math.max(contentWidth(viewW, ui.zoom), mpp > 0 ? reach / mpp : 0));
   const step = $derived(mpp > 0 ? rulerStep(mpp) : 1000);
   // Solo las marcas visibles (más un margen): con zoom alto la regla entera serían miles.
   const ticks = $derived.by(() => {
     const from = (scrollLeft - 100) * mpp;
     const to = (scrollLeft + viewW + 100) * mpp;
-    return rulerTicks(extent, mpp).filter((tk) => tk.ms >= from && tk.ms <= to);
+    return rulerTicks(segs, mpp, from, to);
   });
   const headPos = $derived(outToPos(segs, playback.outPos));
   const px = (ms: number) => (mpp > 0 ? ms / mpp : 0);
@@ -65,31 +70,73 @@
     return () => ro.disconnect();
   });
 
-  // Listener no pasivo: Ctrl+rueda tiene que poder cancelar el scroll para hacer zoom. El punto
-  // bajo el puntero se queda quieto al ampliar.
+  // Listener no pasivo: Ctrl+rueda tiene que poder cancelar el scroll para hacer zoom. La rueda
+  // solo mueve el objetivo; el zoom lo alcanza poco a poco en cada fotograma, porque aplicar el
+  // paso de golpe recolocaba todo el contenido de un fotograma a otro. El punto bajo el puntero
+  // se queda quieto durante todo el recorrido.
   $effect(() => {
     const el = scrollEl;
     if (!el) return;
-    const onWheel = async (e: WheelEvent) => {
-      if (!e.ctrlKey) return;
-      e.preventDefault();
-      const r = el.getBoundingClientRect();
-      const offset = e.clientX - r.left - ORIGIN;
-      const anchor = posAt(e.clientX);
-      const z = zoomBy(ui.zoom, e.deltaY);
+    // El objetivo se toma de ui.zoom en la primera muesca y no aquí: leerlo en el cuerpo del efecto
+    // lo reiniciaría con cada fotograma del zoom y cortaría la animación.
+    let target = 1;
+    let anchor = 0;
+    let offset = 0;
+    let raf = 0;
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    // El estado del scroll se copia en el acto: esperar al evento dejaba la regla, las miniaturas
+    // y el recorte un fotograma con el scroll anterior, y el contenido temblaba.
+    const apply = async (z: number) => {
       ui.zoom = z;
       await tick();
       const m = msPerPx(total, viewW, z);
       if (m > 0) el.scrollLeft = Math.max(0, anchor / m - offset);
+      scrollLeft = el.scrollLeft;
+    };
+
+    const step = () => {
+      raf = 0;
+      // Se acerca en escala logarítmica: la misma fracción del camino cada fotograma se siente
+      // igual de suave de lejos que de cerca.
+      const left = Math.log(target / ui.zoom);
+      if (Math.abs(left) < 0.002) {
+        apply(target).then(() => {
+          if (!raf) ui.zooming = false;
+        });
+        return;
+      }
+      apply(ui.zoom * Math.exp(left * 0.4));
+      raf = requestAnimationFrame(step);
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      offset = e.clientX - r.left - ORIGIN;
+      anchor = posAt(e.clientX);
+      if (!raf) target = ui.zoom;
+      target = zoomBy(target, e.deltaY);
+      if (reduce) {
+        apply(target);
+        return;
+      }
+      ui.zooming = true;
+      if (!raf) raf = requestAnimationFrame(step);
     };
     el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+      cancelAnimationFrame(raf);
+      ui.zooming = false;
+    };
   });
 
   function posAt(clientX: number): number {
     if (!scrollEl || mpp <= 0) return 0;
     const r = scrollEl.getBoundingClientRect();
-    return Math.max(0, Math.min(extent, (clientX - r.left - ORIGIN + scrollEl.scrollLeft) * mpp));
+    return Math.max(0, Math.min(reach, (clientX - r.left - ORIGIN + scrollEl.scrollLeft) * mpp));
   }
 
   // Regla: un clic mueve el cabezal; arrastrar marca un rango.
@@ -152,18 +199,18 @@
         onpointerup={onRulerUp}
         onpointercancel={onRulerUp}
       >
-        {#each ticks as tk (tk.ms)}
-          <span class="tick" class:major={tk.major} style:left="{px(tk.ms)}px">
-            {#if tk.major}<span class="lbl mono">{formatRulerLabel(tk.ms, step)}</span>{/if}
+        {#each ticks as tk (tk.pos)}
+          <span class="tick" class:major={tk.major} style:left="{px(tk.pos)}px">
+            {#if tk.major}<span class="lbl mono">{formatRulerLabel(tk.out, step)}</span>{/if}
           </span>
         {/each}
       </div>
     </div>
 
     <VideoTrack {mpp} {width} viewX={scrollLeft} {viewW} {posAt} {headPos} />
-    <AudioTrack kind="sys" {mpp} {width} viewX={scrollLeft} {viewW} />
+    <AudioTrack kind="sys" {mpp} {width} viewX={scrollLeft} {viewW} {posAt} {headPos} />
     {#if editorState.loading || editorState.mic}
-      <AudioTrack kind="mic" {mpp} {width} viewX={scrollLeft} {viewW} />
+      <AudioTrack kind="mic" {mpp} {width} viewX={scrollLeft} {viewW} {posAt} {headPos} />
     {/if}
 
     <div class="over" style:left="{ORIGIN}px" style:width="{width}px">

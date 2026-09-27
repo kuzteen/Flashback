@@ -5,6 +5,7 @@ import { clearFilmstrip, loadFilmstrip } from './filmstrip.svelte';
 import { library, refreshLibrary } from './library.svelte';
 import {
   DEFAULT_FORMAT,
+  equalState,
   fromSaved,
   fullClip,
   initialState,
@@ -76,16 +77,23 @@ export const editorState = $state<EditorState>(blank());
 // para navegar al anterior / siguiente sin salir.
 export const clipOrder = $state<{ list: Clip[] }>({ list: [] });
 
-const history = new EditHistory<EditState>();
+// Cada paso guarda también el bloque seleccionado: deshacer y rehacer devuelven la selección que
+// había en ese punto, en vez de dejarla donde acabó o que un mismo índice señale otro bloque.
+type Step = { edit: EditState; active: number };
+const history = new EditHistory<Step>(100, (a, b) => equalState(a.edit, b.edit));
 // undefined mientras la edición guardada no ha llegado; null si no había ninguna.
 let saved: SavedEdit | null | undefined;
 let settled = false;
-let gestureBefore: EditState | null = null;
+let gestureBefore: Step | null = null;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
 // El historial guarda copias planas: un proxy de Svelte cambiaría bajo sus pies.
 function snapshot(): EditState {
   return $state.snapshot(editorState.edit) as EditState;
+}
+
+function step(): Step {
+  return { edit: snapshot(), active: editorState.active };
 }
 
 function syncHistory() {
@@ -119,9 +127,9 @@ function changed() {
 }
 
 export function commit(next: EditState) {
-  const before = snapshot();
+  const before = step();
   editorState.edit = next;
-  history.record(before, snapshot());
+  history.record(before, step());
   changed();
 }
 
@@ -133,7 +141,7 @@ export function commitSegments(next: Segment[] | null): boolean {
 
 // Un gesto continuo cambia el estado muchas veces y deja un solo paso de deshacer al soltar.
 export function beginGesture() {
-  gestureBefore = snapshot();
+  gestureBefore = step();
 }
 
 export function preview(next: EditState) {
@@ -142,31 +150,35 @@ export function preview(next: EditState) {
 
 export function endGesture() {
   if (!gestureBefore) return;
-  history.record(gestureBefore, snapshot());
+  history.record(gestureBefore, step());
   gestureBefore = null;
   changed();
 }
 
-export function undo(): boolean {
-  const prev = history.undo(snapshot());
-  if (!prev) return false;
-  editorState.edit = prev;
+function restore(to: Step) {
+  editorState.edit = to.edit;
+  editorState.active = to.active;
   changed();
+}
+
+export function undo(): boolean {
+  const prev = history.undo(step());
+  if (!prev) return false;
+  restore(prev);
   return true;
 }
 
 export function redo(): boolean {
-  const next = history.redo(snapshot());
+  const next = history.redo(step());
   if (!next) return false;
-  editorState.edit = next;
-  changed();
+  restore(next);
   return true;
 }
 
 export function resetEdit() {
   if (editorState.durationMs <= 0) return;
-  editorState.active = 0;
   commit({ ...snapshot(), segments: fullClip(editorState.durationMs) });
+  editorState.active = 0;
 }
 
 // La duración la da el <video> y la edición guardada el backend; llegan en cualquier orden y el
