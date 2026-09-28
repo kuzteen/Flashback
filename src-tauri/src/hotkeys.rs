@@ -23,6 +23,10 @@ struct RecordingChanged {
 // Mientras se reasigna un atajo en Ajustes se sueltan todos: si no, Windows se traga la
 // combinación (RegisterHotKey la intercepta) y nunca llega al campo que la está capturando.
 static PAUSED: AtomicBool = AtomicBool::new(false);
+// Reasignar un atajo lanza a la vez pause_hotkeys(false) y set_capture_prefs, cada uno en su hilo:
+// sin esto uno vaciaba el registro mientras el otro registraba, y el plugin devolvía "already
+// registered" por atajos del propio Flashback, que se enseñaban como ocupados por otra app.
+static APPLY: Mutex<()> = Mutex::new(());
 static FAILED: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 
 #[derive(Clone, Copy)]
@@ -233,6 +237,7 @@ pub fn spawn_poller(_app: AppHandle) {}
 #[cfg(desktop)]
 pub fn apply(app: &AppHandle, keys: &HotkeyPrefs) -> Vec<String> {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+    let _serial = APPLY.lock().unwrap_or_else(|e| e.into_inner());
     let _ = app.global_shortcut().unregister_all();
     if PAUSED.load(Ordering::SeqCst) {
         return Vec::new();
@@ -307,6 +312,7 @@ pub fn set_paused(app: &AppHandle, paused: bool) {
         #[cfg(desktop)]
         {
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
+            let _serial = APPLY.lock().unwrap_or_else(|e| e.into_inner());
             let _ = app.global_shortcut().unregister_all();
         }
     } else if let Some(p) = crate::session::prefs() {
