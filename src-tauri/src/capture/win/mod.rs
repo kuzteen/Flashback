@@ -60,7 +60,9 @@ use super::{AudioInput, CaptureStatus, MonitorInfo};
 use crate::audio;
 
 mod encoder;
+mod scaler;
 use encoder::{build_converter, build_encoder};
+use scaler::VideoBlt;
 
 pub fn encoder_options() -> super::EncoderOptions {
     std::thread::spawn(|| {
@@ -795,6 +797,8 @@ unsafe impl Send for SendItem {}
 struct FeedCtx {
     ctx: ID3D11DeviceContext,
     ring: Vec<ID3D11Texture2D>,
+    // Some: el anillo es NV12 de salida y el handler escribe con este blt; None: BGRA nativo.
+    direct: Option<VideoBlt>,
     next: AtomicUsize,
     // Contador global de la última escritura en cada slot del ring. El worker lo compara
     // con el que viajó junto al frame: si no coincide, el handler ya sobreescribió ese slot
@@ -1179,7 +1183,8 @@ struct ReplayPipeline {
     _manager: IMFDXGIDeviceManager,
     // fps objetivo: lo usa el bombeo para la cadencia CFR (cfr_pts/fps_interval).
     fps: u32,
-    converter: IMFTransform,
+    // None cuando el handler ya escribe NV12 de salida (FeedCtx::direct).
+    converter: Option<IMFTransform>,
     encoder: IMFTransform,
     // None => encoder síncrono por software (no genera eventos): se bombea distinto.
     enc_events: Option<IMFMediaEventGenerator>,
@@ -1189,6 +1194,10 @@ struct ReplayPipeline {
     // Solo en el camino software: lleva el frame BGRA de GPU a CPU para alimentar
     // los MFT por software (que no leen texturas D3D).
     sw: Option<SwReadback>,
+    // Solo en hardware: el buffer de MF que envuelve cada textura del anillo y del cartel, creado
+    // una vez. Cada entrega lleva su propio IMFSample ligero: el encoder asíncrono retiene la
+    // muestra y un frame duplicado se entrega varias veces seguidas.
+    input_buffers: Vec<(ID3D11Texture2D, IMFMediaBuffer)>,
     frame_pool: Direct3D11CaptureFramePool,
     session: GraphicsCaptureSession,
     token: i64,
@@ -1231,6 +1240,60 @@ unsafe impl Sync for ReplayPipeline {}
 struct Card {
     overlay: crate::overlay::OutOfFocusCard,
     tex: ID3D11Texture2D,
+    nv12: Option<CardNv12>,
+}
+
+// Con el anillo en NV12, Direct2D no puede leer el último frame: se pasa a BGRA (`snapshot`) para
+// componer el cartel y el cartel compuesto vuelve a NV12 para el encoder. Solo al minimizar.
+struct CardNv12 {
+    snapshot: ID3D11Texture2D,
+    tex: ID3D11Texture2D,
+    to_bgra: VideoBlt,
+    to_nv12: VideoBlt,
+}
+
+impl Card {
+    fn compose(&self, last: &ID3D11Texture2D) -> Result<()> {
+        match &self.nv12 {
+            None => self.overlay.render(last, &self.tex),
+            Some(n) => {
+                n.to_bgra.blt(last, &n.snapshot)?;
+                self.overlay.render(&n.snapshot, &self.tex)?;
+                n.to_nv12.blt(&self.tex, &n.tex)
+            }
+        }
+    }
+
+    // Textura que se entrega al encoder (o al conversor).
+    fn frame(&self) -> &ID3D11Texture2D {
+        self.nv12.as_ref().map_or(&self.tex, |n| &n.tex)
+    }
+}
+
+fn build_card(
+    device: &ID3D11Device,
+    ctx: &ID3D11DeviceContext,
+    (w, h): (u32, u32),
+    fps: u32,
+    nv12: bool,
+    text: &str,
+) -> Result<Card> {
+    let overlay = crate::overlay::OutOfFocusCard::new(device, w, h, text)?;
+    let mut bgra = create_bgra_textures(device, w, h, if nv12 { 2 } else { 1 })?;
+    let tex = bgra.pop().ok_or_else(null_out)?;
+    let nv12 = if nv12 {
+        let snapshot = bgra.pop().ok_or_else(null_out)?;
+        let yuv = scaler::yuv_color_space(h);
+        let to_bgra = VideoBlt::new(device, ctx, (w, h), (w, h), fps, yuv, scaler::RGB_FULL, DXGI_FORMAT_B8G8R8A8_UNORM)?;
+        to_bgra.add_targets(std::slice::from_ref(&snapshot))?;
+        let out = scaler::create_nv12_targets(device, w, h, 1)?.pop().ok_or_else(null_out)?;
+        let to_nv12 = VideoBlt::new(device, ctx, (w, h), (w, h), fps, scaler::RGB_FULL, yuv, DXGI_FORMAT_NV12)?;
+        to_nv12.add_targets(std::slice::from_ref(&out))?;
+        Some(CardNv12 { snapshot, tex: out, to_bgra, to_nv12 })
+    } else {
+        None
+    };
+    Ok(Card { overlay, tex, nv12 })
 }
 
 struct SwReadback {
@@ -1326,27 +1389,47 @@ fn build_pipeline_core(
     let (encoder, enc_events) = build_encoder(&manager, out_w, out_h, fps, bitrate, encoder_pref)?;
     let software = enc_events.is_none();
 
-    // El conversor BGRA→NV12 escala de captura (width/height) a salida (out_*): va en
-    // GPU con el encoder por hardware, y en software (sin device manager, CPU) si no.
-    let converter = build_converter(
-        if software { None } else { Some(&manager) },
-        width,
-        height,
-        out_w,
-        out_h,
-        fps,
-    )?;
+    // En hardware, el handler de WGC convierte y escala cada frame directo a NV12 de salida con el
+    // procesador de vídeo de D3D11 (scaler.rs) y el encoder lo toma tal cual. Si el driver no lo
+    // ofrece, o en software, el handler copia el BGRA a nativo y el worker lo convierte con el MFT.
+    let direct = if software || force_mft_converter() {
+        None
+    } else {
+        let yuv = scaler::yuv_color_space(out_h);
+        match VideoBlt::new(&device, &ctx, (width, height), (out_w, out_h), fps, scaler::RGB_FULL, yuv, DXGI_FORMAT_NV12) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                log::warn!("captura: sin procesador de vídeo D3D11 ({e:?}), se usa el conversor MFT");
+                None
+            }
+        }
+    };
+
+    let converter = if direct.is_some() {
+        None
+    } else {
+        Some(build_converter(
+            if software { None } else { Some(&manager) },
+            width,
+            height,
+            out_w,
+            out_h,
+            fps,
+        )?)
+    };
 
     // Pool de salidas NV12 (a resolución de salida) para el conversor si no las provee
     // él: GPU en el camino hardware, memoria de sistema en el software.
-    let converter_provides = unsafe {
-        let info = converter.GetOutputStreamInfo(0)?;
-        info.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32) != 0
+    let converter_provides = match &converter {
+        Some(c) => unsafe {
+            c.GetOutputStreamInfo(0)?.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32) != 0
+        },
+        None => false,
     };
     // El worker convierte de a un frame por vez y lo entrega al encoder; el buffer que
-    // absorbe los stalls es el ring BGRA (más abajo), no este pool. Basta con cubrir los
+    // absorbe los stalls es el anillo (más abajo), no este pool. Basta con cubrir los
     // frames que retiene NVENC en vuelo + margen del round-robin.
-    let nv12_pool = if converter_provides {
+    let nv12_pool = if converter.is_none() || converter_provides {
         Vec::new()
     } else if software {
         create_nv12_cpu_samples(out_w, out_h, 16)?
@@ -1367,19 +1450,28 @@ fn build_pipeline_core(
         None
     };
 
-    // Anillo BGRA para FrameArrived: copia GPU→GPU y manda al hilo de bombeo. En hardware
-    // es además el buffer que absorbe los stalls de GPU: el pacing encola referencias a
-    // estas texturas hacia el worker, así que debe caber ~cap frames en vuelo + latest +
-    // margen (si no, el handler sobreescribiría una textura aún encolada). El software no
-    // desacopla (bombeo síncrono), 10 basta.
-    let bgra_ring_len = if software { 10 } else { enc_buffer_frames(fps) + 12 };
-    let bgra_ring = create_bgra_textures(&device, width, height, bgra_ring_len)?;
+    // Anillo de FrameArrived: el handler escribe ahí cada frame (NV12 de salida o BGRA nativo)
+    // y lo manda al hilo de bombeo. En hardware es además el buffer que absorbe los stalls de
+    // GPU: el pacing encola referencias a estas texturas hacia el worker, así que debe caber
+    // ~cap frames en vuelo + latest + margen (si no, el handler sobreescribiría una textura aún
+    // encolada). El software no desacopla (bombeo síncrono), 10 basta.
+    let ring_len = if software { 10 } else { enc_buffer_frames(fps) + 12 };
+    let ring = match &direct {
+        Some(d) => {
+            let ring = scaler::create_nv12_targets(&device, out_w, out_h, ring_len)?;
+            d.add_targets(&ring)?;
+            ring
+        }
+        None => create_bgra_textures(&device, width, height, ring_len)?,
+    };
     let (tx, rx) = mpsc::channel::<(SendTex, i64, u64)>();
     // seq[i] = u64::MAX hasta la primera escritura; luego el contador global de esa escritura.
-    let seq = (0..bgra_ring_len).map(|_| AtomicU64::new(u64::MAX)).collect();
+    let seq = (0..ring_len).map(|_| AtomicU64::new(u64::MAX)).collect();
+    let direct_mode = direct.is_some();
     let feed = Arc::new(FeedCtx {
         ctx,
-        ring: bgra_ring,
+        ring,
+        direct,
         next: AtomicUsize::new(0),
         seq,
         tx,
@@ -1408,6 +1500,7 @@ fn build_pipeline_core(
     let stats = stats.clone();
     let feed_h = feed.clone();
     let size_changed_h = size_changed.clone();
+    let blt_err_logged = AtomicBool::new(false);
     let handler = TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new(
         move |pool, _| {
             ensure_handler_priority();
@@ -1437,11 +1530,27 @@ fn build_pipeline_core(
                                         feed_h.next.fetch_add(1, Ordering::Relaxed) as u64;
                                     let idx = counter as usize % feed_h.ring.len();
                                     let dst = feed_h.ring[idx].clone();
-                                    unsafe { feed_h.ctx.CopyResource(&dst, &tex) };
-                                    // Publica el contador DESPUÉS de la copia: el worker que
-                                    // vea este seq sabe que el contenido ya está escrito.
-                                    feed_h.seq[idx].store(counter, Ordering::Release);
-                                    let _ = feed_h.tx.send((SendTex(dst), t, counter));
+                                    let written = match &feed_h.direct {
+                                        Some(d) => match d.blt(&tex, &dst) {
+                                            Ok(()) => true,
+                                            Err(e) => {
+                                                if !blt_err_logged.swap(true, Ordering::Relaxed) {
+                                                    log::warn!("captura: fallo del procesador de vídeo: {e:?}");
+                                                }
+                                                false
+                                            }
+                                        },
+                                        None => {
+                                            unsafe { feed_h.ctx.CopyResource(&dst, &tex) };
+                                            true
+                                        }
+                                    };
+                                    if written {
+                                        // Publica el contador DESPUÉS de escribir: el worker
+                                        // que vea este seq sabe que el contenido ya está.
+                                        feed_h.seq[idx].store(counter, Ordering::Release);
+                                        let _ = feed_h.tx.send((SendTex(dst), t, counter));
+                                    }
                                 }
                             }
                         }
@@ -1458,7 +1567,9 @@ fn build_pipeline_core(
     // Arrancar los MFT en streaming y la sesión WGC. START_OF_STREAM solo aplica al
     // MFT asíncrono (hardware); el síncrono por software no lo necesita.
     unsafe {
-        converter.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
+        if let Some(c) = &converter {
+            c.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
+        }
         encoder.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
         if enc_events.is_some() {
             encoder.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
@@ -1472,14 +1583,9 @@ fn build_pipeline_core(
     // Cartel "fuera de foco": solo en modo ventana con texto (el Instant Replay lo usa; la
     // grabación manual pasa None). Si Direct2D falla, se sigue sin cartel.
     let card = if let (true, Some(text)) = (window_mode, card_text) {
-        match crate::overlay::OutOfFocusCard::new(&device, width, height, text) {
-            Ok(overlay) => {
-                let tex = create_bgra_textures(&device, width, height, 1)?
-                    .into_iter()
-                    .next()
-                    .ok_or_else(null_out)?;
-                Some(Card { overlay, tex })
-            }
+        let dims = if direct_mode { (out_w, out_h) } else { (width, height) };
+        match build_card(&device, &feed.ctx, dims, fps, direct_mode, text) {
+            Ok(card) => Some(card),
             Err(e) => {
                 log::warn!("overlay: no se pudo crear el cartel de fuera de foco: {e:?}");
                 None
@@ -1496,6 +1602,13 @@ fn build_pipeline_core(
         0
     };
 
+    let mut input_buffers = Vec::new();
+    if !software {
+        for tex in feed.ring.iter().chain(card.as_ref().map(|c| c.frame())) {
+            input_buffers.push((tex.clone(), surface_buffer(tex)?));
+        }
+    }
+
     session.StartCapture()?;
 
     let pipe = ReplayPipeline {
@@ -1509,6 +1622,7 @@ fn build_pipeline_core(
         nv12_next: std::cell::Cell::new(0),
         converter_provides,
         sw,
+        input_buffers,
         frame_pool,
         session,
         token,
@@ -1969,7 +2083,7 @@ fn run_pump_async(
                         inflight.fetch_add(1, Ordering::Relaxed);
                         let force_key = std::mem::take(&mut pending_key);
                         // El cartel no vive en el ring: seq=MAX => el worker no lo valida.
-                        let item = SendItem { tex: c.tex.clone(), pts, force_key, seq: u64::MAX };
+                        let item = SendItem { tex: c.frame().clone(), pts, force_key, seq: u64::MAX };
                         if tx.send(item).is_err() {
                             break;
                         }
@@ -2218,7 +2332,7 @@ fn run_pump_sync(
                 if let Some(c) = pipe.card.as_ref() {
                     let slot = emitted + 1;
                     let pts = cfr_pts(slot, fps).max(emitted_pts + 1);
-                    encode_one(pipe, sink, &c.tex, pts, &mut seq_grabbed, &mut pts_fifo);
+                    encode_one(pipe, sink, c.frame(), pts, &mut seq_grabbed, &mut pts_fifo);
                     emitted = slot;
                     emitted_pts = pts;
                 }
@@ -2388,7 +2502,7 @@ impl FocusState {
             // Transición a minimizado: componer el cartel del último frame real.
             self.card_ready = false;
             if let (Some(c), Some(src)) = (pipe.card.as_ref(), self.last_tex.as_ref()) {
-                match c.overlay.render(src, &c.tex) {
+                match c.compose(src) {
                     Ok(()) => {
                         self.card_ready = true;
                         self.force_key = true;
@@ -2451,19 +2565,23 @@ fn force_keyframe(enc: &IMFTransform) {
     }
 }
 
-// BGRA→NV12 con el conversor (síncrono). Devuelve la muestra NV12 con su tiempo
-// ya fijado, o None si el conversor no produjo salida para esta entrada.
+// Muestra NV12 para el encoder, con su tiempo ya fijado. Si el anillo ya es NV12 de salida
+// (FeedCtx::direct) es la propia textura; si no, pasa por el conversor (síncrono) y devuelve
+// None cuando este no produjo salida para esta entrada.
 //
 // Tras un ProcessInput hay que drenar con ProcessOutput **hasta** MF_E_TRANSFORM_
 // NEED_MORE_INPUT; si no, el MFT se queda "con salida pendiente" y rechaza el
 // siguiente input con NOTACCEPTING (justo lo que pasaba a partir del 2º frame).
 fn convert_frame(
     pipe: &ReplayPipeline,
-    bgra: &ID3D11Texture2D,
+    tex: &ID3D11Texture2D,
     time: i64,
 ) -> Result<Option<IMFSample>> {
-    let in_sample = make_converter_input(pipe, bgra, time)?;
-    unsafe { pipe.converter.ProcessInput(0, &in_sample, 0)? };
+    let in_sample = input_sample(pipe, tex, time)?;
+    let Some(converter) = pipe.converter.as_ref() else {
+        return Ok(Some(in_sample));
+    };
+    unsafe { converter.ProcessInput(0, &in_sample, 0)? };
 
     let mut result: Option<IMFSample> = None;
     loop {
@@ -2474,10 +2592,7 @@ fn convert_frame(
             out.pSample = ManuallyDrop::new(Some(pipe.nv12_pool[idx].clone()));
         }
         let mut status = 0u32;
-        let hr = unsafe {
-            pipe.converter
-                .ProcessOutput(0, std::slice::from_mut(&mut out), &mut status)
-        };
+        let hr = unsafe { converter.ProcessOutput(0, std::slice::from_mut(&mut out), &mut status) };
         let taken = unsafe { ManuallyDrop::take(&mut out.pSample) };
         match hr {
             Ok(()) => {
@@ -2498,26 +2613,42 @@ fn convert_frame(
     Ok(result)
 }
 
-// Muestra de entrada (ARGB32) para el conversor. En hardware envuelve la textura BGRA
-// directamente (zero-copy GPU); en software la baja a memoria de sistema por staging.
-fn make_converter_input(
-    pipe: &ReplayPipeline,
-    bgra: &ID3D11Texture2D,
-    time: i64,
-) -> Result<IMFSample> {
+// Muestra que envuelve una textura del anillo o del cartel sin copiarla (zero-copy GPU); en
+// software la baja a memoria de sistema por staging.
+fn input_sample(pipe: &ReplayPipeline, tex: &ID3D11Texture2D, time: i64) -> Result<IMFSample> {
     if let Some(sw) = &pipe.sw {
-        return readback_argb(sw, bgra, time);
+        return readback_argb(sw, tex, time);
     }
-    let buffer = unsafe { MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, bgra, 0, false)? };
-    let len = unsafe { buffer.cast::<IMF2DBuffer>()?.GetContiguousLength()? };
-    unsafe { buffer.SetCurrentLength(len)? };
-    let in_sample = unsafe { MFCreateSample()? };
+    let buffer = match pipe.input_buffers.iter().find(|(t, _)| t.as_raw() == tex.as_raw()) {
+        Some((_, b)) => b.clone(),
+        None => surface_buffer(tex)?,
+    };
     unsafe {
-        in_sample.AddBuffer(&buffer)?;
-        in_sample.SetSampleTime(time)?;
-        in_sample.SetSampleDuration(166_667)?;
+        let sample = MFCreateSample()?;
+        sample.AddBuffer(&buffer)?;
+        sample.SetSampleTime(time)?;
+        sample.SetSampleDuration(166_667)?;
+        Ok(sample)
     }
-    Ok(in_sample)
+}
+
+#[cfg(test)]
+static FORCE_MFT_CONVERTER: AtomicBool = AtomicBool::new(false);
+
+fn force_mft_converter() -> bool {
+    #[cfg(test)]
+    return FORCE_MFT_CONVERTER.load(Ordering::SeqCst);
+    #[cfg(not(test))]
+    false
+}
+
+fn surface_buffer(tex: &ID3D11Texture2D) -> Result<IMFMediaBuffer> {
+    unsafe {
+        let buffer = MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, tex, 0, false)?;
+        let len = buffer.cast::<IMF2DBuffer>()?.GetContiguousLength()?;
+        buffer.SetCurrentLength(len)?;
+        Ok(buffer)
+    }
 }
 
 // Vuelca la textura BGRA de GPU a una muestra ARGB32 en memoria de sistema vía una
@@ -3532,5 +3663,136 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         assert_eq!(read.video, 30);
         assert!(read.audio > 20);
+    }
+
+    #[test]
+    fn out_of_focus_card_composes_from_an_nv12_frame() {
+        ensure_mf();
+        let (device, _) = create_device().unwrap();
+        let ctx = unsafe { device.GetImmediateContext().unwrap() };
+        let (w, h) = (1280, 720);
+        let frame = scaler::create_nv12_targets(&device, w, h, 1).unwrap().remove(0);
+        let card = build_card(&device, &ctx, (w, h), 60, true, "Fuera de foco").unwrap();
+        card.compose(&frame).unwrap();
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: w,
+            Height: h,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_NV12,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_STAGING,
+            BindFlags: 0,
+            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+            MiscFlags: 0,
+        };
+        let mut st = None;
+        unsafe { device.CreateTexture2D(&desc, None, Some(&mut st)).unwrap() };
+        let st = st.unwrap();
+        let (lo, hi) = unsafe {
+            ctx.CopyResource(&st, card.frame());
+            let mut map = D3D11_MAPPED_SUBRESOURCE::default();
+            ctx.Map(&st, 0, D3D11_MAP_READ, 0, Some(&mut map)).unwrap();
+            let mut range = (255u8, 0u8);
+            for row in 0..h as usize {
+                let line = std::slice::from_raw_parts((map.pData as *const u8).add(row * map.RowPitch as usize), w as usize);
+                for &y in line {
+                    range = (range.0.min(y), range.1.max(y));
+                }
+            }
+            ctx.Unmap(&st, 0);
+            range
+        };
+        assert!(hi - lo > 64, "cartel sin texto: Y entre {lo} y {hi}");
+    }
+
+    fn process_vram() -> u64 {
+        use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIAdapter3, IDXGIFactory1, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_QUERY_VIDEO_MEMORY_INFO};
+        unsafe {
+            let f: IDXGIFactory1 = CreateDXGIFactory1().unwrap();
+            let a: IDXGIAdapter3 = f.EnumAdapters1(0).unwrap().cast().unwrap();
+            let mut info = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
+            a.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut info).unwrap();
+            info.CurrentUsage
+        }
+    }
+
+    // Primer fotograma decodificado (plano Y), tamaño y nº de fotogramas del clip.
+    fn decode(path: &str) -> (u32, u32, usize, Vec<u8>) {
+        unsafe {
+            ensure_mf();
+            let reader = MFCreateSourceReaderFromURL(&HSTRING::from(path), None).unwrap();
+            let out = MFCreateMediaType().unwrap();
+            out.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video).unwrap();
+            out.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12).unwrap();
+            let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
+            reader.SetCurrentMediaType(stream, None, &out).unwrap();
+            let size = reader.GetCurrentMediaType(stream).unwrap().GetUINT64(&MF_MT_FRAME_SIZE).unwrap();
+            let (w, h) = ((size >> 32) as u32, size as u32);
+            let mut frames = 0;
+            let mut first = Vec::new();
+            loop {
+                let mut flags = 0u32;
+                let mut sample = None;
+                reader.ReadSample(stream, 0, None, Some(&mut flags), None, Some(&mut sample)).unwrap();
+                if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+                    break;
+                }
+                let Some(sample) = sample else { continue };
+                if frames == 0 {
+                    let buf = sample.ConvertToContiguousBuffer().unwrap();
+                    let mut ptr = std::ptr::null_mut();
+                    let mut len = 0u32;
+                    buf.Lock(&mut ptr, None, Some(&mut len)).unwrap();
+                    first = std::slice::from_raw_parts(ptr, (w * h) as usize).to_vec();
+                    buf.Unlock().unwrap();
+                }
+                frames += 1;
+            }
+            (w, h, frames, first)
+        }
+    }
+
+    fn replay_run(resolution: u32, force_mft: bool) -> (u64, (u32, u32, usize, Vec<u8>)) {
+        FORCE_MFT_CONVERTER.store(force_mft, Ordering::SeqCst);
+        let monitor = list_monitors().into_iter().find(|m| m.primary).expect("sin monitor");
+        let dir = std::env::temp_dir().join(format!("flashback_e2e_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let before = process_vram();
+        start_replay(
+            monitor.id, dir.to_string_lossy().into_owned(), 10, 60, "high".into(), resolution, 0,
+            false, String::new(), "Auto".into(), Box::new(|| {}), String::new(),
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_secs(4));
+        let vram = process_vram().saturating_sub(before);
+        let path = save_replay("test").expect("no se guardó el replay");
+        stop_replay();
+        let got = decode(&path);
+        let _ = std::fs::remove_file(&path);
+        (vram, got)
+    }
+
+    // Pipeline real (WGC + encoder por hardware) sobre el monitor principal, con el anillo NV12
+    // directo y con el camino del conversor MFT: mismo tamaño y fotogramas, imagen no vacía y
+    // menos VRAM. No compara píxeles entre pasadas porque la pantalla cambia; la igualdad de
+    // color la fija scaler::tests.
+    // cargo test --lib real_capture -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn real_capture_direct_nv12_matches_mft_path() {
+        for resolution in [0, 720] {
+            let (vram_mft, mft) = replay_run(resolution, true);
+            let (vram_direct, direct) = replay_run(resolution, false);
+            eprintln!(
+                "resolución {resolution}: MFT {}x{} {} fotogramas, VRAM +{} MB | directo {}x{} {} fotogramas, VRAM +{} MB",
+                mft.0, mft.1, mft.2, vram_mft >> 20, direct.0, direct.1, direct.2, vram_direct >> 20
+            );
+            assert_eq!((mft.0, mft.1), (direct.0, direct.1));
+            assert!(direct.2 > 120, "pocos fotogramas: {}", direct.2);
+            let (lo, hi) = direct.3.iter().fold((255u8, 0u8), |(lo, hi), &y| (lo.min(y), hi.max(y)));
+            assert!(hi - lo > 64, "fotograma plano: Y entre {lo} y {hi}");
+            assert!(vram_direct < vram_mft);
+        }
     }
 }
