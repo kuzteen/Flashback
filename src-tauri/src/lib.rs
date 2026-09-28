@@ -1021,6 +1021,7 @@ pub fn run() {
             // replay pueda cambiar de objetivo al cambiar de juego (no seguir capturando el que
             // se minimizó).
             detect::spawn_watcher(app.handle().clone());
+            hotkeys::spawn_poller(app.handle().clone());
 
             // Bandeja del sistema. Doble clic izquierdo abre la app; clic derecho abre el
             // menú con "Abrir Flashback" y "Cerrar". El replay sigue corriendo aunque la

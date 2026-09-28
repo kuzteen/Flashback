@@ -191,6 +191,10 @@ fn start_replay(app: &AppHandle, target: String, prefs: &CapturePrefs, mic_devic
 }
 
 fn ready_toast(app: &AppHandle, prefs: &CapturePrefs, es: bool) {
+    if crate::hotkeys::save_failed(&prefs.hotkeys.save) {
+        crate::hotkeys::show_conflicts(app);
+        return;
+    }
     let body = if es { "para guardar un clip" } else { "to save a clip" };
     let keys = crate::hotkeys::key_labels(&prefs.hotkeys.save);
     crate::hotkeys::notify(app, ToastTopic::Ready, "ready", body.into(), keys);
