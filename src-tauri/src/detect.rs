@@ -12,6 +12,10 @@ const MAX_AGE: Duration = Duration::from_secs(7 * 24 * 3600);
 // Runtimes compartidos por muchos juegos: su nombre de ejecutable no identifica nada.
 const GENERIC: &[&str] = &["javaw.exe", "java.exe", "python.exe", "pythonw.exe"];
 
+// La lista de Discord marca como lanzador el cliente de estos juegos, pero es donde se juega
+// buena parte de la sesión (selección de campeón, lobby) y no un simple lanzador de terceros.
+const GAME_CLIENTS: &[&str] = &["leagueclientux.exe"];
+
 // Minecraft corre sobre Java y sus clientes (Lunar, Badlion…) ni están en la lista
 // de Discord: se reconoce por la ruta del proceso, que delata el cliente usado.
 const MINECRAFT_HINTS: &[&str] = &[
@@ -102,13 +106,13 @@ fn build_map(list: Vec<Detectable>) -> GameMap {
             _ => None,
         };
         for exe in game.executables {
-            if exe.is_launcher || exe.arguments.is_some() {
+            let base = basename(&exe.name);
+            if (exe.is_launcher && !GAME_CLIENTS.contains(&base.as_str())) || exe.arguments.is_some() {
                 continue;
             }
             if !exe.os.is_empty() && exe.os != "win32" {
                 continue;
             }
-            let base = basename(&exe.name);
             if !base.ends_with(".exe") || GENERIC.contains(&base.as_str()) {
                 continue;
             }
@@ -788,5 +792,24 @@ mod tests {
         assert_eq!(map.get("alpha.exe").map(|e| e.name.as_str()), Some("Alpha"));
         assert_eq!(map.get("beta.exe").map(|e| e.name.as_str()), Some("Beta"));
         assert!(!map.contains_key("shared.exe"));
+    }
+
+    #[test]
+    fn the_league_client_counts_as_the_game_but_other_launchers_do_not() {
+        let list: Vec<Detectable> = serde_json::from_str(
+            r#"[
+              {"id":"1","name":"League of Legends","executables":[
+                {"name":"league of legends.exe","os":"win32"},
+                {"name":"leagueclientux.exe","os":"win32","is_launcher":true}]},
+              {"id":"2","name":"Alpha","executables":[
+                {"name":"alpha.exe","os":"win32"},
+                {"name":"alphalauncher.exe","os":"win32","is_launcher":true}]}
+            ]"#,
+        )
+        .expect("list parses");
+        let map = build_map(list);
+        assert_eq!(map.get("leagueclientux.exe").map(|e| e.name.as_str()), Some("League of Legends"));
+        assert_eq!(map.get("league of legends.exe").map(|e| e.name.as_str()), Some("League of Legends"));
+        assert!(!map.contains_key("alphalauncher.exe"));
     }
 }
