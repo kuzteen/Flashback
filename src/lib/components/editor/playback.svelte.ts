@@ -1,5 +1,5 @@
 import { editorState } from '$lib/editor-state.svelte';
-import { keptMs, outToSeg } from '$lib/edit-model';
+import { keptMs, outToSeg, trackMix } from '$lib/edit-model';
 import { frameStepTarget, outStartOf } from '$lib/timeline-math';
 
 // Dos bloques "pegados" en el origen (un corte que no quitó nada) no se buscan al pasar de uno a
@@ -15,8 +15,7 @@ class Playback {
   vfc = false;
 
   private video: HTMLVideoElement | null = null;
-  private sys: HTMLAudioElement | null = null;
-  private mic: HTMLAudioElement | null = null;
+  private audios: [string, HTMLAudioElement][] = [];
   private playIndex = 0;
   private raf = 0;
   private resumeAfterSeek = false;
@@ -25,11 +24,14 @@ class Playback {
     return keptMs(editorState.edit.segments);
   }
 
-  attach(video: HTMLVideoElement | null, sys: HTMLAudioElement | null, mic: HTMLAudioElement | null) {
+  attach(video: HTMLVideoElement | null, audios: Record<string, HTMLAudioElement | null>) {
     this.video = video;
-    this.sys = sys;
-    this.mic = mic;
+    this.audios = Object.entries(audios).filter((e): e is [string, HTMLAudioElement] => !!e[1]);
     this.applyAudio();
+  }
+
+  private get els(): HTMLAudioElement[] {
+    return this.audios.map(([, a]) => a);
   }
 
   reset() {
@@ -41,27 +43,30 @@ class Playback {
     this.resumeAfterSeek = false;
   }
 
-  // Con pistas separadas suenan los <audio> y el vídeo va mudo; con pista única el fader del
-  // sistema controla el audio del propio vídeo.
+  // Con pistas separadas suenan los <audio> y el vídeo va mudo; con pista única su fader controla
+  // el audio del propio vídeo.
   applyAudio() {
     const m = editorState.edit.mixer;
-    const separate = !!(editorState.system || editorState.mic);
+    const lanes = editorState.tracks;
     if (this.video) {
-      if (separate) this.video.muted = true;
+      if (lanes.some((l) => l.src)) this.video.muted = true;
       else {
-        this.video.muted = m.sys_muted;
-        this.video.volume = m.sys_vol;
+        const t = trackMix(m, lanes[0]?.id ?? 'sys');
+        this.video.muted = t.muted;
+        this.video.volume = t.vol;
       }
     }
-    if (this.sys) this.sys.volume = m.sys_muted ? 0 : m.sys_vol;
-    if (this.mic) this.mic.volume = m.mic_muted ? 0 : m.mic_vol;
+    for (const [id, a] of this.audios) {
+      const t = trackMix(m, id);
+      a.volume = t.muted ? 0 : t.vol;
+    }
   }
 
   private seekSource(srcMs: number) {
     if (!this.video) return;
     const t = srcMs / 1000;
     this.video.currentTime = t;
-    for (const a of [this.sys, this.mic]) if (a && Math.abs(a.currentTime - t) > 0.05) a.currentTime = t;
+    for (const a of this.els) if (Math.abs(a.currentTime - t) > 0.05) a.currentTime = t;
   }
 
   seekOutput(T: number) {
@@ -102,8 +107,8 @@ class Playback {
       return;
     }
     const srcMs = v.currentTime * 1000;
-    for (const a of [this.sys, this.mic]) {
-      if (a && Math.abs(a.currentTime - v.currentTime) > 0.12) a.currentTime = v.currentTime;
+    for (const a of this.els) {
+      if (Math.abs(a.currentTime - v.currentTime) > 0.12) a.currentTime = v.currentTime;
     }
     if (srcMs >= s.endMs - 1) {
       let ni = this.playIndex + 1;
@@ -130,8 +135,7 @@ class Playback {
     this.seekOutput(this.outPos >= this.kept ? 0 : this.outPos);
     try {
       await v.play();
-      this.sys?.play().catch(() => {});
-      this.mic?.play().catch(() => {});
+      for (const a of this.els) a.play().catch(() => {});
     } catch (e) {
       console.error('editor play', e);
       return;
@@ -143,8 +147,7 @@ class Playback {
 
   pause() {
     this.video?.pause();
-    this.sys?.pause();
-    this.mic?.pause();
+    for (const a of this.els) a.pause();
     this.playing = false;
     cancelAnimationFrame(this.raf);
   }

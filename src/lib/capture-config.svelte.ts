@@ -13,6 +13,9 @@ export const FPS_OPTIONS = [20, 30, 60, 120, 240];
 
 export type QualityKey = 'low' | 'normal' | 'high' | 'veryhigh' | 'ultra';
 
+export type AudioMode = 'all' | 'apps';
+export type AudioApp = { exe: string; name: string; path: string };
+
 // Escalera de calidad alineada con SteelSeries Moments (1080p60): Bajo ≈ 19, Medio ≈ 34,
 // Alto ≈ 50, Muy alta ≈ 90, Ultra ≈ 130 Mbps. El bitrate real lo calcula el backend
 // (ancho·alto·fps·factor), así escala con la resolución y los fps.
@@ -69,6 +72,8 @@ export const captureConfig = $state<{
   fps: number;
   quality: QualityKey;
   resolution: number;
+  audioMode: AudioMode;
+  audioApps: AudioApp[];
   mic: boolean;
   micDevice: string;
   noiseSuppression: boolean;
@@ -77,6 +82,8 @@ export const captureConfig = $state<{
   fps: loadFps(),
   quality: loadQuality(),
   resolution: loadResolution(),
+  audioMode: 'all',
+  audioApps: [],
   mic: loadMic(),
   micDevice: loadMicDevice(),
   noiseSuppression: true,
@@ -149,6 +156,23 @@ export function setQuality(quality: QualityKey) {
 
 export function setResolution(height: number) {
   captureConfig.resolution = height;
+  pushCapturePrefs();
+}
+
+export function setAudioMode(mode: AudioMode) {
+  captureConfig.audioMode = mode;
+  pushCapturePrefs();
+}
+
+export function addAudioApp(app: AudioApp) {
+  const exe = app.exe.toLowerCase();
+  if (captureConfig.audioApps.some((a) => a.exe.toLowerCase() === exe)) return;
+  captureConfig.audioApps = [...captureConfig.audioApps, app];
+  pushCapturePrefs();
+}
+
+export function removeAudioApp(exe: string) {
+  captureConfig.audioApps = captureConfig.audioApps.filter((a) => a.exe !== exe);
   pushCapturePrefs();
 }
 

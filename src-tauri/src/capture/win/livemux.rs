@@ -23,13 +23,12 @@ struct MuxSample {
 struct LiveMuxState {
     tx: Option<mpsc::Sender<MuxSample>>,
     worker: Option<JoinHandle<bool>>,
-    sys_track: Option<usize>,
-    mic_track: Option<usize>,
+    // Pista del MP4 de cada pista de audio esperada (None si se descartó).
+    tracks: Vec<Option<usize>>,
     base: i64,
     seq_header: Vec<u8>,
-    sys_hdr: Option<(Vec<u8>, u32)>,
-    mic_hdr: Option<(Vec<u8>, u32)>,
-    pending: Vec<(Option<AudioRole>, Bytes, i64, i64, bool)>,
+    hdrs: Vec<Option<(Vec<u8>, u32)>>,
+    pending: Vec<(Option<usize>, Bytes, i64, i64, bool)>,
     writing: bool,
     finalized: bool,
     first_pkt_at: Option<Instant>,
@@ -45,9 +44,8 @@ pub(super) struct LiveMux {
     path: String,
     width: u32,
     height: u32,
-    // Pistas de audio esperadas (sample_rate, canales) del AAC ya downmezclado; None = ausente.
-    sys: Option<(u32, u16)>,
-    mic: Option<(u32, u16)>,
+    // Pistas de audio esperadas, en el orden en que se escriben.
+    audio: Vec<audio::TrackSpec>,
     header_timeout: Mutex<Duration>,
     st: Mutex<LiveMuxState>,
 }
@@ -57,25 +55,22 @@ impl LiveMux {
         path: String,
         width: u32,
         height: u32,
-        sys: Option<(u32, u16)>,
-        mic: Option<(u32, u16)>,
+        audio: Vec<audio::TrackSpec>,
     ) -> Arc<LiveMux> {
+        let n = audio.len();
         Arc::new(LiveMux {
             path,
             width,
             height,
-            sys,
-            mic,
+            audio,
             header_timeout: Mutex::new(Duration::from_millis(1000)),
             st: Mutex::new(LiveMuxState {
                 tx: None,
                 worker: None,
-                sys_track: None,
-                mic_track: None,
+                tracks: vec![None; n],
                 base: i64::MIN,
                 seq_header: Vec::new(),
-                sys_hdr: None,
-                mic_hdr: None,
+                hdrs: vec![None; n],
                 pending: Vec::new(),
                 writing: false,
                 finalized: false,
@@ -96,8 +91,8 @@ impl LiveMux {
         (self.width, self.height)
     }
 
-    pub(super) fn audio_formats(&self) -> (Option<(u32, u16)>, Option<(u32, u16)>) {
-        (self.sys, self.mic)
+    pub(super) fn audio_specs(&self) -> &[audio::TrackSpec] {
+        &self.audio
     }
 
     // El pipeline que alimenta este muxer se reconstruyó (otra ventana del juego, device perdido)
@@ -128,19 +123,17 @@ impl LiveMux {
     }
 
     #[cfg(test)]
-    pub(super) fn mic_track_is_none(&self) -> bool {
-        self.st.lock_ok().mic_track.is_none()
+    pub(super) fn audio_track_is_none(&self, i: usize) -> bool {
+        self.st.lock_ok().tracks[i].is_none()
     }
 
-    pub(super) fn set_audio_header(&self, role: AudioRole, user_data: Vec<u8>, payload_type: u32) {
-        let mut st = self.st.lock_ok();
-        match role {
-            AudioRole::Sys => st.sys_hdr = Some((user_data, payload_type)),
-            AudioRole::Mic => st.mic_hdr = Some((user_data, payload_type)),
+    pub(super) fn set_audio_header(&self, track: usize, user_data: Vec<u8>, payload_type: u32) {
+        if let Some(h) = self.st.lock_ok().hdrs.get_mut(track) {
+            *h = Some((user_data, payload_type));
         }
     }
 
-    pub(super) fn push_audio(&self, role: AudioRole, data: Bytes, time: i64, dur: i64) {
+    pub(super) fn push_audio(&self, track: usize, data: Bytes, time: i64, dur: i64) {
         let mut st = self.st.lock_ok();
         if st.finalized || st.failed || st.shift_pending {
             return;
@@ -149,9 +142,9 @@ impl LiveMux {
         st.max_end = st.max_end.max(time + dur);
         st.first_pkt_at.get_or_insert_with(Instant::now);
         if st.writing {
-            self.write_one(&mut st, Some(role), data, time, dur, false);
+            self.write_one(&mut st, Some(track), data, time, dur, false);
         } else {
-            st.pending.push((Some(role), data, time, dur, false));
+            st.pending.push((Some(track), data, time, dur, false));
             self.try_begin(&mut st);
         }
     }
@@ -162,9 +155,7 @@ impl LiveMux {
         if st.seq_header.is_empty() {
             return false;
         }
-        let sys_ok = self.sys.is_none() || st.sys_hdr.is_some();
-        let mic_ok = self.mic.is_none() || st.mic_hdr.is_some();
-        if sys_ok && mic_ok {
+        if st.hdrs.iter().all(|h| h.is_some()) {
             return true;
         }
         let timeout = *self.header_timeout.lock_ok();
@@ -184,14 +175,12 @@ impl LiveMux {
             return;
         };
         let mut tracks = vec![video];
-        st.sys_track = audio_track(self.sys, &st.sys_hdr).map(|t| {
-            tracks.push(t);
-            tracks.len() - 1
-        });
-        st.mic_track = audio_track(self.mic, &st.mic_hdr).map(|t| {
-            tracks.push(t);
-            tracks.len() - 1
-        });
+        for (i, spec) in self.audio.iter().enumerate() {
+            st.tracks[i] = audio_track(spec, &st.hdrs[i]).map(|t| {
+                tracks.push(t);
+                tracks.len() - 1
+            });
+        }
         let (tx, rx) = mpsc::channel();
         let path = self.path.clone();
         match std::thread::Builder::new()
@@ -203,8 +192,8 @@ impl LiveMux {
                 st.worker = Some(worker);
                 st.writing = true;
                 let pending = std::mem::take(&mut st.pending);
-                for (role, data, time, dur, key) in pending {
-                    self.write_one(st, role, data, time, dur, key);
+                for (audio, data, time, dur, key) in pending {
+                    self.write_one(st, audio, data, time, dur, key);
                 }
             }
             Err(e) => {
@@ -215,12 +204,12 @@ impl LiveMux {
         }
     }
 
-    // Encola un paquete rebasado a `base`. role=None => vídeo. Descarta lo anterior a la base
+    // Encola un paquete rebasado a `base`. audio=None => vídeo. Descarta lo anterior a la base
     // (el contenedor no admite tiempos negativos), igual que el muxer del replay.
     fn write_one(
         &self,
         st: &mut LiveMuxState,
-        role: Option<AudioRole>,
+        audio: Option<usize>,
         data: Bytes,
         time: i64,
         dur: i64,
@@ -230,13 +219,9 @@ impl LiveMux {
         if ts < 0 {
             return;
         }
-        let track = match role {
+        let track = match audio {
             None => 0,
-            Some(AudioRole::Sys) => match st.sys_track {
-                Some(t) => t,
-                None => return,
-            },
-            Some(AudioRole::Mic) => match st.mic_track {
+            Some(i) => match st.tracks.get(i).copied().flatten() {
                 Some(t) => t,
                 None => return,
             },
@@ -271,15 +256,15 @@ impl LiveMux {
     }
 }
 
-fn audio_track(format: Option<(u32, u16)>, hdr: &Option<(Vec<u8>, u32)>) -> Option<Track> {
-    let (rate, ch) = format?;
+fn audio_track(spec: &audio::TrackSpec, hdr: &Option<(Vec<u8>, u32)>) -> Option<Track> {
     let (ud, payload_type) = hdr.as_ref()?;
     // El muxer escribe AAC crudo; el encoder se elige con payload 0 (ver build_aac_encoder).
     if *payload_type != 0 {
         log::warn!("grabación manual: pista AAC con framing {payload_type}; se omite");
         return None;
     }
-    let track = Track::aac(rate, ch, aac_bitrate(ch), ud);
+    let track = Track::aac(spec.rate, spec.channels, audio::aac_bitrate(spec.channels), ud)
+        .map(|t| t.labeled(&spec.id, &spec.name));
     if track.is_none() {
         log::warn!("grabación manual: pista AAC sin AudioSpecificConfig ({} bytes); se omite", ud.len());
     }
@@ -381,8 +366,7 @@ pub(super) fn mux_replay(
     seq_header: &[u8],
     width: u32,
     height: u32,
-    sys_audio: Option<AudioMuxTrack>,
-    mic_audio: Option<AudioMuxTrack>,
+    audio: Vec<AudioMuxTrack>,
 ) -> std::io::Result<()> {
     let video = Track::h264(width, height, seq_header).ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, "cabecera de vídeo sin SPS/PPS")
@@ -393,11 +377,13 @@ pub(super) fn mux_replay(
         .iter()
         .map(|(data, time, dur, key)| Packet { data, time: time - base, dur: *dur, key: *key })
         .collect::<Vec<_>>()];
-    for audio in [&sys_audio, &mic_audio].into_iter().flatten() {
+    for audio in &audio {
         if audio.payload_type != 0 {
             continue;
         }
-        let Some(track) = Track::aac(audio.sample_rate, audio.channels, audio.bitrate, &audio.user_data)
+        let spec = &audio.spec;
+        let Some(track) = Track::aac(spec.rate, spec.channels, audio::aac_bitrate(spec.channels), &audio.user_data)
+            .map(|t| t.labeled(&spec.id, &spec.name))
         else {
             continue;
         };

@@ -100,14 +100,33 @@ impl Mp4 {
     // None, sin mover el ordinal de las demás.
     pub fn audio(&self) -> Option<Vec<Option<AudioTrack>>> {
         let movie_scale = timescale(child(&self.moov, b"mvhd")?)?;
-        let mut tracks: Vec<_> = self
+        Some(self.audio_traks().into_iter().map(|t| audio_track(t, movie_scale)).collect())
+    }
+
+    // Id que escribe Flashback en cada pista de audio ("mix", "sys", "mic", "game", "app:<exe>") y
+    // su nombre, con el mismo ordinal que audio(). Los clips anteriores no llevan id.
+    pub fn audio_labels(&self) -> Vec<(Option<String>, String)> {
+        self.audio_traks()
+            .into_iter()
+            .map(|t| {
+                let id = find(t, &[b"udta", b"fbid"]).map(|b| String::from_utf8_lossy(b).into_owned());
+                let name = find(t, &[b"mdia", b"hdlr"])
+                    .and_then(|h| h.get(24..))
+                    .map(|n| String::from_utf8_lossy(n.split(|c| *c == 0).next().unwrap_or_default()).into_owned())
+                    .unwrap_or_default();
+                (id, name)
+            })
+            .collect()
+    }
+
+    fn audio_traks(&self) -> Vec<&[u8]> {
+        let mut traks: Vec<_> = self
             .traks()
             .filter(|t| handler(t) == Some(*b"soun"))
             .filter(|t| find(t, &[b"mdia", b"minf", b"stbl", b"stsz"]).and_then(|s| be32(s, 8)) != Some(0))
-            .map(|t| audio_track(t, movie_scale))
             .collect();
-        tracks.reverse();
-        Some(tracks)
+        traks.reverse();
+        traks
     }
 }
 

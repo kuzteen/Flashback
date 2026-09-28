@@ -208,9 +208,15 @@
     </div>
 
     <VideoTrack {mpp} {width} viewX={scrollLeft} {viewW} {posAt} {headPos} />
-    <AudioTrack kind="sys" {mpp} {width} viewX={scrollLeft} {viewW} {posAt} {headPos} />
-    {#if editorState.loading || editorState.mic}
-      <AudioTrack kind="mic" {mpp} {width} viewX={scrollLeft} {viewW} {posAt} {headPos} />
+    {#if editorState.loading}
+      <AudioTrack lane={null} {mpp} {width} viewX={scrollLeft} {viewW} {posAt} {headPos} />
+      <AudioTrack lane={null} {mpp} {width} viewX={scrollLeft} {viewW} {posAt} {headPos} />
+    {:else if editorState.tracks.length === 0}
+      <AudioTrack lane={null} {mpp} {width} viewX={scrollLeft} {viewW} {posAt} {headPos} />
+    {:else}
+      {#each editorState.tracks as lane (lane.id)}
+        <AudioTrack {lane} {mpp} {width} viewX={scrollLeft} {viewW} {posAt} {headPos} />
+      {/each}
     {/if}
 
     <div class="over" style:left="{ORIGIN}px" style:width="{width}px">
@@ -228,7 +234,11 @@
           onpointermove={onKnobMove}
           onpointerup={onKnobUp}
           onpointercancel={onKnobUp}
-        ></span>
+          ><svg viewBox="116 81 280 350" aria-hidden="true"
+            ><path
+              d="M 133.49 355.79C 124.41 344.92 116.32 328.41 116.26 313.75Q 115.92 216.02 116.29 145.01C 116.45 115.24 137.29 90.01 166.63 82.85Q 173.87 81.08 191.56 81.31Q 197.55 81.39 332.5 81.36Q 340.79 81.35 348.98 83.83C 372.73 90.99 390.39 109.9 394.83 134.46Q 395.81 139.87 395.83 154.65Q 395.95 281.01 395.74 311.25C 395.63 326.88 387.43 344.19 376.78 355.98Q 373.09 360.06 363 367.12Q 320.78 396.63 287.17 420.11C 268.71 433 241.97 433.59 221.52 424.23Q 215.48 421.46 203.12 411.64Q 192.46 403.16 145.96 367.01Q 137.12 360.14 133.49 355.79Z"
+            /></svg
+          ></span>
       </div>
     </div>
   </div>
@@ -340,20 +350,35 @@
     z-index: 2;
     width: 2px;
     margin-left: -1px;
-    background: var(--accent);
     pointer-events: none;
+  }
+  /* La línea nace bajo la punta del tirador: nada asoma por encima. Un tono por debajo del tirador,
+     que es lo que se agarra. */
+  .playhead::before {
+    content: '';
+    position: absolute;
+    top: 12px;
+    bottom: 0;
+    left: 0;
+    width: 2px;
+    background: color-mix(in srgb, var(--accent) 60%, transparent);
   }
   .knob {
     position: absolute;
-    top: 2px;
-    left: 50%;
-    width: 10px;
-    height: 18px;
-    border-radius: 3px;
-    background: var(--accent);
-    transform: translateX(-50%);
+    top: 0;
+    left: -5px;
+    width: 12px;
+    height: 15px;
+    display: block;
+    color: var(--accent);
     pointer-events: auto;
     cursor: grab;
     touch-action: none;
+  }
+  .knob svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    fill: currentColor;
   }
 </style>

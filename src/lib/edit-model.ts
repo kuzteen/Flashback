@@ -24,14 +24,46 @@ export type Segment = {
   cropY: number;
 };
 
-export type MixerState = {
-  sys_vol: number;
-  sys_muted: boolean;
-  mic_vol: number;
-  mic_muted: boolean;
+export type TrackMix = { vol: number; muted: boolean };
+
+// Volumen de cada pista de audio por su id ("sys", "mic", "game", "app:<exe>"); la que no aparece
+// suena al 100 %.
+export type MixerState = { tracks: Record<string, TrackMix> };
+
+export const DEFAULT_MIXER: MixerState = { tracks: {} };
+
+const FULL: TrackMix = { vol: 1, muted: false };
+
+export function trackMix(m: MixerState, id: string): TrackMix {
+  return m.tracks[id] ?? FULL;
+}
+
+export function withTrackMix(m: MixerState, id: string, patch: Partial<TrackMix>): MixerState {
+  return { tracks: { ...m.tracks, [id]: { ...trackMix(m, id), ...patch } } };
+}
+
+// Las ediciones anteriores guardaban solo sistema y micro en campos sueltos.
+type SavedMixer = {
+  tracks?: Record<string, Partial<TrackMix>> | null;
+  sys_vol?: number;
+  sys_muted?: boolean;
+  mic_vol?: number;
+  mic_muted?: boolean;
 };
 
-export const DEFAULT_MIXER: MixerState = { sys_vol: 1, sys_muted: false, mic_vol: 1, mic_muted: false };
+function readMixer(saved: SavedMixer | null | undefined): MixerState {
+  const tracks: Record<string, TrackMix> = {};
+  const put = (id: string, vol?: number, muted?: boolean) => {
+    const t = { vol: vol ?? 1, muted: muted ?? false };
+    if (t.vol !== 1 || t.muted) tracks[id] = t;
+  };
+  if (saved) {
+    put('sys', saved.sys_vol, saved.sys_muted);
+    put('mic', saved.mic_vol, saved.mic_muted);
+    for (const [id, t] of Object.entries(saved.tracks ?? {})) put(id, t.vol, t.muted);
+  }
+  return { tracks };
+}
 
 // Encajado y recorte son los extremos del zoom (0 y 1); personalizado usa `zoom` entre medias.
 export type OutputFormat =
@@ -55,7 +87,7 @@ export type SavedSegment = {
 
 export type SavedEdit = {
   segments: SavedSegment[];
-  mixer?: Partial<MixerState> | null;
+  mixer?: SavedMixer | null;
   format?: OutputFormat | null;
   look?: Partial<Look> | null;
 };
@@ -73,7 +105,7 @@ export function fullClip(durationMs: number): Segment[] {
 }
 
 export function initialState(durationMs: number): EditState {
-  return { segments: fullClip(durationMs), mixer: { ...DEFAULT_MIXER }, format: { ...DEFAULT_FORMAT }, look: { ...NEUTRAL_LOOK } };
+  return { segments: fullClip(durationMs), mixer: { tracks: {} }, format: { ...DEFAULT_FORMAT }, look: { ...NEUTRAL_LOOK } };
 }
 
 function readFormat(f: OutputFormat | null | undefined): OutputFormat {
@@ -88,7 +120,7 @@ function readFormat(f: OutputFormat | null | undefined): OutputFormat {
 export function fromSaved(saved: SavedEdit | null | undefined, durationMs: number): EditState {
   const base = initialState(durationMs);
   if (!saved) return base;
-  const mixer = { ...DEFAULT_MIXER, ...(saved.mixer ?? {}) };
+  const mixer = readMixer(saved.mixer);
   const format = readFormat(saved.format);
   const look = readLook(saved.look);
   if (!saved.segments?.length) return { segments: base.segments, mixer, format, look };
@@ -124,7 +156,7 @@ export function toSaved(state: EditState, enabledOnly = false): SavedEdit {
       crop_x: s.cropX,
       crop_y: s.cropY,
     })),
-    mixer: { ...state.mixer },
+    mixer: { tracks: { ...state.mixer.tracks } },
     format: state.format,
     look: { ...state.look },
   };

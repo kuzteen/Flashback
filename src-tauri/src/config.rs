@@ -305,6 +305,8 @@ pub struct CapturePrefs {
     pub fps: u32,
     pub quality: String,
     pub resolution: u32,
+    pub audio_mode: String,
+    pub audio_apps: Vec<crate::appaudio::AudioApp>,
     pub mic: bool,
     pub mic_device: String,
     pub noise_suppression: bool,
@@ -329,6 +331,8 @@ impl Default for CapturePrefs {
             fps: 60,
             quality: "high".into(),
             resolution: 1080,
+            audio_mode: "all".into(),
+            audio_apps: Vec::new(),
             mic: true,
             mic_device: String::new(),
             noise_suppression: true,
@@ -365,6 +369,12 @@ impl CapturePrefs {
         if !["off", "low", "normal", "high"].contains(&self.sound.as_str()) {
             self.sound = d.sound;
         }
+        if !["all", "apps"].contains(&self.audio_mode.as_str()) {
+            self.audio_mode = d.audio_mode;
+        }
+        self.audio_apps.retain(|a| !a.exe.trim().is_empty());
+        let mut seen = std::collections::HashSet::new();
+        self.audio_apps.retain(|a| seen.insert(a.exe.to_lowercase()));
         self.noise_level = self.noise_level.min(100);
         self
     }
@@ -469,8 +479,12 @@ pub fn pick_folder() -> Result<Option<String>, String> {
     Err("El selector de carpeta solo está disponible en Windows".into())
 }
 
-#[cfg(windows)]
 pub fn pick_audio_file(filter_name: &str) -> Result<Option<String>, String> {
+    pick_file(filter_name, "*.wav;*.mp3;*.m4a;*.aac;*.flac;*.wma;*.ogg")
+}
+
+#[cfg(windows)]
+pub fn pick_file(filter_name: &str, pattern: &str) -> Result<Option<String>, String> {
     use windows::core::{HSTRING, PCWSTR};
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Com::{
@@ -481,7 +495,7 @@ pub fn pick_audio_file(filter_name: &str) -> Result<Option<String>, String> {
     use windows::Win32::UI::Shell::{FileOpenDialog, IFileOpenDialog, IShellItem, SIGDN_FILESYSPATH};
 
     let name = HSTRING::from(filter_name);
-    let spec = HSTRING::from("*.wav;*.mp3;*.m4a;*.aac;*.flac;*.wma;*.ogg");
+    let spec = HSTRING::from(pattern);
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         let result = (|| -> Result<Option<String>, String> {
@@ -505,7 +519,7 @@ pub fn pick_audio_file(filter_name: &str) -> Result<Option<String>, String> {
 }
 
 #[cfg(not(windows))]
-pub fn pick_audio_file(_filter_name: &str) -> Result<Option<String>, String> {
+pub fn pick_file(_filter_name: &str, _pattern: &str) -> Result<Option<String>, String> {
     Err("El selector de archivos solo está disponible en Windows".into())
 }
 

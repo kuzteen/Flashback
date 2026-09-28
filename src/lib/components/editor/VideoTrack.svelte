@@ -138,10 +138,10 @@
     {@const track = ui.blockMenu.track}
     <div class="ctx colors" role="menu" bind:this={colorMenu} use:hoverPill={{ axis: 'y' }}>
       {#each GRIP_COLORS as color, n (n)}
-        <button role="menuitemradio" aria-checked={ui.grips[track] === n} onclick={() => menuColor(n)}>
+        <button role="menuitemradio" aria-checked={ui.grip(track) === n} onclick={() => menuColor(n)}>
           <span class="chip" style:--c={color.value}></span>
           <span class="nm">{t(color.name)}</span>
-          {#if ui.grips[track] === n}<Icon name="check" size={14} sw={2.4} />{/if}
+          {#if ui.grip(track) === n}<Icon name="check" size={14} sw={2.4} />{/if}
         </button>
       {/each}
     </div>

@@ -40,15 +40,223 @@ pub enum TrackKind {
     Microphone(String),
 }
 
+// Pista de audio que llevará el clip, en el orden en que se escribe. La primera es siempre la mezcla
+// de todas las demás: es la que suena en cualquier reproductor, que solo reproduce una. Las demás son
+// cada fuente por separado, para ajustarlas en el editor.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TrackSpec {
+    pub id: String,
+    pub name: String,
+    pub rate: u32,
+    pub channels: u16,
+}
+
+enum Feed {
+    Mix,
+    Loopback(u16),
+    Mic(String, u16),
+    // Juego y apps: una pista por destino, desde `first`.
+    Apps(usize, Vec<crate::appaudio::Target>),
+}
+
+pub struct AudioLayout {
+    pub specs: Vec<TrackSpec>,
+    feeds: Vec<(usize, Feed)>,
+}
+
+// Retraso de la mezcla sobre el reloj: el mayor de sus fuentes (el micro con supresión de ruido y las
+// apps, que agrupan varios procesos) más margen, para no cerrar un bloque antes de que llegue todo.
+const MIX_LATENCY_HNS: i64 = 1_500_000;
+
+impl AudioLayout {
+    // Qué pistas lleva el clip según el modo de audio y el micro. Se asume COM inicializado (MTA).
+    pub fn plan(mic_device: Option<&str>) -> AudioLayout {
+        let mut specs = Vec::new();
+        let mut feeds = Vec::new();
+        let spec = |id: &str, name: &str, channels: u16| TrackSpec {
+            id: id.to_string(),
+            name: name.to_string(),
+            rate: crate::audiomix::RATE,
+            channels,
+        };
+        match crate::appaudio::configured() {
+            Some(apps) => {
+                let mut slots = vec![crate::appaudio::Target::Game];
+                let game = crate::detect::current_game().map(|g| g.name).unwrap_or_else(|| "Game".into());
+                specs.push(spec("game", &game, 2));
+                for app in apps {
+                    slots.push(crate::appaudio::Target::Exe(app.exe.to_lowercase()));
+                    specs.push(spec(&format!("app:{}", app.exe.to_lowercase()), &app.name, 2));
+                }
+                feeds.push((0, Feed::Apps(0, slots)));
+            }
+            None => {
+                if let Some((_, ch)) = probe_format(&TrackKind::SystemLoopback) {
+                    feeds.push((specs.len(), Feed::Loopback(ch)));
+                    specs.push(spec("sys", "System", target_channels(ch)));
+                }
+            }
+        }
+        if let Some(device) = mic_device.filter(|d| !d.is_empty()) {
+            match probe_format(&TrackKind::Microphone(device.to_string())) {
+                Some((_, ch)) => {
+                    feeds.push((specs.len(), Feed::Mic(device.to_string(), ch)));
+                    specs.push(spec("mic", "Microphone", target_channels(ch)));
+                }
+                None => log::warn!("audio: no se pudo abrir el micrófono (device='{device}')"),
+            }
+        }
+        if specs.is_empty() {
+            return AudioLayout { specs, feeds };
+        }
+        specs.insert(0, spec("mix", "Mix", 2));
+        for (first, feed) in &mut feeds {
+            *first += 1;
+            if let Feed::Apps(f, _) = feed {
+                *f += 1;
+            }
+        }
+        feeds.insert(0, (0, Feed::Mix));
+        AudioLayout { specs, feeds }
+    }
+
+    // Arranca las pistas; `sink_for(i)` recibe el AAC de specs[i].
+    pub fn spawn(&self, sink_for: impl Fn(usize) -> Arc<dyn AudioSink>, denoise: bool) -> Vec<TrackHandle> {
+        let bus = Arc::new(crate::audiomix::MixBus::new(crate::audiomix::now_hns() - MIX_LATENCY_HNS));
+        let mut handles = Vec::new();
+        for (i, feed) in &self.feeds {
+            let ch = self.specs[*i].channels;
+            match feed {
+                Feed::Mix => handles.push(spawn_mix(bus.clone(), sink_for(*i))),
+                Feed::Loopback(native) => handles.push(spawn_track(
+                    TrackKind::SystemLoopback,
+                    Encoding::Aac(aac_bitrate(ch)),
+                    *native,
+                    sink_for(*i),
+                    Some(Arc::new(BusTap { bus: bus.clone(), key: 1 << 40, channels: ch as usize })),
+                    false,
+                )),
+                Feed::Mic(device, native) => handles.push(spawn_track(
+                    TrackKind::Microphone(device.clone()),
+                    Encoding::Aac(aac_bitrate(ch)),
+                    *native,
+                    sink_for(*i),
+                    Some(Arc::new(BusTap { bus: bus.clone(), key: 2 << 40, channels: ch as usize })),
+                    denoise,
+                )),
+                Feed::Apps(first, slots) => {
+                    let sinks = (0..slots.len()).map(|k| sink_for(first + k)).collect();
+                    handles.push(spawn_apps(slots.clone(), sinks, bus.clone()));
+                }
+            }
+        }
+        handles
+    }
+}
+
+// Valor válido de bytes/seg del encoder AAC de Media Foundation (admite 12000, 16000,
+// 20000 y 24000 = 96/128/160/192 kbps). Fuera de esa lista el encoder rechaza el tipo.
+pub fn aac_bitrate(channels: u16) -> u32 {
+    if channels <= 1 {
+        96_000
+    } else {
+        128_000
+    }
+}
+
+struct BusTap {
+    bus: Arc<crate::audiomix::MixBus>,
+    key: u64,
+    channels: usize,
+}
+
+impl PcmTap for BusTap {
+    fn on_pcm(&self, pcm: &[u8], time: i64, _dur: i64) {
+        let samples: Vec<i16> = pcm.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
+        self.bus.push(self.key, time, &samples, self.channels);
+    }
+}
+
+fn spawn_worker(name: &str, body: impl FnOnce(&Arc<AtomicBool>) + Send + 'static) -> TrackHandle {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_t = stop.clone();
+    let handle = std::thread::Builder::new()
+        .name(name.into())
+        .spawn(move || {
+            unsafe {
+                let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            }
+            let _mmcss = mmcss_register("Pro Audio");
+            body(&stop_t);
+            unsafe { CoUninitialize() };
+        })
+        .expect("no se pudo crear el hilo de audio");
+    TrackHandle { stop, handle: Some(handle) }
+}
+
+// Pista de mezcla: cada 10 ms cierra lo que ya llegó de todas las fuentes y lo codifica.
+fn spawn_mix(bus: Arc<crate::audiomix::MixBus>, sink: Arc<dyn AudioSink>) -> TrackHandle {
+    spawn_worker("flashback-audio-mix", move |stop| {
+        let rate = crate::audiomix::RATE;
+        let ch = crate::audiomix::CHANNELS;
+        let mut aac = match build_aac_encoder(rate, ch, aac_bitrate(ch)) {
+            Ok(mut enc) => {
+                announce_header(&mut enc, &sink);
+                Some(enc)
+            }
+            Err(e) => {
+                log::warn!("la pista de mezcla no pudo crear su encoder AAC: {e:?}");
+                return;
+            }
+        };
+        while !stop.load(Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            bus.drain(crate::audiomix::now_hns() - MIX_LATENCY_HNS, &mut |pcm, time, dur| {
+                emit_encoded(&mut aac, pcm, time, dur, &sink)
+            });
+        }
+    })
+}
+
+// Juego y apps en un solo hilo: cada destino con su encoder AAC y su pista.
+fn spawn_apps(
+    slots: Vec<crate::appaudio::Target>,
+    sinks: Vec<Arc<dyn AudioSink>>,
+    bus: Arc<crate::audiomix::MixBus>,
+) -> TrackHandle {
+    spawn_worker("flashback-audio-apps", move |stop| {
+        let rate = crate::audiomix::RATE;
+        let ch = crate::audiomix::CHANNELS;
+        let mut encoders = Vec::new();
+        for sink in &sinks {
+            match build_aac_encoder(rate, ch, aac_bitrate(ch)) {
+                Ok(mut enc) => {
+                    announce_header(&mut enc, sink);
+                    encoders.push(Some(enc));
+                }
+                Err(e) => {
+                    log::warn!("audio de apps: el encoder AAC rechazó el formato: {e:?}");
+                    return;
+                }
+            }
+        }
+        let mut emit: Vec<crate::audiomix::Emit> = encoders
+            .iter_mut()
+            .zip(&sinks)
+            .map(|(enc, sink)| Box::new(move |pcm, time, dur| emit_encoded(enc, pcm, time, dur, sink)) as crate::audiomix::Emit)
+            .collect();
+        crate::appaudio::run(stop, &slots, &mut emit, Some(&bus));
+    })
+}
+
 pub enum Encoding {
     Aac(u32),
     Pcm,
 }
 
 // Toma del PCM ya downmezclado (post-downmix, antes de codificar) de una pista, para
-// alimentar el mezclador que genera la pista 0 = mezcla (sistema + micro). Se entrega el
-// mismo `time` (QPC) que llevan los paquetes codificados, así el mezclador alinea por
-// reloj absoluto compartido entre ambas fuentes.
+// alimentar la pista de mezcla del clip. Se entrega el mismo `time` (QPC) que llevan los
+// paquetes codificados, así la mezcla alinea por reloj absoluto compartido entre fuentes.
 pub trait PcmTap: Send + Sync + 'static {
     fn on_pcm(&self, pcm: &[u8], time: i64, dur: i64);
 }
@@ -169,7 +377,6 @@ fn mmcss_register(task: &str) -> Option<MmcssGuard> {
 pub fn spawn_track(
     kind: TrackKind,
     encoding: Encoding,
-    sample_rate: u32,
     channels: u16,
     sink: Arc<dyn AudioSink>,
     pcm_tap: Option<Arc<dyn PcmTap>>,
@@ -192,7 +399,7 @@ pub fn spawn_track(
             // hilo termina sin más: el sink no recibe nada, pero no compromete el resto
             // de la captura (CLAUDE.md §4.4).
             if let Err(e) =
-                run_track(&kind, encoding, sample_rate, channels, &sink, pcm_tap.as_ref(), denoise, &stop_t)
+                run_track(&kind, encoding, channels, &sink, pcm_tap.as_ref(), denoise, &stop_t)
             {
                 log::warn!("la pista de captura terminó con error: {e:?}");
             }
@@ -307,14 +514,13 @@ enum StreamEnd {
 fn run_track(
     kind: &TrackKind,
     encoding: Encoding,
-    sample_rate: u32,
     channels: u16,
     sink: &Arc<dyn AudioSink>,
     pcm_tap: Option<&Arc<dyn PcmTap>>,
     denoise: bool,
     stop: &Arc<AtomicBool>,
 ) -> Result<()> {
-    let (rate, dst_ch) = track_format(kind, sample_rate, channels);
+    let (rate, dst_ch) = track_format(channels);
     let mut aac = match encoding {
         Encoding::Aac(bitrate) => match build_aac_encoder(rate, dst_ch, bitrate) {
             Ok(mut enc) => {
@@ -328,6 +534,13 @@ fn run_track(
         },
         Encoding::Pcm => None,
     };
+    // Las pistas del clip se colocan en el reloj del vídeo (QPC), no contando muestras: el reloj de
+    // una interfaz de audio se desvía cientos de ppm del QPC (320 ppm medidos en una AudioBox, unos
+    // 19 ms por minuto) y la pista acababa desfasada del vídeo y de la mezcla, que sí siguen al QPC.
+    let mut clock = aac.as_ref().map(|_| Clock {
+        mix: crate::audiomix::Mix::with_channels(crate::audiomix::now_hns() - CLOCK_LATENCY_HNS, dst_ch as usize),
+        cursor: crate::audiomix::Cursor::default(),
+    });
 
     let mut open_err_logged = false;
     while !stop.load(Ordering::SeqCst) {
@@ -336,7 +549,10 @@ fn run_track(
                 open_err_logged = false;
                 // Uno nuevo por stream: tras reabrir el dispositivo no debe arrastrar audio del anterior.
                 let mut denoiser = (denoise && rate == crate::denoise::RATE).then(|| crate::denoise::Denoiser::new(dst_ch));
-                match pump_stream(&stream, kind, rate, dst_ch, &mut aac, &mut denoiser, sink, pcm_tap, stop) {
+                if let Some(c) = clock.as_mut() {
+                    c.cursor = crate::audiomix::Cursor::default();
+                }
+                match pump_stream(&stream, kind, rate, dst_ch, &mut aac, &mut clock, &mut denoiser, sink, pcm_tap, stop) {
                     StreamEnd::Stopped => break,
                     StreamEnd::Lost => log::info!("el dispositivo cambió o se perdió; reabriendo la pista"),
                 }
@@ -365,6 +581,7 @@ fn pump_stream(
     sample_rate: u32,
     dst_ch: u16,
     aac: &mut Option<AacEncoder>,
+    clock: &mut Option<Clock>,
     denoiser: &mut Option<crate::denoise::Denoiser>,
     sink: &Arc<dyn AudioSink>,
     pcm_tap: Option<&Arc<dyn PcmTap>>,
@@ -440,12 +657,31 @@ fn pump_stream(
                 if let Some(tap) = pcm_tap {
                     tap.on_pcm(&out, time, dur);
                 }
-                emit_encoded(aac, out, time, dur, sink);
+                match clock.as_mut() {
+                    Some(c) => {
+                        let samples: Vec<i16> = out.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+                        let stamp = c.mix.frame_at(time);
+                        c.cursor.place(&mut c.mix, stamp, &samples);
+                    }
+                    None => emit_encoded(aac, out, time, dur, sink),
+                }
             }
+        }
+        if let Some(c) = clock.as_mut() {
+            let upto = c.mix.frame_at(crate::audiomix::now_hns() - CLOCK_LATENCY_HNS);
+            c.mix.drain(upto, &mut |pcm, time, dur| emit_encoded(aac, pcm, time, dur, sink));
         }
     }
     StreamEnd::Stopped
 }
+
+struct Clock {
+    mix: crate::audiomix::Mix,
+    cursor: crate::audiomix::Cursor,
+}
+
+// Margen para cerrar un bloque de la pista: el loopback puede tardar hasta 100 ms en despertar.
+const CLOCK_LATENCY_HNS: i64 = 1_200_000;
 
 // Codifica (AAC) o reenvía (PCM) un bloque ya downmezclado al sink. Compartido por las
 // pistas de captura y por el mezclador, que produce PCM y termina por el mismo camino.
@@ -494,13 +730,11 @@ fn target_channels(channels: u16) -> u16 {
     }
 }
 
-// El encoder AAC de Media Foundation solo admite 1-2 canales y 44100/48000 Hz. Dado el
-// formato nativo del dispositivo, devuelve el formato de la pista: su misma frecuencia si el AAC
-// la admite y 48 kHz si no (Windows remuestrea al abrir, ver open_stream), en mono o estéreo.
-// El micro va siempre a 48 kHz, la única frecuencia que admite la supresión de ruido.
-pub fn track_format(kind: &TrackKind, rate: u32, channels: u16) -> (u32, u16) {
-    let rate = if matches!(kind, TrackKind::SystemLoopback) && rate == 44100 { rate } else { 48000 };
-    (rate, target_channels(channels))
+// El encoder AAC de Media Foundation solo admite 1-2 canales. Todas las pistas van a 48 kHz
+// (Windows remuestrea al abrir, ver open_stream): la mezcla del clip suma muestras sin remuestrear,
+// y la supresión de ruido del micro solo admite esa frecuencia.
+pub fn track_format(channels: u16) -> (u32, u16) {
+    (48000, target_channels(channels))
 }
 
 // Downmix de PCM16 entrelazado de `src` canales a `dst` (1 o 2). Para >2 canales aplica la

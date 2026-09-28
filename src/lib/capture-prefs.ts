@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { replay } from './replay.svelte';
-import { captureConfig, type QualityKey } from './capture-config.svelte';
+import { captureConfig, type AudioApp, type AudioMode, type QualityKey } from './capture-config.svelte';
 import { hotkeys, hotkeyFailed } from './hotkeys.svelte';
 import { replaySound, type SoundLevel } from './replay-sound.svelte';
 
@@ -12,6 +12,8 @@ type CapturePrefs = {
   fps: number;
   quality: QualityKey;
   resolution: number;
+  audioMode: AudioMode;
+  audioApps: AudioApp[];
   mic: boolean;
   micDevice: string;
   noiseSuppression: boolean;
@@ -29,6 +31,8 @@ function current(): CapturePrefs {
     fps: captureConfig.fps,
     quality: captureConfig.quality,
     resolution: captureConfig.resolution,
+    audioMode: captureConfig.audioMode,
+    audioApps: captureConfig.audioApps,
     mic: captureConfig.mic,
     micDevice: captureConfig.micDevice,
     noiseSuppression: captureConfig.noiseSuppression,
@@ -45,6 +49,8 @@ function apply(p: CapturePrefs) {
     fps: p.fps,
     quality: p.quality,
     resolution: p.resolution,
+    audioMode: p.audioMode,
+    audioApps: p.audioApps,
     mic: p.mic,
     micDevice: p.micDevice,
     noiseSuppression: p.noiseSuppression,

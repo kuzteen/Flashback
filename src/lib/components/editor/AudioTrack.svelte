@@ -3,12 +3,12 @@
   import ValueInput from './ValueInput.svelte';
   import BlockLane from './BlockLane.svelte';
   import WaveTiles from './WaveTiles.svelte';
-  import { beginGesture, commit, editorState, endGesture, preview } from '$lib/editor-state.svelte';
-  import { segLen, type MixerState } from '$lib/edit-model';
+  import { beginGesture, commit, editorState, endGesture, preview, type AudioLane } from '$lib/editor-state.svelte';
+  import { segLen, trackMix, withTrackMix, type TrackMix } from '$lib/edit-model';
   import { t } from '$lib/i18n.svelte';
 
   let {
-    kind,
+    lane,
     mpp,
     width,
     viewX,
@@ -16,7 +16,8 @@
     posAt,
     headPos,
   }: {
-    kind: 'sys' | 'mic';
+    // null mientras se prepara el audio o si el clip no tiene.
+    lane: AudioLane | null;
     mpp: number;
     width: number;
     viewX: number;
@@ -25,28 +26,32 @@
     headPos: number;
   } = $props();
 
-  const mixer = $derived(editorState.edit.mixer);
-  const vol = $derived(kind === 'sys' ? mixer.sys_vol : mixer.mic_vol);
-  const muted = $derived(kind === 'sys' ? mixer.sys_muted : mixer.mic_muted);
-  // Sin pistas separadas, la de "sistema" es el audio único del clip.
-  const label = $derived(
-    kind === 'mic' ? t('ed.micAudio') : editorState.system ? t('ed.sysAudio') : t('ed.audio'),
+  const id = $derived(lane?.id ?? 'sys');
+  const kind = $derived(id === 'mic' ? 'mic' : id === 'game' ? 'game' : id.startsWith('app:') ? 'app' : 'sys');
+  const mix = $derived(trackMix(editorState.edit.mixer, id));
+  const vol = $derived(mix.vol);
+  const muted = $derived(mix.muted);
+  // Una pista sin WAV propio es el audio único del clip, que suena desde el vídeo.
+  const embedded = $derived(!!lane && !lane.src);
+  const label = $derived.by(() => {
+    if (kind === 'mic') return t('ed.micAudio');
+    if (kind === 'game') return lane?.name && lane.name !== 'Game' ? lane.name : t('ed.gameAudio');
+    if (kind === 'app') return lane?.name || id.slice(4);
+    return embedded || !lane ? t('ed.audio') : t('ed.sysAudio');
+  });
+  const icon = $derived(
+    { mic: 'mic', game: 'gamepad', app: 'app', sys: embedded || !lane ? 'speaker' : 'headphones' }[kind],
   );
-  const icon = $derived(kind === 'mic' ? 'mic' : editorState.system ? 'headphones' : 'speaker');
-  const peaks = $derived(
-    kind === 'mic' ? editorState.micPeaks : editorState.system ? editorState.sysPeaks : editorState.mixPeaks,
-  );
-  const noAudio = $derived(
-    kind === 'sys' && !editorState.loading && !editorState.system && !editorState.mixPeaks,
-  );
+  const peaks = $derived(lane?.peaks ?? null);
+  const noAudio = $derived(!lane && !editorState.loading);
 
-  function withMixer(patch: Partial<MixerState>) {
-    return { ...editorState.edit, mixer: { ...editorState.edit.mixer, ...patch } };
+  function withMixer(patch: Partial<TrackMix>) {
+    return { ...editorState.edit, mixer: withTrackMix(editorState.edit.mixer, id, patch) };
   }
-  const volPatch = (v: number): Partial<MixerState> => (kind === 'sys' ? { sys_vol: v } : { mic_vol: v });
+  const volPatch = (v: number): Partial<TrackMix> => ({ vol: v });
 
   function toggleMute() {
-    commit(withMixer(kind === 'sys' ? { sys_muted: !muted } : { mic_muted: !muted }));
+    commit(withMixer({ muted: !muted }));
   }
 
   let rail = $state<HTMLDivElement | null>(null);
@@ -122,7 +127,11 @@
         data-tip-align="start"
         onclick={toggleMute}
       >
-        <Icon name={icon} size={17} />
+        {#if lane?.icon}
+          <img class="lane-ico" src={lane.icon} alt="" />
+        {:else}
+          <Icon name={icon} size={17} />
+        {/if}
       </button>
       <span class="name">{label}</span>
       <span class="val">
@@ -159,7 +168,7 @@
       </div>
     {/if}
   </div>
-  <BlockLane track={kind} {mpp} {width} {posAt} {headPos}>
+  <BlockLane track={id} {mpp} {width} {posAt} {headPos}>
     {#snippet block(s)}
       <WaveTiles
         {peaks}
@@ -231,6 +240,17 @@
   }
   .mute.on {
     color: var(--rec);
+  }
+  .lane-ico {
+    width: 18px;
+    height: 18px;
+    object-fit: contain;
+    border-radius: 4px;
+    transition: opacity 0.14s ease, filter 0.14s ease;
+  }
+  .mute.on .lane-ico {
+    opacity: 0.4;
+    filter: grayscale(1);
   }
   .name {
     min-width: 0;

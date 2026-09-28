@@ -192,7 +192,7 @@
   class:settling={ui.settling || ui.zooming}
   bind:this={lane}
   style:width="{width}px"
-  style:--grip={GRIP_COLORS[ui.grips[track]].value}
+  style:--grip={GRIP_COLORS[ui.grip(track)].value}
   role="presentation"
   onpointerdown={onLaneDown}
   onpointermove={onMove}

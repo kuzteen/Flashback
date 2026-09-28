@@ -24,7 +24,8 @@ function saveOpen(key: string, open: boolean) {
   } catch {}
 }
 
-export type Track = 'video' | 'sys' | 'mic';
+// "video" o el id de una pista de audio ("sys", "mic", "game", "app:<exe>").
+export type Track = string;
 
 // Colores del marco y los tiradores de cada pista, para distinguirlas de un vistazo. El primero es
 // el acento del tema; se guarda el índice y no el color para que ese siga al tema.
@@ -41,12 +42,11 @@ export const GRIP_COLORS = [
 const GRIP_KEY = 'flashback.editor.gripColors';
 
 function readGrips(): Record<Track, number> {
-  const out: Record<Track, number> = { video: 0, sys: 0, mic: 0 };
+  const out: Record<Track, number> = {};
   try {
     const saved = JSON.parse(localStorage.getItem(GRIP_KEY) ?? '{}');
-    for (const k of Object.keys(out) as Track[]) {
-      const i = saved[k];
-      if (Number.isInteger(i) && i >= 0 && i < GRIP_COLORS.length) out[k] = i;
+    for (const [k, i] of Object.entries(saved)) {
+      if (Number.isInteger(i) && (i as number) >= 0 && (i as number) < GRIP_COLORS.length) out[k] = i as number;
     }
   } catch {}
   return out;
@@ -89,6 +89,11 @@ class EditorUi {
   toggleLook() {
     this.lookOpen = !this.lookOpen;
     saveOpen(LOOK_KEY, this.lookOpen);
+  }
+
+  // Una pista de audio sin color propio lleva el de la de sistema, que es el que tenían todas antes.
+  grip(track: Track): number {
+    return this.grips[track] ?? (track === 'video' || track === 'mic' ? 0 : (this.grips.sys ?? 0));
   }
 
   setGrip(track: Track, index: number) {

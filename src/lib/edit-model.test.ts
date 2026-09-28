@@ -66,7 +66,7 @@ describe('fromSaved', () => {
       10_000,
     );
     expect(s.segments).toEqual([seg(0, 1000, 0), seg(2000, 3000, 1000)]);
-    expect(s.mixer).toEqual({ sys_vol: 0.5, sys_muted: false, mic_vol: 1, mic_muted: true });
+    expect(s.mixer).toEqual({ tracks: { sys: { vol: 0.5, muted: false }, mic: { vol: 1, muted: true } } });
     expect(s.format).toEqual({ kind: 'horizontal' });
   });
 

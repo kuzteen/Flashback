@@ -5,7 +5,7 @@
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::config::{CapturePrefs, ToastTopic};
 
@@ -31,6 +31,7 @@ pub fn init(app: &AppHandle) {
     if let Some(p) = &prefs {
         crate::sound::set_gain(p.sound_gain());
         crate::denoise::configure(p.noise_suppression, p.noise_level);
+        crate::appaudio::configure(p.audio_mode == "apps", &p.audio_apps);
     }
     state().prefs = prefs.clone();
     let (tx, rx) = channel::<()>();
@@ -67,6 +68,7 @@ pub fn set_prefs(app: &AppHandle, prefs: CapturePrefs) -> Result<Vec<String>, St
     let before = state().prefs.replace(prefs.clone());
     crate::sound::set_gain(prefs.sound_gain());
     crate::denoise::configure(prefs.noise_suppression, prefs.noise_level);
+    crate::appaudio::configure(prefs.audio_mode == "apps", &prefs.audio_apps);
     let failed = if before.as_ref().map(|b| &b.hotkeys) != Some(&prefs.hotkeys) {
         crate::hotkeys::apply(app, &prefs.hotkeys)
     } else {
@@ -115,15 +117,24 @@ fn reconcile(app: &AppHandle) {
             // En modo Aplicación el objetivo siempre es "window": el juego va en la clave para que
             // cambiar de juego reconstruya la captura contra la ventana nueva. La intensidad de la
             // supresión de ruido no va: se aplica en vivo; encenderla o apagarla mueve el retardo
-            // del micro y sí reconstruye.
+            // del micro y sí reconstruye. El modo de audio y la lista de apps van: cada app es una
+            // pista del clip, y las pistas se declaran al empezar.
             let t = if t == "window" {
                 format!("window:{}", crate::detect::current_game().map(|g| g.name).unwrap_or_default())
             } else {
                 t.clone()
             };
             format!(
-                "{t}|{}|{}|{}|{}|{}|{mic}|{}",
-                prefs.seconds, prefs.fps, prefs.quality, prefs.resolution, prefs.mic, prefs.noise_suppression
+                "{t}|{}|{}|{}|{}|{}|{mic}|{}|{}",
+                prefs.seconds,
+                prefs.fps,
+                prefs.quality,
+                prefs.resolution,
+                prefs.mic,
+                prefs.noise_suppression,
+                crate::appaudio::configured()
+                    .map(|apps| apps.iter().map(|a| a.exe.to_lowercase()).collect::<Vec<_>>().join(","))
+                    .unwrap_or_else(|| "all".into())
             )
         }
         _ => "off".to_string(),
@@ -149,6 +160,9 @@ fn reconcile(app: &AppHandle) {
 }
 
 fn start_replay(app: &AppHandle, target: String, prefs: &CapturePrefs, mic_device: String, es: bool) -> Result<(), String> {
+    if let (Some(apps), Ok(dir)) = (crate::appaudio::configured(), app.path().app_data_dir()) {
+        crate::appaudio::remember_icons(dir.join("app-icons"), apps);
+    }
     let dir = crate::config::clips_dir(app).to_string_lossy().into_owned();
     let encoder = crate::config::get_encoder(app);
     let handle = app.clone();

@@ -138,10 +138,10 @@ mod voice {
     pub fn test_record(device: &str) -> Result<(), String> {
         crate::sound::stop();
         let kind = crate::audio::TrackKind::Microphone(device.to_string());
-        let (rate, ch) = crate::audio::probe_format(&kind).ok_or("No se pudo abrir el micrófono")?;
-        let (_, channels) = crate::audio::track_format(&kind, rate, ch);
+        let (_, ch) = crate::audio::probe_format(&kind).ok_or("No se pudo abrir el micrófono")?;
+        let (_, channels) = crate::audio::track_format(ch);
         let sink = Arc::new(TestSink { pcm: Mutex::new(Vec::new()), cap: MAX_TEST_SECS * RATE as usize * 2 * channels as usize });
-        let track = crate::audio::spawn_track(kind, crate::audio::Encoding::Pcm, rate, ch, sink.clone(), None, false);
+        let track = crate::audio::spawn_track(kind, crate::audio::Encoding::Pcm, ch, sink.clone(), None, false);
         let mut t = test();
         t.track = Some((track, sink, channels));
         Ok(())

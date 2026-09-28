@@ -12,13 +12,12 @@
   import Icon from '../Icon.svelte';
 
   let video = $state<HTMLVideoElement | null>(null);
-  let sys = $state<HTMLAudioElement | null>(null);
-  let mic = $state<HTMLAudioElement | null>(null);
+  let audios = $state<Record<string, HTMLAudioElement | null>>({});
 
   // attach aplica también el volumen: al leer la mezcla, el efecto se repite con cada cambio de
   // fader o silencio y el audio sigue a la edición sin más cableado.
   $effect(() => {
-    playback.attach(video, sys, mic);
+    playback.attach(video, audios);
   });
 
   type VfcVideo = HTMLVideoElement & {
@@ -486,12 +485,11 @@
       </div>
     {/if}
   {/if}
-  {#if editorState.system}
-    <audio bind:this={sys} src={editorState.system} preload="auto"></audio>
-  {/if}
-  {#if editorState.mic}
-    <audio bind:this={mic} src={editorState.mic} preload="auto"></audio>
-  {/if}
+  {#each editorState.tracks as lane (lane.id)}
+    {#if lane.src}
+      <audio bind:this={audios[lane.id]} src={lane.src} preload="auto"></audio>
+    {/if}
+  {/each}
 
   {#if editorState.loading}
     <div class="prep mono">{t('ed.preparingAudio')}</div>

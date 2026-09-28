@@ -469,26 +469,16 @@ struct Packet {
 // Cada paquete AAC es independiente (no hay GOP/keyframes), así que se poda por
 // tiempo sin anclar a nada: simplemente se descartan los más viejos que la ventana.
 struct AudioTrackBuf {
+    spec: audio::TrackSpec,
     packets: VecDeque<Packet>,
-    sample_rate: u32,
-    channels: u16,
-    bitrate: u32,
     user_data: Vec<u8>,
     payload_type: u32,
     window_ns: i64,
 }
 
 impl AudioTrackBuf {
-    fn new(sample_rate: u32, channels: u16, bitrate: u32, window_ns: i64) -> AudioTrackBuf {
-        AudioTrackBuf {
-            packets: VecDeque::new(),
-            sample_rate,
-            channels,
-            bitrate,
-            user_data: Vec::new(),
-            payload_type: 0,
-            window_ns,
-        }
+    fn new(spec: audio::TrackSpec, window_ns: i64) -> AudioTrackBuf {
+        AudioTrackBuf { spec, packets: VecDeque::new(), user_data: Vec::new(), payload_type: 0, window_ns }
     }
 
     fn push(&mut self, data: Bytes, time: i64, dur: i64) {
@@ -510,10 +500,8 @@ impl AudioTrackBuf {
 // Copia inmutable de una pista de audio del ring buffer, lista para muxear sin
 // mantener el lock de ReplayBuffer mientras se escribe a disco.
 struct AudioMuxTrack {
+    spec: audio::TrackSpec,
     packets: Vec<(Bytes, i64, i64)>,
-    sample_rate: u32,
-    channels: u16,
-    bitrate: u32,
     user_data: Vec<u8>,
     payload_type: u32,
 }
@@ -521,10 +509,8 @@ struct AudioMuxTrack {
 impl From<&AudioTrackBuf> for AudioMuxTrack {
     fn from(t: &AudioTrackBuf) -> AudioMuxTrack {
         AudioMuxTrack {
+            spec: t.spec.clone(),
             packets: t.packets.iter().map(|p| (p.data.clone(), p.time, p.dur)).collect(),
-            sample_rate: t.sample_rate,
-            channels: t.channels,
-            bitrate: t.bitrate,
             user_data: t.user_data.clone(),
             payload_type: t.payload_type,
         }
@@ -539,8 +525,7 @@ struct ReplayBuffer {
     fps: u32,
     bitrate: u32,
     window_ns: i64,
-    sys_audio: Option<AudioTrackBuf>,
-    mic_audio: Option<AudioTrackBuf>,
+    audio: Vec<AudioTrackBuf>,
     // Grabación manual enganchada al replay: recibe los mismos paquetes que el ring, bajo el
     // mismo lock, así no hay paquetes perdidos ni repetidos al engancharla o soltarla.
     recording: Option<Recording>,
@@ -556,17 +541,12 @@ impl ReplayBuffer {
             fps,
             bitrate,
             window_ns: seconds.max(1) as i64 * 10_000_000,
-            sys_audio: None,
-            mic_audio: None,
+            audio: Vec::new(),
             recording: None,
         }
     }
 
-    fn init_audio(
-        &mut self,
-        sys: Option<(u32, u16)>,
-        mic: Option<(u32, u16)>,
-    ) {
+    fn init_audio(&mut self, specs: &[audio::TrackSpec]) {
         // El guardado ancla el clip al IDR anterior al inicio de la ventana (hasta ~1 GOP
         // atrás), así que el audio debe conservar historia hasta ahí; con la misma ventana que
         // el vídeo, su paquete más antiguo cae en el inicio de la ventana y el clip arranca con
@@ -574,12 +554,7 @@ impl ReplayBuffer {
         // exceso lo descarta el muxer (paquetes con time < base). Coste: ~1,5 s extra de AAC.
         let gop_ns = self.fps.max(8) as i64 * 10_000_000 / self.fps.max(1) as i64;
         let audio_window = self.window_ns + gop_ns + 5_000_000;
-        if let Some((rate, ch)) = sys {
-            self.sys_audio = Some(AudioTrackBuf::new(rate, ch, aac_bitrate(ch), audio_window));
-        }
-        if let Some((rate, ch)) = mic {
-            self.mic_audio = Some(AudioTrackBuf::new(rate, ch, aac_bitrate(ch), audio_window));
-        }
+        self.audio = specs.iter().map(|s| AudioTrackBuf::new(s.clone(), audio_window)).collect();
     }
 
     // Prepara el ring para un nuevo segmento de captura (arranque o rebuild por retarget a
@@ -597,37 +572,30 @@ impl ReplayBuffer {
         self.bitrate = bitrate;
     }
 
-    fn track_mut(&mut self, role: AudioRole) -> Option<&mut AudioTrackBuf> {
-        match role {
-            AudioRole::Sys => self.sys_audio.as_mut(),
-            AudioRole::Mic => self.mic_audio.as_mut(),
-        }
-    }
-
-    fn push_audio(&mut self, role: AudioRole, data: Vec<u8>, time: i64, dur: i64) {
+    fn push_audio(&mut self, track: usize, data: Vec<u8>, time: i64, dur: i64) {
         let data = Arc::new(data);
         if let Some(rec) = &self.recording {
-            rec.mux.push_audio(role, data.clone(), time, dur);
+            rec.mux.push_audio(track, data.clone(), time, dur);
         }
-        if let Some(t) = self.track_mut(role) {
+        if let Some(t) = self.audio.get_mut(track) {
             t.push(data, time, dur);
         }
     }
 
-    fn set_user_data(&mut self, role: AudioRole, data: Vec<u8>) {
-        if let Some(t) = self.track_mut(role) {
+    fn set_user_data(&mut self, track: usize, data: Vec<u8>) {
+        if let Some(t) = self.audio.get_mut(track) {
             t.user_data = data;
         }
     }
 
-    fn set_payload_type(&mut self, role: AudioRole, v: u32) {
-        let header = self.track_mut(role).map(|t| {
+    fn set_payload_type(&mut self, track: usize, v: u32) {
+        let header = self.audio.get_mut(track).map(|t| {
             t.payload_type = v;
             t.user_data.clone()
         });
         if let (Some(rec), Some(ud)) = (&self.recording, header) {
             if !ud.is_empty() {
-                rec.mux.set_audio_header(role, ud, v);
+                rec.mux.set_audio_header(track, ud, v);
             }
         }
     }
@@ -641,9 +609,8 @@ impl ReplayBuffer {
         self.trim();
     }
 
-    fn audio_formats(&self) -> (Option<(u32, u16)>, Option<(u32, u16)>) {
-        let fmt = |t: &Option<AudioTrackBuf>| t.as_ref().map(|t| (t.sample_rate, t.channels));
-        (fmt(&self.sys_audio), fmt(&self.mic_audio))
+    fn audio_specs(&self) -> Vec<audio::TrackSpec> {
+        self.audio.iter().map(|t| t.spec.clone()).collect()
     }
 
     // Engancha una grabación manual al replay. Arranca desde el último keyframe del buffer (hasta
@@ -651,27 +618,22 @@ impl ReplayBuffer {
     // al siguiente keyframe del encoder.
     fn attach_recording(&mut self, out_dir: &str) -> Option<String> {
         let start = self.packets.iter().rposition(|p| p.key)?;
-        let (sys, mic) = self.audio_formats();
-        let mux = LiveMux::new(reserve_clip_path(out_dir), self.width, self.height, sys, mic);
+        let mux = LiveMux::new(reserve_clip_path(out_dir), self.width, self.height, self.audio_specs());
         if !self.seq_header.is_empty() {
             mux.set_seq_header(self.seq_header.clone());
         }
         let from = self.packets[start].time;
-        for (role, track) in [(AudioRole::Sys, &self.sys_audio), (AudioRole::Mic, &self.mic_audio)] {
-            if let Some(t) = track {
-                if !t.user_data.is_empty() {
-                    mux.set_audio_header(role, t.user_data.clone(), t.payload_type);
-                }
+        for (i, t) in self.audio.iter().enumerate() {
+            if !t.user_data.is_empty() {
+                mux.set_audio_header(i, t.user_data.clone(), t.payload_type);
             }
         }
         for p in self.packets.iter().skip(start) {
             mux.push_video_bytes(p.data.clone(), p.time, p.dur, p.key);
         }
-        for (role, track) in [(AudioRole::Sys, &self.sys_audio), (AudioRole::Mic, &self.mic_audio)] {
-            if let Some(t) = track {
-                for p in t.packets.iter().filter(|p| p.time >= from) {
-                    mux.push_audio(role, p.data.clone(), p.time, p.dur);
-                }
+        for (i, t) in self.audio.iter().enumerate() {
+            for p in t.packets.iter().filter(|p| p.time >= from) {
+                mux.push_audio(i, p.data.clone(), p.time, p.dur);
             }
         }
         let path = mux.path().to_string();
@@ -684,16 +646,16 @@ impl ReplayBuffer {
     // que se cierra esa parte y sigue en un archivo nuevo.
     fn recording_segment(&mut self) {
         let (w, h) = (self.width, self.height);
-        let (sys, mic) = self.audio_formats();
+        let specs = self.audio_specs();
         let Some(rec) = self.recording.as_mut() else { return };
-        if rec.mux.dims() == (w, h) && rec.mux.audio_formats() == (sys, mic) {
+        if rec.mux.dims() == (w, h) && rec.mux.audio_specs() == specs.as_slice() {
             rec.mux.new_segment();
             return;
         }
         if let Some(path) = finish_mux(&rec.mux) {
             rec.parts.push(path);
         }
-        rec.mux = LiveMux::new(reserve_clip_path(&rec.out_dir), w, h, sys, mic);
+        rec.mux = LiveMux::new(reserve_clip_path(&rec.out_dir), w, h, specs);
     }
 
     // Mantener acotado el buffer: descartar hasta el último keyframe anterior al
@@ -913,8 +875,7 @@ pub struct PendingReplay {
     seq_header: Vec<u8>,
     width: u32,
     height: u32,
-    sys_audio: Option<AudioMuxTrack>,
-    mic_audio: Option<AudioMuxTrack>,
+    audio: Vec<AudioMuxTrack>,
 }
 
 pub fn save_replay(source: &str) -> Option<String> {
@@ -930,7 +891,7 @@ pub fn begin_save_replay(source: &str) -> Option<PendingReplay> {
         (r.buffer.clone(), r.out_dir.clone())
     };
 
-    let (packets, total, seq_header, width, height, sys_audio, mic_audio) = {
+    let (packets, total, seq_header, width, height, audio) = {
         let buf = buffer.lock_ok();
         let start = buf.packets.iter().position(|p| p.key);
         // Solo se copian referencias: el lock dura lo mismo con 30 s que con 15 min de buffer y
@@ -950,8 +911,7 @@ pub fn begin_save_replay(source: &str) -> Option<PendingReplay> {
             buf.seq_header.clone(),
             buf.width,
             buf.height,
-            buf.sys_audio.as_ref().map(AudioMuxTrack::from),
-            buf.mic_audio.as_ref().map(AudioMuxTrack::from),
+            buf.audio.iter().map(AudioMuxTrack::from).collect::<Vec<_>>(),
         )
     };
 
@@ -967,23 +927,17 @@ pub fn begin_save_replay(source: &str) -> Option<PendingReplay> {
 
     // El MP4 necesita el AudioSpecificConfig (user_data) de cada pista AAC para escribir el
     // `esds`. Si una pista no llegó a producir ese config (p. ej. el encoder AAC no pudo con el formato
-    // del dispositivo) se omite, y el replay se guarda solo con vídeo en vez de fallar.
-    let sys_audio = match sys_audio {
-        Some(t) if !t.user_data.is_empty() && !t.packets.is_empty() => Some(t),
-        Some(_) => {
-            log::warn!("save_replay: pista de sistema omitida (sin config AAC válida)");
-            None
-        }
-        None => None,
-    };
-    let mic_audio = match mic_audio {
-        Some(t) if !t.user_data.is_empty() && !t.packets.is_empty() => Some(t),
-        Some(_) => {
-            log::warn!("save_replay: pista de micrófono omitida (sin config AAC válida)");
-            None
-        }
-        None => None,
-    };
+    // del dispositivo) se omite, y el replay se guarda sin ella en vez de fallar. Una pista sin
+    // paquetes (una app que no estuvo abierta) tampoco entra.
+    let audio: Vec<AudioMuxTrack> = audio
+        .into_iter()
+        .filter(|t| {
+            if t.user_data.is_empty() {
+                log::warn!("save_replay: pista {} omitida (sin config AAC válida)", t.spec.id);
+            }
+            !t.user_data.is_empty() && !t.packets.is_empty()
+        })
+        .collect();
 
     Some(PendingReplay {
         out_dir,
@@ -992,8 +946,7 @@ pub fn begin_save_replay(source: &str) -> Option<PendingReplay> {
         seq_header,
         width,
         height,
-        sys_audio,
-        mic_audio,
+        audio,
     })
 }
 
@@ -1005,14 +958,13 @@ impl PendingReplay {
             (Some(a), Some(b)) => (b.1 + b.2 - a.1) as f64 / 1e7,
             _ => 0.0,
         };
-        let audio = match (self.sys_audio.is_some(), self.mic_audio.is_some()) {
-            (true, true) => "sistema + micro",
-            (true, false) => "sistema",
-            (false, true) => "micro",
-            (false, false) => "sin audio",
+        let audio = if self.audio.is_empty() {
+            "sin audio".to_string()
+        } else {
+            self.audio.iter().map(|t| t.spec.id.as_str()).collect::<Vec<_>>().join(" + ")
         };
         let (width, height) = (self.width, self.height);
-        match mux_replay(&path, &self.packets, &self.seq_header, self.width, self.height, self.sys_audio, self.mic_audio) {
+        match mux_replay(&path, &self.packets, &self.seq_header, self.width, self.height, self.audio) {
             Ok(()) => {
                 log::info!(
                     "replay guardado: {secs:.1} s, {width}x{height}, {audio}, {:.1} MB en {} ms ({})",
@@ -1656,22 +1608,7 @@ fn build_replay(
     window_mode: bool,
     card_text: &str,
 ) -> Result<ReplayPipeline> {
-    // Sistema: loopback siempre; micrófono solo si el toggle está activo y hay dispositivo.
-    let sys_native = audio::probe_format(&audio::TrackKind::SystemLoopback);
-    let mic_native = if mic && !mic_device.is_empty() {
-        let f = audio::probe_format(&audio::TrackKind::Microphone(mic_device.clone()));
-        if f.is_none() {
-            log::warn!("audio: no se pudo abrir el micrófono (device='{mic_device}')");
-        }
-        f
-    } else {
-        if mic {
-            log::warn!("audio: micrófono activado pero sin dispositivo seleccionado");
-        }
-        None
-    };
-    let sys_target = sys_native.map(|(r, c)| audio::track_format(&audio::TrackKind::SystemLoopback, r, c));
-    let mic_target = mic_native.map(|(r, c)| audio::track_format(&audio::TrackKind::Microphone(mic_device.clone()), r, c));
+    let layout = plan_audio(mic, &mic_device);
 
     let core = build_pipeline_core(
         stats, item, fps, factor, resolution, bitrate_override, encoder_pref, window_mode,
@@ -1682,44 +1619,17 @@ fn build_replay(
     {
         let mut b = buffer.lock_ok();
         b.begin_segment(out_w, out_h, fps, bitrate);
-        b.init_audio(sys_target, mic_target);
+        b.init_audio(&layout.specs);
         b.recording_segment();
     }
 
-    let mut audio_tracks = Vec::new();
-    if let (Some((rate, ch)), Some((_, dst_ch))) = (sys_native, sys_target) {
-        let sink = Arc::new(ReplayAudioSink {
-            buffer: buffer.clone(),
-            video_base: video_base.clone(),
-            role: AudioRole::Sys,
-        });
-        audio_tracks.push(audio::spawn_track(
-            audio::TrackKind::SystemLoopback,
-            audio::Encoding::Aac(aac_bitrate(dst_ch)),
-            rate,
-            ch,
-            sink,
-            None,
-            false,
-        ));
-    }
-    if let (Some((rate, ch)), Some((_, dst_ch))) = (mic_native, mic_target) {
-        let sink = Arc::new(ReplayAudioSink {
-            buffer: buffer.clone(),
-            video_base: video_base.clone(),
-            role: AudioRole::Mic,
-        });
-        audio_tracks.push(audio::spawn_track(
-            audio::TrackKind::Microphone(mic_device.clone()),
-            audio::Encoding::Aac(aac_bitrate(dst_ch)),
-            rate,
-            ch,
-            sink,
-            None,
-            crate::denoise::enabled(),
-        ));
-    }
-    pipe.audio_tracks = audio_tracks;
+    pipe.audio_tracks = layout.spawn(
+        |track| {
+            Arc::new(ReplayAudioSink { buffer: buffer.clone(), video_base: video_base.clone(), track })
+                as Arc<dyn audio::AudioSink>
+        },
+        crate::denoise::enabled(),
+    );
     Ok(pipe)
 }
 
@@ -1740,21 +1650,7 @@ fn build_manual(
     mic_device: String,
     encoder_pref: &str,
 ) -> Result<(ReplayPipeline, Arc<LiveMux>, Arc<dyn VideoPacketSink>)> {
-    let sys_native = audio::probe_format(&audio::TrackKind::SystemLoopback);
-    let mic_native = if mic && !mic_device.is_empty() {
-        let f = audio::probe_format(&audio::TrackKind::Microphone(mic_device.clone()));
-        if f.is_none() {
-            log::warn!("audio: no se pudo abrir el micrófono (device='{mic_device}')");
-        }
-        f
-    } else {
-        if mic {
-            log::warn!("audio: micrófono activado pero sin dispositivo seleccionado");
-        }
-        None
-    };
-    let sys_target = sys_native.map(|(r, c)| audio::track_format(&audio::TrackKind::SystemLoopback, r, c));
-    let mic_target = mic_native.map(|(r, c)| audio::track_format(&audio::TrackKind::Microphone(mic_device.clone()), r, c));
+    let layout = plan_audio(mic, &mic_device);
 
     let core = build_pipeline_core(
         stats, item, fps, factor, resolution, bitrate_override, encoder_pref, false, None, false,
@@ -1762,34 +1658,12 @@ fn build_manual(
     let PipelineCore { mut pipe, out_w, out_h, video_base, .. } = core;
 
     let out_path = reserve_clip_path(out_dir);
-    let mux = LiveMux::new(out_path, out_w, out_h, sys_target, mic_target);
+    let mux = LiveMux::new(out_path, out_w, out_h, layout.specs.clone());
 
-    let mut audio_tracks = Vec::new();
-    if let (Some((rate, ch)), Some((_, dst_ch))) = (sys_native, sys_target) {
-        let sink = Arc::new(MuxAudioSink::new(mux.clone(), AudioRole::Sys, video_base.clone()));
-        audio_tracks.push(audio::spawn_track(
-            audio::TrackKind::SystemLoopback,
-            audio::Encoding::Aac(aac_bitrate(dst_ch)),
-            rate,
-            ch,
-            sink,
-            None,
-            false,
-        ));
-    }
-    if let (Some((rate, ch)), Some((_, dst_ch))) = (mic_native, mic_target) {
-        let sink = Arc::new(MuxAudioSink::new(mux.clone(), AudioRole::Mic, video_base.clone()));
-        audio_tracks.push(audio::spawn_track(
-            audio::TrackKind::Microphone(mic_device.clone()),
-            audio::Encoding::Aac(aac_bitrate(dst_ch)),
-            rate,
-            ch,
-            sink,
-            None,
-            crate::denoise::enabled(),
-        ));
-    }
-    pipe.audio_tracks = audio_tracks;
+    pipe.audio_tracks = layout.spawn(
+        |track| Arc::new(MuxAudioSink::new(mux.clone(), track, video_base.clone())) as Arc<dyn audio::AudioSink>,
+        crate::denoise::enabled(),
+    );
 
     let video_sink: Arc<dyn VideoPacketSink> = mux.clone();
     Ok((pipe, mux, video_sink))
@@ -1809,48 +1683,42 @@ fn null_out() -> windows::core::Error {
 }
 
 
-// Valor válido de bytes/seg del encoder AAC de Media Foundation (admite 12000, 16000,
-// 20000 y 24000 = 96/128/160/192 kbps). Fuera de esa lista el encoder rechaza el tipo.
-fn aac_bitrate(channels: u16) -> u32 {
-    if channels <= 1 {
-        96_000
-    } else {
-        128_000
+// Pistas del clip: la mezcla, las fuentes del modo de audio y el micro si está activo y hay
+// dispositivo.
+fn plan_audio(mic: bool, mic_device: &str) -> audio::AudioLayout {
+    if mic && mic_device.is_empty() {
+        log::warn!("audio: micrófono activado pero sin dispositivo seleccionado");
     }
+    audio::AudioLayout::plan(mic.then_some(mic_device))
 }
 
 // Sink de audio del Instant Replay: empuja directamente al ring buffer (ya en AAC,
 // sin pasar por ningún SinkWriter). Se rebasa contra `video_base` para compartir
-// origen temporal con los paquetes de vídeo; mientras el vídeo no haya arrancado
-// (i64::MIN) se descartan los paquetes, ya que no hay forma fiable de alinearlos.
-#[derive(Clone, Copy)]
-enum AudioRole {
-    Sys,
-    Mic,
-}
-
+// origen temporal con los paquetes de vídeo; lo anterior al vídeo se descarta.
 struct ReplayAudioSink {
     buffer: Arc<Mutex<ReplayBuffer>>,
     video_base: Arc<AtomicI64>,
-    role: AudioRole,
+    track: usize,
 }
 
 impl audio::AudioSink for ReplayAudioSink {
     fn push(&self, data: Vec<u8>, time: i64, dur: i64) {
         let base = self.video_base.load(Ordering::SeqCst);
-        if base == i64::MIN {
+        // Lo que sonó antes del primer fotograma no tiene sitio en el clip. Acotarlo a 0 apilaba
+        // varios paquetes en el mismo instante y retrasaba la pista entera.
+        if base == i64::MIN || time < base {
             return;
         }
-        let ts = (time - base).max(0);
-        self.buffer.lock_ok().push_audio(self.role, data, ts, dur);
+        let ts = time - base;
+        self.buffer.lock_ok().push_audio(self.track, data, ts, dur);
     }
 
     fn set_user_data(&self, data: Vec<u8>) {
-        self.buffer.lock_ok().set_user_data(self.role, data);
+        self.buffer.lock_ok().set_user_data(self.track, data);
     }
 
     fn set_payload_type(&self, v: u32) {
-        self.buffer.lock_ok().set_payload_type(self.role, v);
+        self.buffer.lock_ok().set_payload_type(self.track, v);
     }
 }
 
@@ -1861,7 +1729,7 @@ impl audio::AudioSink for ReplayAudioSink {
 // type) llega por set_user_data/set_payload_type antes del primer paquete y se reenvía una vez.
 struct MuxAudioSink {
     mux: Arc<LiveMux>,
-    role: AudioRole,
+    track: usize,
     video_base: Arc<AtomicI64>,
     user_data: Mutex<Vec<u8>>,
     payload_type: AtomicU32,
@@ -1869,10 +1737,10 @@ struct MuxAudioSink {
 }
 
 impl MuxAudioSink {
-    fn new(mux: Arc<LiveMux>, role: AudioRole, video_base: Arc<AtomicI64>) -> MuxAudioSink {
+    fn new(mux: Arc<LiveMux>, track: usize, video_base: Arc<AtomicI64>) -> MuxAudioSink {
         MuxAudioSink {
             mux,
-            role,
+            track,
             video_base,
             user_data: Mutex::new(Vec::new()),
             payload_type: AtomicU32::new(0),
@@ -1889,7 +1757,7 @@ impl MuxAudioSink {
             return;
         }
         self.mux
-            .set_audio_header(self.role, ud, self.payload_type.load(Ordering::SeqCst));
+            .set_audio_header(self.track, ud, self.payload_type.load(Ordering::SeqCst));
         self.header_sent.store(true, Ordering::SeqCst);
     }
 }
@@ -1898,11 +1766,13 @@ impl audio::AudioSink for MuxAudioSink {
     fn push(&self, data: Vec<u8>, time: i64, dur: i64) {
         self.maybe_send_header();
         let base = self.video_base.load(Ordering::SeqCst);
-        if base == i64::MIN {
+        // Lo que sonó antes del primer fotograma no tiene sitio en el clip. Acotarlo a 0 apilaba
+        // varios paquetes en el mismo instante y retrasaba la pista entera.
+        if base == i64::MIN || time < base {
             return;
         }
-        let ts = (time - base).max(0);
-        self.mux.push_audio(self.role, Arc::new(data), ts, dur);
+        let ts = time - base;
+        self.mux.push_audio(self.track, Arc::new(data), ts, dur);
     }
 
     fn set_user_data(&self, data: Vec<u8>) {
@@ -3256,7 +3126,7 @@ mod tests {
     fn livemux_new_segment_continues_after_what_was_written() {
         ensure_mf();
         let path = std::env::temp_dir().join("flashback_livemux_seg.mp4").to_string_lossy().into_owned();
-        let mux = LiveMux::new(path.clone(), 1920, 1080, None, None);
+        let mux = LiveMux::new(path.clone(), 1920, 1080, Vec::new());
         let f = 333_333i64;
         for i in 0..3 {
             mux.push_video_bytes(Arc::new(vec![0u8; 8]), i * f, f, i == 0);
@@ -3537,7 +3407,7 @@ mod tests {
     fn audio_reaches_back_to_video_anchor_keyframe() {
         let fps = 20u32;
         let mut buf = ReplayBuffer::new(2, 1920, 1080, fps, 8_000_000); // ventana 2 s
-        buf.init_audio(Some((48_000, 2)), None);
+        buf.init_audio(&[test_spec("mix", 2)]);
 
         let vframe = 10_000_000 / fps as i64; // 1/fps en unidades de 100 ns
         let gop = fps as i64; // keyframe cada ~1 s
@@ -3550,12 +3420,12 @@ mod tests {
         let aframe = 1024 * 10_000_000 / 48_000;
         let mut t = 0i64;
         while t <= (nframes - 1) * vframe {
-            buf.push_audio(AudioRole::Sys, vec![0u8; 8], t, aframe);
+            buf.push_audio(0, vec![0u8; 8], t, aframe);
             t += aframe;
         }
 
         let anchor = buf.packets.iter().find(|p| p.key).map(|p| p.time).unwrap();
-        let earliest_audio = buf.sys_audio.as_ref().unwrap().packets.front().unwrap().time;
+        let earliest_audio = buf.audio[0].packets.front().unwrap().time;
         assert!(
             earliest_audio <= anchor,
             "audio arranca en {earliest_audio} pero el clip se ancla al keyframe {anchor}: \
@@ -3564,6 +3434,10 @@ mod tests {
     }
 
     const TEST_SEQ: [u8; 16] = [0, 0, 0, 1, 0x67, 0x4D, 0x00, 0x1F, 0x95, 0xA8, 0, 0, 0, 1, 0x68, 0xEE];
+
+    fn test_spec(id: &str, channels: u16) -> audio::TrackSpec {
+        audio::TrackSpec { id: id.into(), name: id.into(), rate: 48_000, channels }
+    }
 
     fn test_audio_header() -> Vec<u8> {
         let mut ud = vec![0u8; 12];
@@ -3582,7 +3456,7 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         let _ = std::fs::remove_file(&path);
-        let mux = LiveMux::new(path.clone(), 1920, 1080, Some((48_000, 2)), None);
+        let mux = LiveMux::new(path.clone(), 1920, 1080, vec![test_spec("mix", 2)]);
 
         mux.set_seq_header(TEST_SEQ.to_vec());
         mux.push_video(vec![0u8; 64], 0, 333_333, true);
@@ -3591,8 +3465,8 @@ mod tests {
             "no debe arrancar sin la cabecera de la pista de audio esperada"
         );
 
-        mux.set_audio_header(AudioRole::Sys, test_audio_header(), 0);
-        mux.push_audio(AudioRole::Sys, Arc::new(vec![0u8; 16]), 0, 213_333);
+        mux.set_audio_header(0, test_audio_header(), 0);
+        mux.push_audio(0, Arc::new(vec![0u8; 16]), 0, 213_333);
         assert!(mux.is_writing(), "con vídeo + cabecera de audio debe estar escribiendo");
 
         let _ = mux.finalize(); // no se asegura un MP4 válido con datos falsos
@@ -3609,24 +3483,18 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         let _ = std::fs::remove_file(&path);
-        let mux = LiveMux::new(
-            path.clone(),
-            1920,
-            1080,
-            Some((48_000, 2)),
-            Some((48_000, 1)),
-        );
+        let mux = LiveMux::new(path.clone(), 1920, 1080, vec![test_spec("mix", 2), test_spec("mic", 1)]);
         mux.set_header_timeout(Duration::from_millis(0));
 
         mux.set_seq_header(TEST_SEQ.to_vec());
-        mux.set_audio_header(AudioRole::Sys, test_audio_header(), 0);
+        mux.set_audio_header(0, test_audio_header(), 0);
         mux.push_video(vec![0u8; 64], 0, 333_333, true);
         assert!(
             mux.is_writing(),
             "con timeout vencido debe arrancar descartando el micrófono"
         );
         // El micrófono sin cabecera quedó descartado: no debe existir su stream.
-        assert!(mux.mic_track_is_none());
+        assert!(mux.audio_track_is_none(1));
 
         let _ = mux.finalize();
         let _ = std::fs::remove_file(&path);
@@ -3637,7 +3505,7 @@ mod tests {
     fn livemux_no_video_returns_none() {
         ensure_mf();
         let mux =
-            LiveMux::new("nonexistent.mp4".into(), 1920, 1080, Some((48_000, 2)), None);
+            LiveMux::new("nonexistent.mp4".into(), 1920, 1080, vec![test_spec("mix", 2)]);
         assert_eq!(mux.finalize(), None);
     }
 
@@ -3648,13 +3516,13 @@ mod tests {
             .join(format!("flashback_livemux_real_{}.mp4", std::process::id()))
             .to_string_lossy()
             .into_owned();
-        let mux = LiveMux::new(path.clone(), 128, 72, Some((48_000, 2)), None);
+        let mux = LiveMux::new(path.clone(), 128, 72, vec![test_spec("mix", 2)]);
         mux.set_seq_header(m.seq.clone());
-        mux.set_audio_header(AudioRole::Sys, test_audio_header(), 0);
+        mux.set_audio_header(0, test_audio_header(), 0);
         let mut audio = m.audio.iter().peekable();
         for (data, time, key) in &m.video {
             while let Some((a, at)) = audio.next_if(|(_, at)| at <= time) {
-                mux.push_audio(AudioRole::Sys, Arc::new(a.clone()), *at, 213_333);
+                mux.push_audio(0, Arc::new(a.clone()), *at, 213_333);
             }
             mux.push_video_bytes(Arc::new(data.clone()), *time, 333_333, *key);
         }

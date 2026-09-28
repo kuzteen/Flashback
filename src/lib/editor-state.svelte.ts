@@ -1,4 +1,6 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { artSrc } from './artwork.svelte';
+import { captureConfig } from './capture-config.svelte';
 import type { Clip } from './clips';
 import { EditHistory } from './edit-history';
 import { clearFilmstrip, loadFilmstrip } from './filmstrip.svelte';
@@ -21,27 +23,20 @@ import {
 
 export type { MixerState } from './edit-model';
 
-type ClipAudio = {
-  system: string | null;
-  mic: string | null;
-  sys_peaks: number[] | null;
-  mic_peaks: number[] | null;
-  mix_peaks: number[] | null;
-};
+type ClipAudio = { tracks: { id: string; name: string; wav: string | null; peaks: number[] | null }[] };
+
+// Pista de audio del editor. Sin `src` es la única del clip y suena el propio vídeo.
+export type AudioLane = { id: string; name: string; src: string | null; peaks: number[] | null; icon: string | null };
 
 type EditorState = {
   clip: Clip | null;
   videoSrc: string | null;
-  system: string | null;
-  mic: string | null;
+  tracks: AudioLane[];
   loading: boolean;
   error: string | null;
   durationMs: number;
   frameTimes: number[];
   fps: number;
-  sysPeaks: number[] | null;
-  micPeaks: number[] | null;
-  mixPeaks: number[] | null;
   edit: EditState;
   // Bloque seleccionado: destino de quitar, desactivar y de los tiradores de recorte.
   active: number;
@@ -53,17 +48,13 @@ function blank(): EditorState {
   return {
     clip: null,
     videoSrc: null,
-    system: null,
-    mic: null,
+    tracks: [],
     loading: false,
     error: null,
     durationMs: 0,
     frameTimes: [],
     // 0 = aún no se sabe: la cabecera muestra un guion y el paso de fotograma usa 30.
     fps: 0,
-    sysPeaks: null,
-    micPeaks: null,
-    mixPeaks: null,
     edit: initialState(0),
     active: 0,
     canUndo: false,
@@ -239,16 +230,43 @@ async function load(clip: Clip) {
   try {
     const res = await audio;
     if (!same()) return;
-    editorState.system = res.system ? convertFileSrc(res.system) : null;
-    editorState.mic = res.mic ? convertFileSrc(res.mic) : null;
-    editorState.sysPeaks = res.sys_peaks ?? null;
-    editorState.micPeaks = res.mic_peaks ?? null;
-    editorState.mixPeaks = res.mix_peaks ?? null;
+    editorState.tracks = res.tracks.map((t) => ({
+      id: t.id,
+      name: t.name,
+      src: t.wav ? convertFileSrc(t.wav) : null,
+      peaks: t.peaks ?? null,
+      icon: null,
+    }));
+    void loadLaneIcons(path);
   } catch (e) {
     if (same()) editorState.error = String(e);
   } finally {
     if (same()) editorState.loading = false;
   }
+}
+
+// Icono de cada app, guardado por el backend desde que se grabó con ella (la ruta de la lista de
+// Ajustes solo sirve para sacarlo la primera vez), y el del juego, el mismo de Ajustes > Juegos.
+async function loadLaneIcons(path: string) {
+  const same = () => editorState.clip?.path === path;
+  const setIcon = (id: string, icon: string | null) => {
+    const lane = editorState.tracks.find((l) => l.id === id);
+    if (lane && icon) lane.icon = icon;
+  };
+  const apps = editorState.tracks.flatMap((l) => {
+    if (!l.id.startsWith('app:')) return [];
+    const exe = l.id.slice(4);
+    const path = captureConfig.audioApps.find((a) => a.exe.toLowerCase() === exe)?.path || null;
+    return [{ id: l.id, exe, path }];
+  });
+  const game = editorState.tracks.find((l) => l.id === 'game' && l.name && l.name !== 'Game');
+  const [icons, gameUrl] = await Promise.all([
+    Promise.all(apps.map((a) => invoke<string | null>('audio_app_icon', { exe: a.exe, path: a.path }).catch(() => null))),
+    game ? invoke<string | null>('game_icon', { name: game.name, steamAppid: null }).catch(() => null) : null,
+  ]);
+  if (!same()) return;
+  apps.forEach((a, i) => setIcon(a.id, icons[i] ?? null));
+  if (game) setIcon(game.id, artSrc(gameUrl));
 }
 
 // Antes de descargar la interfaz: el guardado diferido del último cambio se perdería con ella.

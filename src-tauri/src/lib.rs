@@ -1,3 +1,5 @@
+mod appaudio;
+mod audiomix;
 mod artwork;
 mod autostart;
 #[cfg(target_os = "windows")]
@@ -780,6 +782,52 @@ fn test_save_sound() {
 // Abre el selector y deja el archivo elegido como borrador para escoger su tramo de 2 s. None si
 // se canceló el selector.
 #[tauri::command]
+fn audio_apps_supported() -> bool {
+    appaudio::supported()
+}
+
+#[tauri::command]
+async fn audio_sessions() -> Vec<appaudio::AudioAppInfo> {
+    tokio::task::spawn_blocking(|| with_com(appaudio::audio_sessions)).await.unwrap_or_default()
+}
+
+#[tauri::command]
+async fn pick_audio_app(filter_name: String) -> Result<Option<appaudio::AudioAppInfo>, String> {
+    tokio::task::spawn_blocking(move || {
+        let Some(path) = config::pick_file(&filter_name, "*.exe")? else {
+            return Ok(None);
+        };
+        Ok(with_com(|| appaudio::app_from_path(&path)))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn audio_app_icon(app: tauri::AppHandle, exe: String, path: Option<String>) -> Option<String> {
+    let dir = app_data(&app, "app-icons").ok()?;
+    tokio::task::spawn_blocking(move || with_com(|| appaudio::app_icon(&dir, &exe, path.as_deref())))
+        .await
+        .ok()
+        .flatten()
+}
+
+fn with_com<T>(f: impl FnOnce() -> T) -> T {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
+        let init = CoInitializeEx(None, COINIT_MULTITHREADED).is_ok();
+        let out = f();
+        if init {
+            CoUninitialize();
+        }
+        out
+    }
+    #[cfg(not(target_os = "windows"))]
+    f()
+}
+
+#[tauri::command]
 async fn pick_save_sound(filter_name: String) -> Result<Option<sound::DraftInfo>, String> {
     tokio::task::spawn_blocking(move || {
         let Some(src) = config::pick_audio_file(&filter_name)? else {
@@ -1017,6 +1065,10 @@ pub fn run() {
             set_language,
             list_monitors,
             list_audio_inputs,
+            audio_apps_supported,
+            audio_sessions,
+            pick_audio_app,
+            audio_app_icon,
             get_autostart,
             set_autostart,
             encoder_options,

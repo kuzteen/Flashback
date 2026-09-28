@@ -264,6 +264,23 @@ pub(crate) fn two_audio_tracks(name: &str, sys_from: i64, mic_from: i64) -> Path
     path
 }
 
+// Como la captura con pistas separadas: la mezcla primero y luego una pista por fuente, cada una
+// con su id y desde su instante.
+pub(crate) fn labeled_audio_tracks(name: &str, sources: &[(&str, i64)]) -> PathBuf {
+    let medias: Vec<Media> = sources.iter().map(|(_, from)| media(*from)).collect();
+    let mut t = tracks(&medias[0]);
+    t.truncate(1);
+    for (i, (id, _)) in sources.iter().enumerate() {
+        t.push(tracks(&medias[i]).remove(1).labeled(id, &id.to_uppercase()));
+    }
+    let mut packets = vec![medias[0].video.iter().map(|(d, t, k)| Packet { data: d, time: *t, dur: FRAME, key: *k }).collect()];
+    packets.extend(medias.iter().map(audio_packets));
+    let path = temp(name);
+    let mut w = BufWriter::new(std::fs::File::create(&path).unwrap());
+    progressive::write(&mut w, &t, &packets).unwrap();
+    path
+}
+
 fn audio_packets(m: &Media) -> Vec<Packet<'_>> {
     m.audio.iter().map(|(d, t)| Packet { data: d, time: *t, dur: AAC, key: true }).collect()
 }

@@ -1,32 +1,68 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
+// Pistas de audio que el editor ajusta por separado (sin la de mezcla, que es lo que suena fuera de
+// Flashback). Con una sola pista va embebida en el vídeo y no hay WAV.
 #[derive(Serialize, Clone, Default)]
 pub struct ClipAudio {
-    pub system: Option<String>,
-    pub mic: Option<String>,
+    pub tracks: Vec<ClipTrack>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct ClipTrack {
+    // "sys", "mic", "game" o "app:<exe>"; los clips anteriores a las pistas con nombre, "sys" y "mic".
+    pub id: String,
+    pub name: String,
+    pub wav: Option<String>,
     // Forma de onda ya reducida a cubos: se calcula en el backend para evitar volcar el WAV
     // completo al WebView y decodificarlo allí (cientos de MB). Solo viaja el envolvente.
-    pub sys_peaks: Option<Vec<f32>>,
-    pub mic_peaks: Option<Vec<f32>>,
-    pub mix_peaks: Option<Vec<f32>>,
+    pub peaks: Option<Vec<f32>>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct TrackMix {
+    pub vol: f32,
+    pub muted: bool,
+}
+
+// Volumen de cada pista por su id; la que no aparece va al 100 %. Las ediciones anteriores guardaban
+// solo sistema y micro en campos sueltos, que se leen como las pistas "sys" y "mic".
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(default)]
 pub struct MixerState {
-    pub sys_vol: f32,
-    pub sys_muted: bool,
-    pub mic_vol: f32,
-    pub mic_muted: bool,
+    pub tracks: BTreeMap<String, TrackMix>,
+    #[serde(skip_serializing)]
+    sys_vol: Option<f32>,
+    #[serde(skip_serializing)]
+    sys_muted: Option<bool>,
+    #[serde(skip_serializing)]
+    mic_vol: Option<f32>,
+    #[serde(skip_serializing)]
+    mic_muted: Option<bool>,
 }
 
-impl Default for MixerState {
-    fn default() -> Self {
-        Self {
-            sys_vol: 1.0,
-            sys_muted: false,
-            mic_vol: 1.0,
-            mic_muted: false,
+impl MixerState {
+    fn normalized(mut self) -> Self {
+        for (id, vol, muted) in [("sys", self.sys_vol, self.sys_muted), ("mic", self.mic_vol, self.mic_muted)] {
+            if vol.is_some() || muted.is_some() {
+                self.tracks.entry(id.into()).or_insert(TrackMix { vol: vol.unwrap_or(1.0), muted: muted.unwrap_or(false) });
+            }
         }
+        (self.sys_vol, self.sys_muted, self.mic_vol, self.mic_muted) = (None, None, None, None);
+        self
+    }
+
+    pub fn gain(&self, id: &str) -> f32 {
+        match self.clone().normalized().tracks.get(id) {
+            Some(t) if t.muted => 0.0,
+            Some(t) => t.vol.max(0.0),
+            None => 1.0,
+        }
+    }
+
+    pub fn untouched(&self) -> bool {
+        self.clone().normalized().tracks.values().all(|t| !t.muted && (t.vol - 1.0).abs() <= f32::EPSILON)
     }
 }
 
@@ -82,12 +118,7 @@ fn is_noop(edit: &ClipEdit) -> bool {
     if edit.format != crate::reframe::OutputFormat::Horizontal || !edit.look.is_neutral() {
         return false;
     }
-    let m = &edit.mixer;
-    if m.sys_muted
-        || m.mic_muted
-        || (m.sys_vol - 1.0).abs() > f32::EPSILON
-        || (m.mic_vol - 1.0).abs() > f32::EPSILON
-    {
+    if !edit.mixer.untouched() {
         return false;
     }
     match edit.segments.as_slice() {
@@ -132,7 +163,9 @@ pub fn edited_paths(index: &std::path::Path) -> Vec<String> {
 pub fn load_edit(index: String, path: String) -> Result<ClipEdit, String> {
     let idx = std::path::Path::new(&index);
     if let Some(val) = crate::edits::load(idx, &path) {
-        return serde_json::from_value(val).map_err(|e| e.to_string());
+        let mut edit: ClipEdit = serde_json::from_value(val).map_err(|e| e.to_string())?;
+        edit.mixer = edit.mixer.normalized();
+        return Ok(edit);
     }
     // Migración: importar el viejo sidecar `<clip>.edit.json` al índice y borrarlo.
     let legacy = std::path::Path::new(&path).with_extension("edit.json");
@@ -142,7 +175,7 @@ pub fn load_edit(index: String, path: String) -> Result<ClipEdit, String> {
                 crate::edits::save(idx, &path, val);
             }
             let _ = std::fs::remove_file(&legacy);
-            return Ok(edit);
+            return Ok(ClipEdit { mixer: edit.mixer.normalized(), ..edit });
         }
     }
     Ok(ClipEdit {
@@ -215,7 +248,7 @@ mod win {
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
     };
 
-    use super::{ClipAudio, ClipEdit};
+    use super::{ClipAudio, ClipEdit, ClipTrack};
 
     const ALL_STREAMS: u32 = 0xFFFF_FFFE;
     const ENDOFSTREAM: u32 = 0x0000_0002;
@@ -258,61 +291,98 @@ mod win {
         .map_err(|_| "El hilo de extracción de audio terminó inesperadamente".to_string())?
     }
 
+    // Pista de audio que se ajusta por separado y su ordinal en Media Foundation.
+    struct LayoutTrack {
+        id: String,
+        name: String,
+        ordinal: usize,
+    }
+
+    // Pistas separadas del clip y el ordinal de la de mezcla. Los clips con pistas con nombre las
+    // traen en el `moov`; los anteriores son una pista de sistema, más la del micro si hay dos (con
+    // el orden de Media Foundation: 0 = micro, 1 = sistema).
+    fn audio_layout(path: &str) -> Result<(Vec<LayoutTrack>, Option<usize>)> {
+        let labels = crate::mp4index::Mp4::open(std::path::Path::new(path)).map(|m| m.audio_labels()).unwrap_or_default();
+        if labels.iter().any(|(id, _)| id.is_some()) {
+            let mut tracks = Vec::new();
+            let mut mix = None;
+            for (ordinal, (id, name)) in labels.into_iter().enumerate().rev() {
+                match id.as_deref() {
+                    Some("mix") => mix = Some(ordinal),
+                    Some(id) => tracks.push(LayoutTrack { id: id.to_string(), name, ordinal }),
+                    None => {}
+                }
+            }
+            return Ok((tracks, mix));
+        }
+        let track = |id: &str, ordinal| LayoutTrack { id: id.into(), name: String::new(), ordinal };
+        Ok(match count_audio_streams(path)? {
+            0 => (Vec::new(), None),
+            1 => (vec![track("sys", 0)], None),
+            _ => (vec![track("sys", 1), track("mic", 0)], None),
+        })
+    }
+
+    // Una pista que no pasa de -60 dB en todo el clip (una app de la lista que estuvo abierta pero
+    // callada) no se enseña: no aporta nada que ajustar.
+    fn silent(peaks: &[f32]) -> bool {
+        peaks.iter().all(|p| *p < 0.001)
+    }
+
     fn extract(path: &str, audio_dir: &str) -> std::result::Result<ClipAudio, String> {
         let mf = |e| format!("{e:?}");
         let io = |e: std::io::Error| e.to_string();
 
-        let audio_streams = count_audio_streams(path).map_err(mf)?;
+        let (tracks, _) = audio_layout(path).map_err(mf)?;
 
-        // Sin micro no hay pistas que separar: la pista única va embebida y la reproduce el propio
-        // vídeo. Aun así se calcula su forma de onda (mezcla) para dibujarla en el editor.
-        if audio_streams < 2 {
-            if audio_streams == 1 {
-                let (pcm, _sr, ch) = read_pcm(path, 0).map_err(mf)?;
-                return Ok(ClipAudio {
-                    mix_peaks: Some(peaks_from_pcm(&pcm, ch)),
-                    ..Default::default()
-                });
-            }
-            return Ok(ClipAudio::default());
+        // Con una sola pista no hay nada que separar: suena el propio vídeo. Aun así se calcula su
+        // forma de onda para dibujarla en el editor.
+        if tracks.len() < 2 {
+            let Some(t) = tracks.into_iter().next() else { return Ok(ClipAudio::default()) };
+            let (pcm, _sr, ch) = read_pcm(path, t.ordinal).map_err(mf)?;
+            let peaks = Some(peaks_from_pcm(&pcm, ch));
+            return Ok(ClipAudio { tracks: vec![ClipTrack { id: t.id, name: t.name, wav: None, peaks }] });
         }
 
         let key = temp_key(path);
         let dir = std::path::Path::new(audio_dir);
-        // `a2` versiona el formato de extracción: los WAV anteriores se generaban sin alinear el
-        // hueco inicial de cada pista, así que se descartan (nombre nuevo) y se rehacen ya alineados.
-        let sys = dir
-            .join(format!("flashback_edit_{key}_a2_sys.wav"))
-            .to_string_lossy()
-            .into_owned();
-        let mic = dir
-            .join(format!("flashback_edit_{key}_a2_mic.wav"))
-            .to_string_lossy()
-            .into_owned();
+        // `a3` versiona el formato de extracción: una pista por fuente, nombrada por su id.
+        let wavs: Vec<String> = tracks
+            .iter()
+            .map(|t| {
+                let id: String = t.id.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+                dir.join(format!("flashback_edit_{key}_a3_{id}.wav")).to_string_lossy().into_owned()
+            })
+            .collect();
 
         // Los clips son inmutables (edición no destructiva): si ya se separaron las pistas en
         // una apertura anterior, se reutilizan en vez de volver a volcar cientos de MB de WAV.
         // En ese caso los picos se sacan del WAV local (lectura barata) en vez de redecodificar.
         let ready = |p: &str| std::fs::metadata(p).map(|m| m.len() > 0).unwrap_or(false);
-        let (sys_peaks, mic_peaks) = if ready(&sys) && ready(&mic) {
-            crate::cache::touch(&sys);
-            crate::cache::touch(&mic);
-            (peaks_from_wav(&sys), peaks_from_wav(&mic))
+        let peaks: Vec<Option<Vec<f32>>> = if wavs.iter().all(|w| ready(w)) {
+            wavs.iter().map(|w| {
+                crate::cache::touch(w);
+                peaks_from_wav(w)
+            }).collect()
         } else {
-            let ((sys_pcm, sr, sc), (mic_pcm, mr, mc)) = read_pcm_pair(path).map_err(mf)?;
-            write_wav(&sys, &sys_pcm, sr, sc).map_err(io)?;
-            let sp = peaks_from_pcm(&sys_pcm, sc);
-            write_wav(&mic, &mic_pcm, mr, mc).map_err(io)?;
-            let mp = peaks_from_pcm(&mic_pcm, mc);
-            (Some(sp), Some(mp))
+            let ordinals: Vec<usize> = tracks.iter().map(|t| t.ordinal).collect();
+            let pcms = read_pcm_tracks(path, &ordinals, None).map_err(mf)?;
+            let mut out = Vec::new();
+            for ((pcm, sr, ch), wav) in pcms.iter().zip(&wavs) {
+                write_wav(wav, pcm, *sr, *ch).map_err(io)?;
+                out.push(Some(peaks_from_pcm(pcm, *ch)));
+            }
+            out
         };
 
         Ok(ClipAudio {
-            system: Some(sys),
-            mic: Some(mic),
-            sys_peaks,
-            mic_peaks,
-            mix_peaks: None,
+            tracks: tracks
+                .into_iter()
+                .zip(wavs)
+                .zip(peaks)
+                .filter(|((t, _), p)| t.id == "mic" || !p.as_deref().is_some_and(silent))
+                .map(|((t, wav), peaks)| ClipTrack { id: t.id, name: t.name, wav: Some(wav), peaks })
+                .collect(),
         })
     }
 
@@ -368,14 +438,6 @@ mod win {
 
     fn read_pcm(path: &str, ordinal: usize) -> Result<Pcm> {
         Ok(read_pcm_tracks(path, &[ordinal], None)?.remove(0))
-    }
-
-    // Pistas de sistema y micro de un clip de dos pistas, en ese orden.
-    fn read_pcm_pair(path: &str) -> Result<(Pcm, Pcm)> {
-        let mut v = read_pcm_tracks(path, &[1, 0], None)?;
-        let mic = v.pop().unwrap_or_default();
-        let sys = v.pop().unwrap_or_default();
-        Ok((sys, mic))
     }
 
     // Primeros `max_secs` de la primera pista de audio de cualquier archivo que decodifique Media
@@ -1185,21 +1247,29 @@ mod win {
         Copy(u32),
         // Pista única con ganancia: se decodifica a PCM, se escala y se recodifica.
         Gain(u32, f32),
-        // Sistema + micro: hay que hornear la mezcla en una sola pista (un reproductor normal solo
-        // suena la primera), así que el audio siempre se recodifica.
-        Remix,
+        // Varias pistas con los volúmenes tocados: se hornea la mezcla en una sola pista (un
+        // reproductor normal solo suena una), así que el audio se recodifica. (ordinal, ganancia).
+        Remix(Vec<(usize, f32)>),
     }
 
     fn audio_plan(src: &str, edit: &ClipEdit) -> Result<AudioPlan> {
+        let (tracks, mix) = audio_layout(src)?;
         let reader = open_reader(src)?;
-        // Dos pistas = sistema + micro: hay mezcla que hornear.
-        if audio_stream_at(&reader, 1).is_some() {
-            return Ok(AudioPlan::Remix);
+        let gains: Vec<(usize, f32)> = tracks.iter().map(|t| (t.ordinal, edit.mixer.gain(&t.id))).collect();
+        let untouched = gains.iter().all(|(_, g)| (g - 1.0).abs() < 1e-3);
+        // La pista de mezcla ya es exactamente lo que saldría con todo al 100 %: se copia.
+        if let Some(idx) = mix.filter(|_| untouched || tracks.is_empty()).and_then(|m| audio_stream_at(&reader, m)) {
+            return Ok(AudioPlan::Copy(idx));
         }
-        let Some(idx) = audio_stream_at(&reader, 0) else {
+        if gains.len() >= 2 {
+            return Ok(AudioPlan::Remix(gains));
+        }
+        let Some((ordinal, gain)) = gains.first().copied() else {
             return Ok(AudioPlan::None);
         };
-        let gain = if edit.mixer.sys_muted { 0.0 } else { edit.mixer.sys_vol };
+        let Some(idx) = audio_stream_at(&reader, ordinal) else {
+            return Ok(AudioPlan::None);
+        };
         Ok(if (gain - 1.0).abs() < 1e-3 {
             AudioPlan::Copy(idx)
         } else {
@@ -1212,21 +1282,21 @@ mod win {
     // el resultado; si el hilo ya se consumió (reintento tras un passthrough fallido), la rehace.
     struct Remix {
         src: String,
-        edit: ClipEdit,
+        gains: Vec<(usize, f32)>,
         job: Option<std::thread::JoinHandle<std::result::Result<(Vec<i16>, u32), String>>>,
     }
 
     impl Remix {
-        fn spawn(src: &str, edit: &ClipEdit) -> Remix {
-            let (s, e) = (src.to_string(), edit.clone());
+        fn spawn(src: &str, gains: &[(usize, f32)]) -> Remix {
+            let (s, g) = (src.to_string(), gains.to_vec());
             let job = std::thread::spawn(move || {
                 unsafe { let _ = CoInitializeEx(None, COINIT_MULTITHREADED); }
                 ensure_mf();
-                let r = build_remixed_pcm(&s, &e).map_err(|e| format!("{e:?}"));
+                let r = build_remixed_pcm(&s, &g).map_err(|e| format!("{e:?}"));
                 unsafe { CoUninitialize(); }
                 r
             });
-            Remix { src: src.to_string(), edit: edit.clone(), job: Some(job) }
+            Remix { src: src.to_string(), gains: gains.to_vec(), job: Some(job) }
         }
 
         fn take(&mut self) -> std::result::Result<(Vec<i16>, u32), String> {
@@ -1234,7 +1304,7 @@ mod win {
                 Some(job) => job
                     .join()
                     .map_err(|_| "El hilo de mezcla de audio terminó inesperadamente".to_string())?,
-                None => build_remixed_pcm(&self.src, &self.edit).map_err(|e| format!("{e:?}")),
+                None => build_remixed_pcm(&self.src, &self.gains).map_err(|e| format!("{e:?}")),
             }
         }
     }
@@ -1312,7 +1382,10 @@ mod win {
         let probed = started.elapsed();
 
         let plan = audio_plan(src, edit).map_err(mf)?;
-        let mut remix = matches!(plan, AudioPlan::Remix).then(|| Remix::spawn(src, edit));
+        let mut remix = match &plan {
+            AudioPlan::Remix(gains) => Some(Remix::spawn(src, gains)),
+            _ => None,
+        };
         let mut progress = Progress::new(progress);
 
         let scaled = max_height.map(|mh| mh < meta.height).unwrap_or(false);
@@ -2050,8 +2123,9 @@ mod win {
                 let stream = add_pcm_audio_stream(sink, sr, ch).map_err(mf)?;
                 Ok(Some(AudioWriter::track(stream, reader, *idx, Some(gain), edit)))
             }
-            AudioPlan::Remix => {
-                let stream = add_remix_audio_stream(sink, planned_remix_rate(src)).map_err(mf)?;
+            AudioPlan::Remix(gains) => {
+                let ordinals: Vec<usize> = gains.iter().map(|(o, _)| *o).collect();
+                let stream = add_remix_audio_stream(sink, planned_remix_rate(src, &ordinals)).map_err(mf)?;
                 let (mixed, rate) = remix
                     .ok_or_else(|| "Falta la mezcla de audio".to_string())?
                     .take()?;
@@ -2088,53 +2162,44 @@ mod win {
         (hi as u64) << 32 | lo as u64
     }
 
-    // Genera la pista de mezcla final aplicando los volúmenes/silencios del editor sobre las
-    // pistas de sistema (1) y micro (2). Devuelve PCM16 estéreo entrelazado al rate elegido.
-    // El AAC de Media Foundation solo admite 44100/48000 Hz; si el origen es otro, se remuestrea.
-    // El AAC de Media Foundation solo admite 44100/48000 Hz: se conserva el del origen si ya es uno
-    // de los dos y, si no, se remuestrea a 48000.
-    fn remix_rate(sys_rate: u32, mic_rate: u32) -> u32 {
-        if sys_rate == 44100 || sys_rate == 48000 {
-            sys_rate
-        } else if mic_rate == 44100 || mic_rate == 48000 {
-            mic_rate
-        } else {
-            48000
-        }
+    // El AAC de Media Foundation solo admite 44100/48000 Hz: se conserva el de la primera pista que
+    // ya sea uno de los dos y, si no, se remuestrea a 48000.
+    fn remix_rate(rates: &[u32]) -> u32 {
+        rates.iter().copied().find(|r| *r == 44100 || *r == 48000).unwrap_or(48000)
     }
 
     // Mismo rate que saldrá de la mezcla, leído solo de los tipos nativos (sin decodificar nada).
     // Permite declarar la pista de salida antes de que la mezcla termine, que es lo que deja al
     // audio calcularse en paralelo al vídeo.
-    fn planned_remix_rate(src: &str) -> u32 {
+    fn planned_remix_rate(src: &str, ordinals: &[usize]) -> u32 {
         let Ok(reader) = open_reader(src) else { return 48000 };
-        let rate = |ordinal: usize| -> u32 {
-            audio_stream_at(&reader, ordinal)
-                .and_then(|i| unsafe { reader.GetNativeMediaType(i, 0) }.ok())
-                .and_then(|mt| unsafe { mt.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND) }.ok())
-                .unwrap_or(48000)
-        };
-        remix_rate(rate(1), rate(0))
+        let rates: Vec<u32> = ordinals
+            .iter()
+            .map(|&ordinal| {
+                audio_stream_at(&reader, ordinal)
+                    .and_then(|i| unsafe { reader.GetNativeMediaType(i, 0) }.ok())
+                    .and_then(|mt| unsafe { mt.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND) }.ok())
+                    .unwrap_or(48000)
+            })
+            .collect();
+        remix_rate(&rates)
     }
 
-    fn build_remixed_pcm(src: &str, edit: &ClipEdit) -> Result<(Vec<i16>, u32)> {
-        let ((sys_raw, sr, sc), (mic_raw, mr, mc)) = read_pcm_pair(src)?;
-
-        let out_rate = remix_rate(sr, mr);
-
-        let sys = to_stereo_f32(&sys_raw, sr, sc, out_rate);
-        let mic = to_stereo_f32(&mic_raw, mr, mc, out_rate);
-
-        let sys_gain = if edit.mixer.sys_muted { 0.0 } else { edit.mixer.sys_vol.max(0.0) };
-        let mic_gain = if edit.mixer.mic_muted { 0.0 } else { edit.mixer.mic_vol.max(0.0) };
-
-        let n = sys.len().max(mic.len());
+    // Mezcla final: cada pista (por ordinal) con su ganancia del editor, en PCM16 estéreo al rate
+    // elegido.
+    fn build_remixed_pcm(src: &str, gains: &[(usize, f32)]) -> Result<(Vec<i16>, u32)> {
+        let ordinals: Vec<usize> = gains.iter().map(|(o, _)| *o).collect();
+        let pcms = read_pcm_tracks(src, &ordinals, None)?;
+        let out_rate = remix_rate(&pcms.iter().map(|(_, sr, _)| *sr).collect::<Vec<_>>());
+        let tracks: Vec<(Vec<f32>, f32)> = pcms
+            .iter()
+            .zip(gains)
+            .filter(|(_, (_, g))| *g > 0.0)
+            .map(|((raw, sr, ch), (_, g))| (to_stereo_f32(raw, *sr, *ch, out_rate), *g))
+            .collect();
+        let n = tracks.iter().map(|(t, _)| t.len()).max().unwrap_or(0);
         let mixed = (0..n)
-            .map(|i| {
-                let s = sys.get(i).copied().unwrap_or(0.0) * sys_gain;
-                let m = mic.get(i).copied().unwrap_or(0.0) * mic_gain;
-                soft_clip_sample(s + m)
-            })
+            .map(|i| soft_clip_sample(tracks.iter().map(|(t, g)| t.get(i).copied().unwrap_or(0.0) * g).sum()))
             .collect();
         Ok((mixed, out_rate))
     }
@@ -2461,9 +2526,9 @@ mod win {
 
         #[test]
         fn remix_rate_keeps_a_valid_source_rate_and_falls_back_to_48k() {
-            assert_eq!(remix_rate(44100, 48000), 44100);
-            assert_eq!(remix_rate(32000, 48000), 48000);
-            assert_eq!(remix_rate(32000, 22050), 48000);
+            assert_eq!(remix_rate(&[44100, 48000]), 44100);
+            assert_eq!(remix_rate(&[32000, 48000]), 48000);
+            assert_eq!(remix_rate(&[32000, 22050]), 48000);
         }
 
         // El camino que lee el audio de las tablas del `moov` debe dar exactamente lo mismo que el
@@ -2486,5 +2551,60 @@ mod win {
             assert!(lead(&fast[1].0) > lead(&fast[0].0));
         }
 
+        // Solo la mezcla va activada en el MP4: Media Foundation tiene que seguir viendo las demás,
+        // y el índice nombrarlas con el mismo ordinal.
+        #[test]
+        fn disabled_audio_tracks_stay_readable_and_labeled() {
+            let path = crate::mp4mux::mf_tests::labeled_audio_tracks(
+                "labeled_audio",
+                &[("mix", 0), ("game", 300_000), ("mic", 900_000)],
+            );
+            let p = path.to_string_lossy().into_owned();
+            let labels = crate::mp4index::Mp4::open(&path).unwrap().audio_labels();
+            let q = p.clone();
+            let (count, fast, slow) = with_mf(move || {
+                let count = count_audio_streams(&q).map_err(|e| e.message())?;
+                let fast = read_pcm_indexed(&q, &[0, 1, 2], None);
+                let slow = read_pcm_tracks_mf(&q, &[0, 1, 2], None).map_err(|e| e.message())?;
+                Ok((count, fast, slow))
+            })
+            .unwrap();
+            let _ = std::fs::remove_file(&path);
+            assert_eq!(count, 3);
+            let ids: Vec<_> = labels.iter().map(|(id, _)| id.clone().unwrap()).collect();
+            assert_eq!(ids, ["mic", "game", "mix"]);
+            assert_eq!(labels[1].1, "GAME");
+            assert_eq!(fast.expect("índice"), slow);
+            let lead = |pcm: &[u8]| pcm.iter().position(|b| *b != 0).unwrap_or(pcm.len());
+            assert!(lead(&slow[0].0) > lead(&slow[1].0) && lead(&slow[1].0) > lead(&slow[2].0));
+        }
+
+    }
+}
+
+#[cfg(test)]
+mod mixer_tests {
+    use super::*;
+
+    #[test]
+    fn old_edits_keep_their_system_and_mic_volumes() {
+        let m: MixerState =
+            serde_json::from_str(r#"{"sys_vol":0.5,"sys_muted":false,"mic_vol":1.0,"mic_muted":true}"#).unwrap();
+        assert_eq!(m.gain("sys"), 0.5);
+        assert_eq!(m.gain("mic"), 0.0);
+        assert_eq!(m.gain("game"), 1.0);
+        let saved = serde_json::to_value(m.normalized()).unwrap();
+        assert_eq!(saved, serde_json::json!({"tracks": {"mic": {"vol": 1.0, "muted": true}, "sys": {"vol": 0.5, "muted": false}}}));
+    }
+
+    #[test]
+    fn a_track_at_full_volume_leaves_the_mix_untouched() {
+        let mut m = MixerState::default();
+        assert!(m.untouched());
+        m.tracks.insert("app:discord.exe".into(), TrackMix { vol: 1.0, muted: false });
+        assert!(m.untouched());
+        m.tracks.insert("game".into(), TrackMix { vol: 0.3, muted: false });
+        assert!(!m.untouched());
+        assert_eq!(m.gain("game"), 0.3);
     }
 }

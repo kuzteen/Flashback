@@ -23,8 +23,9 @@ pub fn init_moov(tracks: &[Track]) -> Vec<u8> {
     let moov = b.open(b"moov");
     mvhd(&mut b, 0, tracks.len());
     let empty = Table::default();
+    let main = main_audio(tracks);
     for (i, t) in tracks.iter().enumerate() {
-        trak(&mut b, t, i as u32 + 1, &empty, false);
+        trak(&mut b, t, i as u32 + 1, &empty, false, main == Some(i));
     }
     let mvex = b.open(b"mvex");
     for i in 0..tracks.len() {
@@ -47,11 +48,19 @@ pub fn final_moov(tracks: &[Track], tables: &[Table]) -> Vec<u8> {
         .max()
         .unwrap_or(0);
     mvhd(&mut b, duration, tracks.len());
+    let main = main_audio(tracks);
     for (i, (t, tab)) in tracks.iter().zip(tables).enumerate() {
-        trak(&mut b, t, i as u32 + 1, tab, true);
+        trak(&mut b, t, i as u32 + 1, tab, true, main == Some(i));
     }
     b.close(moov);
     b.b
+}
+
+// Un reproductor suena la pista de audio activada; QuickTime suena a la vez todas las activadas que
+// no compartan grupo. Solo la primera (la mezcla) va activada y todas comparten grupo, así ninguno
+// duplica el audio sumando la mezcla y las pistas sueltas.
+fn main_audio(tracks: &[Track]) -> Option<usize> {
+    tracks.iter().position(|t| !t.is_video())
 }
 
 fn to_movie(t: u64, timescale: u32) -> u64 {
@@ -82,7 +91,7 @@ fn mvhd(b: &mut Buf, duration: u64, tracks: usize) {
     b.close(s);
 }
 
-fn trak(b: &mut Buf, t: &Track, id: u32, tab: &Table, complete: bool) {
+fn trak(b: &mut Buf, t: &Track, id: u32, tab: &Table, complete: bool, main: bool) {
     let ts = t.timescale();
     let media = tab.end().saturating_sub(tab.first_start());
     let delay = to_movie(tab.first_start(), ts);
@@ -90,13 +99,15 @@ fn trak(b: &mut Buf, t: &Track, id: u32, tab: &Table, complete: bool) {
     let trak = b.open(b"trak");
 
     let v1 = wide(presented);
-    let s = b.open_full(b"tkhd", v1 as u8, 3);
+    let flags = if t.is_video() || main { 3 } else { 2 };
+    let s = b.open_full(b"tkhd", v1 as u8, flags);
     if v1 {
         b.u64(0).u64(0).u32(id).u32(0).u64(presented);
     } else {
         b.u32(0).u32(0).u32(id).u32(0).u32(presented as u32);
     }
-    b.zeros(8).u16(0).u16(0).u16(if t.is_video() { 0 } else { 0x100 }).u16(0);
+    let (group, volume) = if t.is_video() { (0, 0) } else { (1, 0x100) };
+    b.zeros(8).u16(0).u16(group).u16(volume).u16(0);
     matrix(b);
     match t.codec {
         Codec::H264 { width, height, .. } => b.u32(width << 16).u32(height << 16),
@@ -134,13 +145,14 @@ fn trak(b: &mut Buf, t: &Track, id: u32, tab: &Table, complete: bool) {
     b.u16(0x55C4).u16(0);
     b.close(s);
 
-    let (handler, name): (&[u8; 4], &[u8]) = if t.is_video() {
-        (b"vide", b"VideoHandler\0")
-    } else {
-        (b"soun", b"SoundHandler\0")
+    let handler: &[u8; 4] = if t.is_video() { b"vide" } else { b"soun" };
+    let name = match (&t.label, t.is_video()) {
+        (Some((_, name)), _) => name.as_str(),
+        (None, true) => "VideoHandler",
+        (None, false) => "SoundHandler",
     };
     let s = b.open_full(b"hdlr", 0, 0);
-    b.u32(0).bytes(handler).zeros(12).bytes(name);
+    b.u32(0).bytes(handler).zeros(12).bytes(name.as_bytes()).u8(0);
     b.close(s);
 
     let minf = b.open(b"minf");
@@ -170,6 +182,13 @@ fn trak(b: &mut Buf, t: &Track, id: u32, tab: &Table, complete: bool) {
     b.close(stbl);
     b.close(minf);
     b.close(mdia);
+    if let Some((id, _)) = &t.label {
+        let udta = b.open(b"udta");
+        let s = b.open(b"fbid");
+        b.bytes(id.as_bytes());
+        b.close(s);
+        b.close(udta);
+    }
     b.close(trak);
 }
 
@@ -310,6 +329,25 @@ mod tests {
         assert_eq!(be32(&d, mvhd.body.start + 12), 1000);
         assert_eq!(be32(&d, mvhd.body.start + 16), 64);
         assert_eq!(find(&tree, "moov/trak/mdia/minf/stbl/stss").len(), 1);
+    }
+
+    #[test]
+    fn only_the_first_audio_track_is_enabled_and_all_share_a_group() {
+        let mut t = tracks();
+        t[1] = Track::aac(48_000, 2, 160_000, &USER_DATA).unwrap().labeled("mix", "Mix");
+        t[2] = Track::aac(48_000, 1, 96_000, &USER_DATA).unwrap().labeled("mic", "Micrófono");
+        let d = init_moov(&t);
+        let tree = parse(&d);
+        let tkhd = find(&tree, "moov/trak/tkhd");
+        let flags = |i: usize| be32(&d, tkhd[i].body.start) & 0xFF_FFFF;
+        assert_eq!((flags(0), flags(1), flags(2)), (3, 3, 2));
+        let group = |i: usize| u16::from_be_bytes([d[tkhd[i].body.start + 34], d[tkhd[i].body.start + 35]]);
+        assert_eq!((group(0), group(1), group(2)), (0, 1, 1));
+        let hdlr = find(&tree, "moov/trak/mdia/hdlr");
+        assert_eq!(&body(&d, hdlr[2])[24..], "Micrófono\0".as_bytes());
+        let ids = find(&tree, "moov/trak/udta/fbid");
+        assert_eq!(ids.len(), 2);
+        assert_eq!(body(&d, ids[0]), b"mix");
     }
 
     #[test]

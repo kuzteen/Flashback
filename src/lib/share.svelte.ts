@@ -170,7 +170,7 @@ function editFor(clip: Clip): ShareEdit {
   return (
     shareState.edit ?? {
       segments: [{ start_ms: 0, end_ms: clip.durationSec * 1000 }],
-      mixer: { sys_vol: 1, sys_muted: false, mic_vol: 1, mic_muted: false }
+      mixer: { tracks: {} }
     }
   );
 }

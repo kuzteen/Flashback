@@ -98,8 +98,7 @@ pub fn is_identity(edit: &ClipEdit, duration_s: f64) -> bool {
     if s.disabled.unwrap_or(false) {
         return false;
     }
-    let m = &edit.mixer;
-    if m.sys_muted || m.mic_muted || (m.sys_vol - 1.0).abs() > 0.001 || (m.mic_vol - 1.0).abs() > 0.001 {
+    if !edit.mixer.untouched() {
         return false;
     }
     // 50 ms de holgura: la duración del contenedor y la del último frame no cuadran al milisegundo.
@@ -257,7 +256,7 @@ mod tests {
     #[test]
     fn muted_track_is_not_identity() {
         let mut e = edit(0.0, 60_000.0);
-        e.mixer.mic_muted = true;
+        e.mixer.tracks.insert("mic".into(), crate::editor::TrackMix { vol: 1.0, muted: true });
         assert!(!is_identity(&e, 60.0));
     }
 }

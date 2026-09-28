@@ -19,6 +19,7 @@ export const SETTINGS_SECTIONS = [
     subs: [
       { id: 'replay', labelKey: 'settings.group.replay' },
       { id: 'video', labelKey: 'settings.group.video' },
+      { id: 'audio', labelKey: 'settings.group.audio' },
       { id: 'mic', labelKey: 'settings.group.mic' },
       { id: 'advanced', labelKey: 'settings.group.advanced' }
     ]

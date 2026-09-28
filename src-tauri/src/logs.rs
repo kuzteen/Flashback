@@ -245,8 +245,19 @@ pub fn log_system(version: &str) {
 }
 
 #[cfg(target_os = "windows")]
+pub fn windows_build() -> Option<u32> {
+    static BUILD: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    *BUILD.get_or_init(|| reg_string("CurrentBuild")?.parse().ok())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn windows_build() -> Option<u32> {
+    None
+}
+
+#[cfg(target_os = "windows")]
 fn windows_version() -> Option<String> {
-    let build: u32 = reg_string("CurrentBuild")?.parse().ok()?;
+    let build = windows_build()?;
     let name = if build >= 22000 { "Windows 11" } else { "Windows 10" };
     let display = reg_string("DisplayVersion").unwrap_or_default();
     let ubr = reg_dword("UBR").map(|u| format!(".{u}")).unwrap_or_default();
