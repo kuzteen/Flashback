@@ -11,6 +11,8 @@ PASS_FILE="src-tauri/.tauri/flashback.key.pass"
 [ -f "$KEY_FILE" ] || { echo "missing $KEY_FILE"; exit 1; }
 [ -f "$PASS_FILE" ] || { echo "missing $PASS_FILE"; exit 1; }
 
+[ -n "${STEAMGRIDDB_API_KEY:-}" ] || { echo "missing STEAMGRIDDB_API_KEY (game backgrounds would not load in the release)"; exit 1; }
+
 export TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY_FILE")"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(cat "$PASS_FILE")"
 

@@ -62,16 +62,32 @@ struct SteamGameData {
     id: u32,
 }
 
-fn api_key(app: &tauri::AppHandle) -> Option<String> {
-    if let Ok(k) = std::env::var("STEAMGRIDDB_API_KEY") {
-        let k = k.trim().to_string();
-        if !k.is_empty() {
-            return Some(k);
-        }
+// Claves de SteamGridDB incluidas al compilar (varias separadas por comas): sin ellas, los juegos
+// que no están en Steam ni en la Microsoft Store (LoL, Valorant...) se quedan sin fondo. La del
+// usuario, si la hay (variable de entorno o steamgriddb.key), manda sobre estas.
+const BUILT_IN_KEYS: Option<&str> = option_env!("STEAMGRIDDB_API_KEY");
+
+fn split_keys(raw: &str) -> Vec<String> {
+    raw.split(',').map(str::trim).filter(|k| !k.is_empty()).map(str::to_string).collect()
+}
+
+// Con varias claves se reparten las peticiones por turnos, para no agotar el límite de una sola.
+fn pick_key(keys: &[String]) -> Option<String> {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    if keys.is_empty() {
+        return None;
     }
-    let path = app.path().app_config_dir().ok()?.join("steamgriddb.key");
-    let k = std::fs::read_to_string(path).ok()?.trim().to_string();
-    (!k.is_empty()).then_some(k)
+    let i = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    keys.get(i % keys.len()).cloned()
+}
+
+fn api_key(app: &tauri::AppHandle) -> Option<String> {
+    let own = std::env::var("STEAMGRIDDB_API_KEY").ok().map(|k| split_keys(&k)).filter(|k| !k.is_empty());
+    let own = own.or_else(|| {
+        let path = app.path().app_config_dir().ok()?.join("steamgriddb.key");
+        Some(split_keys(&std::fs::read_to_string(path).ok()?)).filter(|k| !k.is_empty())
+    });
+    pick_key(&own.unwrap_or_else(|| split_keys(BUILT_IN_KEYS.unwrap_or_default())))
 }
 
 fn slug(name: &str) -> String {
@@ -506,6 +522,17 @@ mod search_cache_tests {
         let new = discord_icon_file("https://cdn.discordapp.com/app-icons/700/e55f.png");
         assert_eq!(old, "art-discord-11f8");
         assert_ne!(old, new);
+    }
+
+    #[test]
+    fn several_keys_are_split_and_taken_in_turns() {
+        let keys = split_keys(" aaa, bbb ,,ccc\n");
+        assert_eq!(keys, ["aaa", "bbb", "ccc"]);
+        let picked: Vec<_> = (0..6).filter_map(|_| pick_key(&keys)).collect();
+        assert_eq!(picked.len(), 6);
+        assert!(keys.iter().all(|k| picked.contains(k)));
+        assert!(split_keys("  ").is_empty());
+        assert_eq!(pick_key(&[]), None);
     }
 
     #[test]
