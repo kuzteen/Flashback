@@ -18,7 +18,7 @@ const FADE_IN_SECS: f64 = 0.005;
 const FADE_OUT_SECS: f64 = 0.015;
 
 #[cfg(target_os = "windows")]
-static DEFAULT_WAV: &[u8] = include_bytes!("../../static/sounds/replay-saved.wav");
+static DEFAULT_WAV: &[u8] = include_bytes!("../sounds/replay-saved.wav");
 
 struct State {
     gain: f32,

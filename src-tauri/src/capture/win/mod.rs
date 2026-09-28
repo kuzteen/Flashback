@@ -2625,14 +2625,20 @@ fn read_sample(sample: &IMFSample) -> Option<(Vec<u8>, i64, i64, bool)> {
 }
 
 // True si el bitstream Annex B contiene una unidad NAL IDR (tipo 5): el inicio de un
-// GOP por el que se puede empezar a decodificar (y por tanto a muxear el replay).
+// GOP por el que se puede empezar a decodificar (y por tanto a muxear el replay). Todas las
+// slices de una imagen IDR son de tipo 5, así que basta con mirar la primera slice (tipos 1-5):
+// se para ahí en vez de recorrer el fotograma entero, que se hacía con cada fotograma P.
 fn contains_idr(data: &[u8]) -> bool {
     let mut i = 0usize;
     while i + 3 <= data.len() {
         if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
             let header_pos = i + 3;
-            if header_pos < data.len() && (data[header_pos] & 0x1F) == 5 {
-                return true;
+            if header_pos < data.len() {
+                match data[header_pos] & 0x1F {
+                    5 => return true,
+                    1..=4 => return false,
+                    _ => {}
+                }
             }
             i += 3;
         } else {
@@ -3178,6 +3184,17 @@ mod tests {
         assert_eq!(rec.mux.dims(), (1280, 720));
         let _ = rec.finish();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn contains_idr_stops_at_first_slice() {
+        let idr = [0, 0, 0, 1, 0x67, 0x42, 0, 0, 1, 0x68, 0xCE, 0, 0, 1, 0x65, 0x88];
+        let p = [0, 0, 0, 1, 0x09, 0xF0, 0, 0, 1, 0x41, 0x9A, 0, 0, 1, 0x65, 0x88];
+        let sei_then_idr = [0, 0, 1, 0x06, 0x05, 0x01, 0, 0, 1, 0x25, 0xB8];
+        assert!(contains_idr(&idr));
+        assert!(!contains_idr(&p));
+        assert!(contains_idr(&sei_then_idr));
+        assert!(!contains_idr(&[0, 0, 1, 0x67, 0x42]));
     }
 
     #[test]

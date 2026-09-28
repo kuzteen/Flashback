@@ -430,7 +430,7 @@ fn pump_stream(
             }
 
             if !pcm16.is_empty() && frames > 0 {
-                let mut out = downmix(&pcm16, stream.channels as usize, dst_ch as usize);
+                let mut out = downmix(pcm16, stream.channels as usize, dst_ch as usize);
                 let dur = (frames as i64 * 10_000_000) / sample_rate.max(1) as i64;
                 let mut time = qpc as i64;
                 if let Some(d) = denoiser {
@@ -507,9 +507,9 @@ pub fn track_format(kind: &TrackKind, rate: u32, channels: u16) -> (u32, u16) {
 // matriz estándar (frontales íntegros, central y surround a 0.707) y satura a i16; LFE
 // (índice 3) se descarta. Si src==dst no transforma. Mantiene el audio inteligible cuando
 // la salida del sistema es 5.1/7.1, que el encoder AAC no aceptaría.
-fn downmix(pcm: &[u8], src: usize, dst: usize) -> Vec<u8> {
+fn downmix(pcm: Vec<u8>, src: usize, dst: usize) -> Vec<u8> {
     if src == dst || src == 0 {
-        return pcm.to_vec();
+        return pcm;
     }
     let frames = pcm.len() / (src * 2);
     let rd = |i: usize| i16::from_le_bytes([pcm[i * 2], pcm[i * 2 + 1]]) as f32;
