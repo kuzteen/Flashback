@@ -1,18 +1,21 @@
 // Rich Presence de Discord (opt-in, off por defecto). Un hilo en segundo plano mantiene la
 // conexión IPC con el cliente de Discord y refresca la presencia según el estado (grabando /
-// Instant Replay / biblioteca) y el juego detectado. Aislado del camino de captura: solo lee
+// Instant Replay / biblioteca) y el juego detectado; el tiempo cuenta desde el juego actual o
+// la vuelta a la biblioteca, no desde que se abrió la app. Aislado del camino de captura: solo lee
 // estado cada pocos segundos y reconecta solo si Discord se cierra/abre.
 
 use std::collections::HashMap;
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use discord_rich_presence::activity::{Activity, Assets, Timestamps};
+use discord_rich_presence::activity::{Activity, Assets, Button, Timestamps};
 use discord_rich_presence::{DiscordIpc, DiscordIpcClient};
 
 const APP_ID: &str = "1495797767245922498";
 // Asset subido en la app de Discord (Rich Presence → Art Assets) con el logo de Flashback.
 const FLASHBACK_ASSET: &str = "flashback";
+const DOWNLOAD_URL: &str = "https://github.com/kuzteen/Flashback/releases/latest";
+const SUPPORT_URL: &str = "https://discord.gg/WckwXRrhrR";
 
 struct Shared {
     enabled: bool,
@@ -55,15 +58,30 @@ fn wait(dur: Duration) {
     }
 }
 
-fn run() {
-    let started = SystemTime::now()
+struct Presence {
+    // Juego que se está capturando; None es la biblioteca. Al cambiar se reinicia el tiempo.
+    game: Option<String>,
+    name: String,
+    details: String,
+    large_image: String,
+    large_text: String,
+    buttons: [&'static str; 2],
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn run() {
     let mut client: Option<DiscordIpcClient> = None;
     let mut last_key = String::new();
+    let mut last_game: Option<String> = None;
+    let mut started = now_ms();
     // Arte resuelto por nombre de juego: una sola llamada HTTP por juego (URL pública o el
-    // asset de fallback). Se puebla perezosamente en presence_fields.
+    // asset de fallback). Se puebla perezosamente en presence.
     let mut art_cache: HashMap<String, String> = HashMap::new();
 
     loop {
@@ -81,41 +99,43 @@ fn run() {
 
         // Asegurar conexión: si Discord no está abierto, reintentar en 15 s.
         if client.is_none() {
-            if let Ok(mut c) = DiscordIpcClient::new(APP_ID) {
-                if c.connect().is_ok() {
-                    client = Some(c);
-                    last_key.clear();
-                }
-            }
-            if client.is_none() {
+            let mut c = DiscordIpcClient::new(APP_ID);
+            if c.connect().is_ok() {
+                client = Some(c);
+                last_key.clear();
+            } else {
                 wait(Duration::from_secs(15));
                 continue;
             }
         }
 
-        let (details, state_line, large_image, large_text) = presence_fields(&mut art_cache);
+        let p = presence(&mut art_cache);
+        if p.game != last_game {
+            last_game = p.game.clone();
+            started = now_ms();
+        }
         // Solo se reenvía a Discord si algo cambió (evita spam de set_activity).
-        let key = format!("{details}\u{1}{state_line}\u{1}{large_image}\u{1}{large_text}");
+        let key = format!(
+            "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{started}",
+            p.name, p.details, p.large_image, p.large_text
+        );
         if key != last_key {
             if let Some(c) = client.as_mut() {
                 let mut assets = Assets::new()
-                    .small_image(FLASHBACK_ASSET)
-                    .small_text("Flashback");
-                if !large_image.is_empty() {
-                    assets = assets.large_image(&large_image);
+                    .large_image(p.large_image.as_str())
+                    .large_text(p.large_text.as_str());
+                if p.game.is_some() {
+                    assets = assets.small_image(FLASHBACK_ASSET).small_text("Flashback");
                 }
-                if !large_text.is_empty() {
-                    assets = assets.large_text(&large_text);
-                }
-                let mut act = Activity::new()
+                let act = Activity::new()
+                    .name(p.name.as_str())
+                    .details(p.details.as_str())
                     .assets(assets)
+                    .buttons(vec![
+                        Button::new(p.buttons[0], DOWNLOAD_URL),
+                        Button::new(p.buttons[1], SUPPORT_URL),
+                    ])
                     .timestamps(Timestamps::new().start(started));
-                if !details.is_empty() {
-                    act = act.details(&details);
-                }
-                if !state_line.is_empty() {
-                    act = act.state(&state_line);
-                }
                 if c.set_activity(act).is_err() {
                     // Conexión caída (Discord cerrado): reconectar en el próximo ciclo.
                     let _ = c.close();
@@ -132,34 +152,59 @@ fn run() {
     }
 }
 
-// Detalle según captura; el juego detectado va como imagen grande (arte) + línea de estado.
-fn presence_fields(art_cache: &mut HashMap<String, String>) -> (String, String, String, String) {
+// Con un juego capturándose, la tarjeta es del juego ("Valorant con Flashback", su arte en
+// grande y el logo en pequeño); si no, la de Flashback con el estado de la app.
+fn presence(art_cache: &mut HashMap<String, String>) -> Presence {
     let es = APP
         .get()
         .map(|app| crate::config::get_language(app) == "es")
         .unwrap_or(false);
-    let details = if crate::capture::status().running {
-        if es { "Grabando" } else { "Recording" }
-    } else if crate::capture::replay_active() {
-        if es { "Instant Replay activo" } else { "Instant Replay active" }
-    } else if es {
-        "En la biblioteca"
+    let buttons = if es {
+        ["Descargar Flashback", "Soporte"]
     } else {
-        "In the library"
-    }
-    .to_string();
+        ["Get Flashback", "Need help?"]
+    };
+    let recording = crate::capture::status().running;
+    let replay = crate::capture::replay_active();
 
-    match crate::detect::current_game() {
-        Some(g) => {
-            let large_image = art_url(art_cache, &g);
-            (details, g.name.clone(), large_image, g.name)
+    if recording || replay {
+        if let Some(g) = crate::detect::current_game() {
+            let details = match (recording, es) {
+                (true, true) => "Grabando la partida",
+                (true, false) => "Recording gameplay",
+                (false, true) => "Clipeando cada jugada",
+                (false, false) => "Clipping every play",
+            };
+            return Presence {
+                name: if es {
+                    format!("{} con Flashback", g.name)
+                } else {
+                    format!("{} with Flashback", g.name)
+                },
+                details: details.to_string(),
+                large_image: art_url(art_cache, &g),
+                large_text: g.name.clone(),
+                game: Some(g.name),
+                buttons,
+            };
         }
-        None => (
-            details,
-            String::new(),
-            FLASHBACK_ASSET.to_string(),
-            "Flashback".to_string(),
-        ),
+    }
+
+    let details = match (recording, replay, es) {
+        (true, _, true) => "Grabando",
+        (true, _, false) => "Recording",
+        (false, true, true) => "Instant Replay activo",
+        (false, true, false) => "Instant Replay active",
+        (false, false, true) => "En la biblioteca",
+        (false, false, false) => "In the library",
+    };
+    Presence {
+        game: None,
+        name: "Flashback".to_string(),
+        details: details.to_string(),
+        large_image: FLASHBACK_ASSET.to_string(),
+        large_text: "Flashback".to_string(),
+        buttons,
     }
 }
 
