@@ -208,7 +208,6 @@ pub fn start(
     fps: u32,
     quality: String,
     resolution: u32,
-    bitrate: u32,
     mic: bool,
     mic_device: String,
     encoder_pref: String,
@@ -238,7 +237,7 @@ pub fn start(
 
     let fps = clamp_fps(fps);
     log::info!(
-        "grabación manual: iniciando pipeline propio ({source}; objetivo={target}, {fps} fps, calidad={quality}, {resolution}p, bitrate={bitrate}, mic={mic}, encoder={encoder_pref})"
+        "grabación manual: iniciando pipeline propio ({source}; objetivo={target}, {fps} fps, calidad={quality}, {resolution}p, mic={mic}, encoder={encoder_pref})"
     );
     let factor = bitrate_factor(&quality);
     let stats = Arc::new(Stats::default());
@@ -254,7 +253,7 @@ pub fn start(
         .spawn(move || {
             contain_panic("capture", || {
                 capture_thread(
-                    target, out_dir, fps, factor, resolution, bitrate, mic, mic_device,
+                    target, out_dir, fps, factor, resolution, mic, mic_device,
                     encoder_pref, stop_t, stats_t, result_t, ready_tx,
                 )
             })
@@ -369,7 +368,6 @@ fn capture_thread(
     fps: u32,
     factor: f64,
     resolution: u32,
-    bitrate_override: u32,
     mic: bool,
     mic_device: String,
     encoder_pref: String,
@@ -388,7 +386,7 @@ fn capture_thread(
     // volcando los paquetes a un muxer en directo (LiveMux) en vez de al ring buffer.
     let (pipe, mux, video_sink) = match resolve_target_item(&target).and_then(|item| {
         build_manual(
-            &stats, item, &out_dir, fps, factor, resolution, bitrate_override, mic, mic_device,
+            &stats, item, &out_dir, fps, factor, resolution, mic, mic_device,
             &encoder_pref,
         )
         .map_err(|e| format!("{e:?}"))
@@ -780,7 +778,6 @@ pub fn start_replay(
     fps: u32,
     quality: String,
     resolution: u32,
-    bitrate: u32,
     mic: bool,
     mic_device: String,
     encoder_pref: String,
@@ -799,7 +796,7 @@ pub fn start_replay(
 
     let fps = clamp_fps(fps);
     log::info!(
-        "replay: iniciando (objetivo={target}, {seconds} s, {fps} fps, calidad={quality}, {resolution}p, bitrate={bitrate}, mic={mic}, encoder={encoder_pref})"
+        "replay: iniciando (objetivo={target}, {seconds} s, {fps} fps, calidad={quality}, {resolution}p, mic={mic}, encoder={encoder_pref})"
     );
     let factor = bitrate_factor(&quality);
     let stop = Arc::new(AtomicBool::new(false));
@@ -816,7 +813,7 @@ pub fn start_replay(
         .spawn(move || {
             contain_panic("replay", || {
                 replay_thread(
-                    target, seconds, fps, factor, resolution, bitrate, mic, mic_device,
+                    target, seconds, fps, factor, resolution, mic, mic_device,
                     encoder_pref, stop_t, buf_t, stats, ready_tx, on_retarget, card_text,
                 )
             })
@@ -995,7 +992,6 @@ fn replay_thread(
     fps: u32,
     factor: f64,
     resolution: u32,
-    bitrate_override: u32,
     mic: bool,
     mic_device: String,
     encoder_pref: String,
@@ -1035,7 +1031,7 @@ fn replay_thread(
         }
         let built = resolve_target_item(&target).and_then(|item| {
             build_replay(
-                &buffer, &stats, item, fps, factor, resolution, bitrate_override, mic,
+                &buffer, &stats, item, fps, factor, resolution, mic,
                 mic_device.clone(), &encoder_pref, window_mode, &card_text,
             )
             .map_err(|e| format!("{e:?}"))
@@ -1301,7 +1297,6 @@ fn build_pipeline_core(
     fps: u32,
     factor: f64,
     resolution: u32,
-    bitrate_override: u32,
     encoder_pref: &str,
     window_mode: bool,
     card_text: Option<&str>,
@@ -1322,7 +1317,7 @@ fn build_pipeline_core(
     // Captura a nativo (width/height); el conversor escala al objetivo (out_*), que es
     // la resolución codificada y guardada. El bitrate se calcula sobre la salida.
     let (out_w, out_h) = output_dims(width, height, resolution);
-    let bitrate = resolve_bitrate(out_w, out_h, fps, factor, bitrate_override);
+    let bitrate = target_bitrate(out_w, out_h, fps, factor);
 
     // Device manager compartido (zero-copy GPU) y device protegido para multihilo.
     let mut token = 0u32;
@@ -1601,7 +1596,6 @@ fn build_replay(
     fps: u32,
     factor: f64,
     resolution: u32,
-    bitrate_override: u32,
     mic: bool,
     mic_device: String,
     encoder_pref: &str,
@@ -1611,7 +1605,7 @@ fn build_replay(
     let layout = plan_audio(mic, &mic_device);
 
     let core = build_pipeline_core(
-        stats, item, fps, factor, resolution, bitrate_override, encoder_pref, window_mode,
+        stats, item, fps, factor, resolution, encoder_pref, window_mode,
         Some(card_text), true,
     )?;
     let PipelineCore { mut pipe, out_w, out_h, bitrate, video_base } = core;
@@ -1645,7 +1639,6 @@ fn build_manual(
     fps: u32,
     factor: f64,
     resolution: u32,
-    bitrate_override: u32,
     mic: bool,
     mic_device: String,
     encoder_pref: &str,
@@ -1653,7 +1646,7 @@ fn build_manual(
     let layout = plan_audio(mic, &mic_device);
 
     let core = build_pipeline_core(
-        stats, item, fps, factor, resolution, bitrate_override, encoder_pref, false, None, false,
+        stats, item, fps, factor, resolution, encoder_pref, false, None, false,
     )?;
     let PipelineCore { mut pipe, out_w, out_h, video_base, .. } = core;
 
@@ -2794,16 +2787,16 @@ fn pack2(high: u32, low: u32) -> u64 {
     ((high as u64) << 32) | low as u64
 }
 
-// Bits por píxel y frame según calidad (bitrate = ancho·alto·fps·factor). Calibrado con
-// SteelSeries Moments a 1080p60: Bajo ≈ 19, Medio ≈ 34, Alto ≈ 50, Muy alta ≈ 90,
-// Ultra ≈ 130 Mbps. Debe coincidir con qualityFactor() del frontend (estimación de tamaño).
+// Bits por píxel y frame según calidad (bitrate = ancho·alto·fps·factor). A 1080p60: Bajo ≈ 8,
+// Medio ≈ 12, Alto ≈ 20, Muy alto ≈ 30, Ultra ≈ 50 Mbps. El replay guarda esos bits en RAM (Alto,
+// 5 min ≈ 750 MB). Debe coincidir con qualityFactor() del frontend (estimación de tamaño).
 fn bitrate_factor(quality: &str) -> f64 {
     match quality {
-        "low" => 0.15,
-        "normal" => 0.27,
-        "veryhigh" => 0.72,
-        "ultra" => 1.05,
-        _ => 0.40, // "high" (Alto, por defecto)
+        "low" => 0.06,
+        "normal" => 0.10,
+        "veryhigh" => 0.24,
+        "ultra" => 0.40,
+        _ => 0.16, // "high" (Alto, por defecto)
     }
 }
 
@@ -2811,10 +2804,10 @@ fn clamp_fps(fps: u32) -> u32 {
     fps.clamp(10, 240)
 }
 
-// Techo del bitrate automático. Por encima no se gana nada visible en un clip y el replay lo paga
+// Techo del bitrate. Por encima no se gana nada visible en un clip y el replay lo paga
 // en RAM (a 150 Mbps, un minuto de buffer ya son ~1,1 GB). También deja el pico del VBR (1,75x)
 // por debajo de los 300 Mbps que admite H.264 High en los niveles 5.1/5.2, donde caen 1440p/4K.
-const MAX_AUTO_BITRATE: u32 = 150_000_000;
+const MAX_BITRATE: u32 = 150_000_000;
 
 // FPS que cuentan para el bitrate. Hasta 60, todos; por encima crecen con la raíz: a más FPS cada
 // fotograma se parece más al anterior y el encoder lo aprovecha, así que 240 FPS no necesitan 4
@@ -2828,21 +2821,10 @@ fn effective_fps(fps: u32) -> f64 {
     }
 }
 
-// Piso de 1 Mbps: solo como red de seguridad para combos extremos (p. ej. 480p/20fps/Bajo);
-// por encima de eso los cuatro niveles de calidad se diferencian en todas las resoluciones.
+// Piso de 1 Mbps: red de seguridad para los combos más ligeros (480p a 20-30 FPS en Bajo o Medio).
 fn target_bitrate(width: u32, height: u32, fps: u32, factor: f64) -> u32 {
     let bps = (width as u64 * height as u64) as f64 * effective_fps(fps) * factor;
-    (bps as u32).clamp(1_000_000, MAX_AUTO_BITRATE)
-}
-
-// Bitrate final del encoder: el valor personalizado (bps) si el usuario lo fijó
-// (override > 0), o el automático según resolución/fps/calidad.
-fn resolve_bitrate(width: u32, height: u32, fps: u32, factor: f64, override_bps: u32) -> u32 {
-    if override_bps > 0 {
-        override_bps
-    } else {
-        target_bitrate(width, height, fps, factor)
-    }
+    (bps as u32).clamp(1_000_000, MAX_BITRATE)
 }
 
 // Dimensiones de salida dadas las de captura y un alto objetivo (0 = nativo). Se
@@ -3046,9 +3028,8 @@ fn variant_bool(val: bool) -> VARIANT {
     v
 }
 
-// Pico de VBR = 1.75x la media: da margen a las escenas complejas sin disparar el tamaño. Con
-// un bitrate personalizado muy alto se limita a los 300 Mbps de H.264 High 5.1/5.2, que es lo que
-// admiten los encoders por hardware. u64 evita el overflow de la multiplicación.
+// Pico de VBR = 1.75x la media: da margen a las escenas complejas sin disparar el tamaño. Nunca
+// pasa de los 300 Mbps de H.264 High 5.1/5.2, lo que admiten los encoders por hardware.
 fn peak_bitrate(mean: u32) -> u32 {
     (mean as u64 * 7 / 4).min(300_000_000) as u32
 }
@@ -3305,29 +3286,30 @@ mod tests {
     }
 
     #[test]
-    fn resolve_bitrate_override_and_floor() {
-        assert_eq!(resolve_bitrate(1920, 1080, 60, 0.40, 5_000_000), 5_000_000);
+    fn bitrate_floor_and_order() {
         // Combo ligero: por debajo del piso de 1 Mbps.
-        assert_eq!(target_bitrate(640, 360, 20, 0.15), 1_000_000);
+        assert_eq!(target_bitrate(640, 360, 20, bitrate_factor("low")), 1_000_000);
         // Más resolución/fps/calidad => más bitrate (sin depender de la exactitud del f64).
-        assert!(target_bitrate(1920, 1080, 60, 0.40) > target_bitrate(1280, 720, 60, 0.40));
-        assert!(target_bitrate(1920, 1080, 60, 0.40) > target_bitrate(1920, 1080, 30, 0.40));
+        let high = bitrate_factor("high");
+        assert!(target_bitrate(1920, 1080, 60, high) > target_bitrate(1280, 720, 60, high));
+        assert!(target_bitrate(1920, 1080, 60, high) > target_bitrate(1920, 1080, 30, high));
+        let ladder = ["low", "normal", "high", "veryhigh", "ultra"].map(|q| target_bitrate(1920, 1080, 60, bitrate_factor(q)));
+        assert!(ladder.windows(2).all(|w| w[0] < w[1]), "{ladder:?}");
     }
 
     #[test]
     fn bitrate_grows_slower_above_60_fps_and_has_a_ceiling() {
-        let high = 0.40;
-        // 1080p60 Alto sigue en ~50 Mbps: los niveles están calibrados ahí.
+        let high = bitrate_factor("high");
+        let ultra = bitrate_factor("ultra");
+        // 1080p60 Alto en ~20 Mbps: los niveles están calibrados ahí.
         let base = target_bitrate(1920, 1080, 60, high);
-        assert!((49_000_000..=50_500_000).contains(&base), "{base}");
+        assert!((19_500_000..=20_500_000).contains(&base), "{base}");
         // 240 FPS cuestan el doble que 60, no el cuádruple.
         let fast = target_bitrate(1920, 1080, 240, high);
         assert!((fast as f64 / base as f64 - 2.0).abs() < 0.01, "{fast}");
-        // 4K60 Alto (~200 Mbps sin techo) y 1440p60 Ultra quedan en el techo.
-        assert_eq!(target_bitrate(3840, 2160, 60, high), MAX_AUTO_BITRATE);
-        assert_eq!(target_bitrate(2560, 1440, 60, 1.05), MAX_AUTO_BITRATE);
-        // Un bitrate personalizado no se toca.
-        assert_eq!(resolve_bitrate(3840, 2160, 60, high, 400_000_000), 400_000_000);
+        // 4K60 Ultra (~200 Mbps sin techo) queda en el techo; 4K60 Alto (~80 Mbps) no.
+        assert_eq!(target_bitrate(3840, 2160, 60, ultra), MAX_BITRATE);
+        assert!(target_bitrate(3840, 2160, 60, high) < MAX_BITRATE);
     }
 
     #[test]
@@ -3628,7 +3610,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let before = process_vram();
         start_replay(
-            monitor.id, dir.to_string_lossy().into_owned(), 10, 60, "high".into(), resolution, 0,
+            monitor.id, dir.to_string_lossy().into_owned(), 10, 60, "high".into(), resolution,
             false, String::new(), "Auto".into(), Box::new(|| {}), String::new(),
         )
         .unwrap();

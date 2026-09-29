@@ -588,7 +588,7 @@ const es: Record<string, string> = {
   'quality.low': 'Bajo',
   'quality.normal': 'Medio',
   'quality.high': 'Alto',
-  'quality.veryhigh': 'Muy alta',
+  'quality.veryhigh': 'Muy alto',
   'quality.ultra': 'Ultra',
 
   'sound.off': 'Apagado',

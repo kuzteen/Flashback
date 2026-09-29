@@ -181,7 +181,6 @@ fn start_replay(app: &AppHandle, target: String, prefs: &CapturePrefs, mic_devic
         prefs.fps,
         prefs.quality.clone(),
         prefs.resolution,
-        0,
         prefs.mic,
         mic_device,
         encoder,

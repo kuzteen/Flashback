@@ -489,7 +489,6 @@ pub fn toggle_recording(app: &AppHandle) {
         prefs.fps,
         prefs.quality,
         prefs.resolution,
-        0,
         prefs.mic,
         mic_device,
         encoder,

@@ -22,9 +22,8 @@ export const PRESET_APPS: AudioApp[] = [
   { exe: 'Spotify.exe', name: 'Spotify', path: '' }
 ];
 
-// Escalera de calidad alineada con SteelSeries Moments (1080p60): Bajo ≈ 19, Medio ≈ 34,
-// Alto ≈ 50, Muy alta ≈ 90, Ultra ≈ 130 Mbps. El bitrate real lo calcula el backend
-// (ancho·alto·fps·factor), así escala con la resolución y los fps.
+// Escalera de calidad (1080p60): Bajo ≈ 8, Medio ≈ 12, Alto ≈ 20, Muy alto ≈ 30, Ultra ≈ 50 Mbps.
+// El bitrate real lo calcula el backend (ancho·alto·fps·factor), así escala con la resolución y los fps.
 export const QUALITY_OPTIONS: { key: QualityKey }[] = [
   { key: 'low' },
   { key: 'normal' },
@@ -108,21 +107,21 @@ export function resolutionLabel(height: number): string {
 export function qualityFactor(quality: QualityKey): number {
   switch (quality) {
     case 'low':
-      return 0.15;
+      return 0.06;
     case 'normal':
-      return 0.27;
+      return 0.1;
     case 'veryhigh':
-      return 0.72;
+      return 0.24;
     case 'ultra':
-      return 1.05;
+      return 0.4;
     default:
-      return 0.4; // high (Alto)
+      return 0.16; // high (Alto)
   }
 }
 
-// Réplica de effective_fps() y MAX_AUTO_BITRATE del backend: por encima de 60 FPS el bitrate
+// Réplica de effective_fps() y MAX_BITRATE del backend: por encima de 60 FPS el bitrate
 // crece con la raíz y nunca pasa de 150 Mbps.
-const MAX_AUTO_BITRATE = 150_000_000;
+const MAX_BITRATE = 150_000_000;
 
 function effectiveFps(fps: number): number {
   return fps <= 60 ? fps : 60 * Math.sqrt(fps / 60);
@@ -134,7 +133,7 @@ function effectiveFps(fps: number): number {
 function videoBitrate(quality: QualityKey, height: number, fps: number): number {
   const width = Math.round((height * 16) / 9 / 2) * 2;
   const bps = width * height * effectiveFps(fps) * qualityFactor(quality);
-  return Math.min(Math.max(bps, 1_000_000), MAX_AUTO_BITRATE);
+  return Math.min(Math.max(bps, 1_000_000), MAX_BITRATE);
 }
 
 // Tamaño aproximado de un clip de `seconds` con los ajustes dados (vídeo + una pista de audio).
