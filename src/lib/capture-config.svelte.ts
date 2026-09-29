@@ -13,8 +13,14 @@ export const FPS_OPTIONS = [20, 30, 60, 120, 240];
 
 export type QualityKey = 'low' | 'normal' | 'high' | 'veryhigh' | 'ultra';
 
-export type AudioMode = 'all' | 'apps';
+export type AudioMode = 'all' | 'game' | 'apps';
 export type AudioApp = { exe: string; name: string; path: string };
+
+// Igual que preset_apps() del backend.
+export const PRESET_APPS: AudioApp[] = [
+  { exe: 'Discord.exe', name: 'Discord', path: '' },
+  { exe: 'Spotify.exe', name: 'Spotify', path: '' }
+];
 
 // Escalera de calidad alineada con SteelSeries Moments (1080p60): Bajo ≈ 19, Medio ≈ 34,
 // Alto ≈ 50, Muy alta ≈ 90, Ultra ≈ 130 Mbps. El bitrate real lo calcula el backend

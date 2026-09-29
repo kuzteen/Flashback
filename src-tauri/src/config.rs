@@ -369,7 +369,7 @@ impl CapturePrefs {
         if !["off", "low", "normal", "high"].contains(&self.sound.as_str()) {
             self.sound = d.sound;
         }
-        if !["all", "apps"].contains(&self.audio_mode.as_str()) {
+        if !["all", "game", "apps"].contains(&self.audio_mode.as_str()) {
             self.audio_mode = d.audio_mode;
         }
         self.audio_apps.retain(|a| !a.exe.trim().is_empty());

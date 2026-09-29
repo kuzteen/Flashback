@@ -27,6 +27,7 @@
     removeAudioApp,
     type AudioApp,
     type AudioMode,
+    PRESET_APPS,
     qualityLabel,
     FPS_OPTIONS,
     QUALITY_OPTIONS,
@@ -59,8 +60,8 @@
     invoke('set_encoder', { enc: opt }).catch(() => {});
   }
 
-  // Modo "Juego y apps": solo se graba el juego y las apps de la lista. Windows 10 no tiene la API,
-  // así que ahí el modo se queda en "Todo el PC".
+  // "Juego y apps" (juego, Discord y Spotify) y "Personalizado" solo graban el juego y sus apps.
+  // Windows 10 no tiene la API, así que ahí el modo se queda en "Todo el PC".
   type AudioAppInfo = AudioApp & { icon: string | null; active: boolean };
   let appsSupported = $state(true);
   invoke<boolean>('audio_apps_supported')
@@ -68,8 +69,10 @@
     .catch(() => {});
   const audioModeOptions = $derived<{ label: string; value: AudioMode }[]>([
     { label: t('audio.all'), value: 'all' },
+    { label: t('audio.game.preset'), value: 'game' },
     { label: t('audio.apps'), value: 'apps' }
   ]);
+  const shownApps = $derived(captureConfig.audioMode === 'game' ? PRESET_APPS : captureConfig.audioApps);
 
   // El juego detectado ocupa la fila del juego con su nombre y su icono, igual que en Ajustes > Juegos.
   type Detected = { name: string; steam_appid: number | null };
@@ -96,7 +99,7 @@
 
   let appIcons = $state<Record<string, string | null>>({});
   $effect(() => {
-    const missing = captureConfig.audioApps.filter((a) => untrack(() => !(a.exe in appIcons)));
+    const missing = shownApps.filter((a) => untrack(() => !(a.exe in appIcons)));
     if (missing.length === 0) return;
     for (const a of missing) appIcons[a.exe] = null;
     for (const a of missing) {
@@ -294,7 +297,7 @@
       ariaLabel={t('settings.audioSource')}
     />
   </SettingRow>
-  {#if appsSupported && captureConfig.audioMode === 'apps'}
+  {#if appsSupported && captureConfig.audioMode !== 'all'}
     <SettingRow
       title={game ? game.name : t('audio.game')}
       desc={game ? t('audio.game.detected') : t('audio.game.desc')}
@@ -310,46 +313,50 @@
         {/if}
       {/snippet}
     </SettingRow>
-    {#each captureConfig.audioApps as app (app.exe)}
+    {#each shownApps as app (app.exe)}
       <SettingRow title={app.name} desc={app.exe} sub>
         {#snippet lead()}{@render appIcon(appIcons[app.exe], 32)}{/snippet}
-        <button
-          class="remove"
-          aria-label={t('audio.remove', { name: app.name })}
-          title={t('audio.remove', { name: app.name })}
-          onclick={() => removeAudioApp(app.exe)}
-        >
-          <Icon name="close" size={14} sw={2} />
-        </button>
+        {#if captureConfig.audioMode === 'apps'}
+          <button
+            class="remove"
+            aria-label={t('audio.remove', { name: app.name })}
+            title={t('audio.remove', { name: app.name })}
+            onclick={() => removeAudioApp(app.exe)}
+          >
+            <Icon name="close" size={14} sw={2} />
+          </button>
+        {/if}
       </SettingRow>
     {/each}
-    <SettingRow title={t('audio.add')} desc={t('audio.add.desc')} sub>
-      <div class="dd" class:open={appMenuOpen} bind:this={appMenuEl}>
-        <button class="dd-trigger" aria-haspopup="menu" aria-expanded={appMenuOpen} onclick={toggleAppMenu}>
-          <span class="dd-value">{t('audio.choose')}</span>
-          <Icon name="chevron-down" size={12} sw={2} />
-        </button>
-        {#if appMenuOpen}
-          <div class="dd-menu" role="menu" use:flip use:hoverPill={{ selector: '.dd-item', axis: 'y' }}>
-            {#each offered as s (s.exe)}
-              <button class="dd-item" role="menuitem" onclick={() => pickApp(s)}>
-                {@render appIcon(s.icon, 20)}
-                <span class="dd-name">{s.name}</span>
-                {#if s.active}<span class="dd-tag">{t('audio.playing')}</span>{/if}
+    {#if captureConfig.audioMode === 'apps'}
+      <SettingRow title={t('audio.add')} desc={t('audio.add.desc')} sub>
+        <div class="dd" class:open={appMenuOpen} bind:this={appMenuEl}>
+          <button class="dd-trigger" aria-haspopup="menu" aria-expanded={appMenuOpen} onclick={toggleAppMenu}>
+            <span class="dd-value">{t('audio.choose')}</span>
+            <Icon name="chevron-down" size={12} sw={2} />
+          </button>
+          {#if appMenuOpen}
+            <div class="dd-menu" role="menu" use:flip use:hoverPill={{ selector: '.dd-item', axis: 'y' }}>
+              {#each offered as s (s.exe)}
+                <button class="dd-item" role="menuitem" onclick={() => pickApp(s)}>
+                  {@render appIcon(s.icon, 20)}
+                  <span class="dd-name">{s.name}</span>
+                  {#if s.active}<span class="dd-tag">{t('audio.playing')}</span>{/if}
+                </button>
+              {/each}
+              {#if offered.length === 0}
+                <span class="dd-empty">{t('audio.noSessions')}</span>
+              {/if}
+              <span class="dd-sep"></span>
+              <button class="dd-item" role="menuitem" onclick={browseApp}>
+                <span class="app-ico" style:--ico="20px"><Icon name="folder-open" size={14} /></span>
+                <span class="dd-name">{t('audio.browse')}</span>
               </button>
-            {/each}
-            {#if offered.length === 0}
-              <span class="dd-empty">{t('audio.noSessions')}</span>
-            {/if}
-            <span class="dd-sep"></span>
-            <button class="dd-item" role="menuitem" onclick={browseApp}>
-              <span class="app-ico" style:--ico="20px"><Icon name="folder-open" size={14} /></span>
-              <span class="dd-name">{t('audio.browse')}</span>
-            </button>
-          </div>
-        {/if}
-      </div>
-    </SettingRow>
+            </div>
+          {/if}
+        </div>
+      </SettingRow>
+    {/if}
   {/if}
 </SettingGroup>
 

@@ -31,7 +31,7 @@ pub fn init(app: &AppHandle) {
     if let Some(p) = &prefs {
         crate::sound::set_gain(p.sound_gain());
         crate::denoise::configure(p.noise_suppression, p.noise_level);
-        crate::appaudio::configure(p.audio_mode == "apps", &p.audio_apps);
+        crate::appaudio::configure(&p.audio_mode, &p.audio_apps);
     }
     state().prefs = prefs.clone();
     let (tx, rx) = channel::<()>();
@@ -68,7 +68,7 @@ pub fn set_prefs(app: &AppHandle, prefs: CapturePrefs) -> Result<Vec<String>, St
     let before = state().prefs.replace(prefs.clone());
     crate::sound::set_gain(prefs.sound_gain());
     crate::denoise::configure(prefs.noise_suppression, prefs.noise_level);
-    crate::appaudio::configure(prefs.audio_mode == "apps", &prefs.audio_apps);
+    crate::appaudio::configure(&prefs.audio_mode, &prefs.audio_apps);
     let failed = if before.as_ref().map(|b| &b.hotkeys) != Some(&prefs.hotkeys) {
         crate::hotkeys::apply(app, &prefs.hotkeys)
     } else {

@@ -36,11 +36,24 @@ pub fn supported() -> bool {
 
 // El modo y la lista deciden qué pistas lleva el clip, y un MP4 declara sus pistas al empezar: cambiar
 // cualquiera de los dos re-arma el replay.
-pub fn configure(apps_only: bool, apps: &[AudioApp]) {
-    *CONFIG.write().unwrap_or_else(|e| e.into_inner()) = (apps_only && supported()).then(|| apps.to_vec());
+pub fn configure(mode: &str, apps: &[AudioApp]) {
+    let list = match mode {
+        "game" => Some(preset_apps()),
+        "apps" => Some(apps.to_vec()),
+        _ => None,
+    };
+    *CONFIG.write().unwrap_or_else(|e| e.into_inner()) = list.filter(|_| supported());
 }
 
-// Apps elegidas, si está activo el modo "Juego y apps".
+// Modo "Juego y apps": la lista fija que la interfaz enseña en `PRESET_APPS`.
+pub fn preset_apps() -> Vec<AudioApp> {
+    [("Discord.exe", "Discord"), ("Spotify.exe", "Spotify")]
+        .into_iter()
+        .map(|(exe, name)| AudioApp { exe: exe.into(), name: name.into(), path: String::new() })
+        .collect()
+}
+
+// Apps que llevan pista propia, si el modo no es "Todo el PC".
 pub fn configured() -> Option<Vec<AudioApp>> {
     CONFIG.read().unwrap_or_else(|e| e.into_inner()).clone()
 }
