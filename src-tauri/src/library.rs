@@ -45,11 +45,11 @@ fn scan_dir(dir: &Path, out: &mut Vec<ClipInfo>) {
         if !meta.is_file() {
             continue;
         }
-        let id = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default()
-            .to_string();
+        // El id es la ruta, no el nombre: la biblioteca escanea varias carpetas y dos archivos
+        // homónimos (un original y su copia en `Clips-Edit`, p. ej.) colapsarían en la misma clave
+        // de la rejilla. La ruta es lo único único, y es lo que ya se deduplica y se usa de cara al
+        // backend. El nombre sigue siendo lo que se muestra.
+        let id = path.to_string_lossy().into_owned();
         let name = path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -536,8 +536,27 @@ mod tests {
         let clips = list_clips(vec![a.clone(), b.clone(), a.clone()]);
         let ids: Vec<_> = clips.iter().map(|c| c.id.clone()).collect();
         assert_eq!(clips.len(), 2, "ids={ids:?}");
-        assert!(ids.contains(&"one.mp4".to_string()));
-        assert!(ids.contains(&"two.mp4".to_string()));
+        assert!(ids.contains(&a.join("one.mp4").to_string_lossy().into_owned()));
+        assert!(ids.contains(&b.join("two.mp4").to_string_lossy().into_owned()));
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    // Un original y su copia editada en otra carpeta pueden llamarse igual: si el id fuese el
+    // nombre, la rejilla recibiría dos claves iguales y Svelte no sabría cuál tarjeta recyclear.
+    #[test]
+    fn clips_with_the_same_name_in_different_folders_get_different_ids() {
+        let base = std::env::temp_dir().join(format!("fb_homonym_{}", std::process::id()));
+        let a = base.join("Clips");
+        let b = base.join("Clips-Edit");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(a.join("clip.mp4"), b"\x00\x00\x00\x08ftypisom").unwrap();
+        std::fs::write(b.join("clip.mp4"), b"\x00\x00\x00\x08ftypisom").unwrap();
+
+        let ids: Vec<_> = list_clips(vec![a, b]).into_iter().map(|c| c.id).collect();
+        assert_eq!(ids.len(), 2);
+        assert_ne!(ids[0], ids[1], "ids={ids:?}");
 
         std::fs::remove_dir_all(&base).ok();
     }
@@ -588,10 +607,10 @@ mod tests {
         for name in ["a.mov", "b.M4V", "c.mkv", "d.webm", "e.mp4", "f.avi", "g.txt"] {
             std::fs::write(dir.join(name), b"x").unwrap();
         }
-        let mut ids: Vec<String> = list_clips(vec![dir.clone()]).into_iter().map(|c| c.id).collect();
-        ids.sort();
+        let mut names: Vec<String> = list_clips(vec![dir.clone()]).into_iter().map(|c| c.name).collect();
+        names.sort();
         std::fs::remove_dir_all(&dir).ok();
-        assert_eq!(ids, ["a.mov", "b.M4V", "c.mkv", "d.webm", "e.mp4"]);
+        assert_eq!(names, ["a", "b", "c", "d", "e"]);
     }
 
     #[test]
