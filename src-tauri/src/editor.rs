@@ -137,15 +137,17 @@ fn is_noop(edit: &ClipEdit) -> bool {
     }
 }
 
-pub fn save_edit(index: String, path: String, edit: ClipEdit) -> Result<(), String> {
+// Devuelve si queda un montaje guardado: la interfaz usa ese booleano para poner o quitar el
+// badge de "editado", que si no se queda encendido aunque el clip vuelva a estar intacto.
+pub fn save_edit(index: String, path: String, edit: ClipEdit) -> Result<bool, String> {
     let idx = std::path::Path::new(&index);
     if is_noop(&edit) {
         crate::edits::remove(idx, &path);
-        return Ok(());
+        return Ok(false);
     }
     let val = serde_json::to_value(&edit).map_err(|e| e.to_string())?;
     crate::edits::save(idx, &path, val);
-    Ok(())
+    Ok(true)
 }
 
 // Rutas con un montaje real guardado. Filtra las entradas vacías que dejaron las versiones que
@@ -2579,6 +2581,98 @@ mod win {
             assert!(lead(&slow[0].0) > lead(&slow[1].0) && lead(&slow[1].0) > lead(&slow[2].0));
         }
 
+    }
+}
+
+#[cfg(test)]
+mod noop_tests {
+    use super::*;
+
+    // Un bloque que cubre el clip entero, con sus límites coincidentes: es como lo deja un montaje
+    // sin tocar nada.
+    fn whole() -> ClipEdit {
+        ClipEdit {
+            segments: vec![Segment {
+                start_ms: 0.0,
+                end_ms: 10_000.0,
+                pos_ms: Some(0.0),
+                bound_start_ms: Some(0.0),
+                bound_end_ms: Some(10_000.0),
+                disabled: Some(false),
+                crop_x: None,
+                crop_y: None,
+            }],
+            mixer: MixerState::default(),
+            format: crate::reframe::OutputFormat::Horizontal,
+            look: crate::look::Look::default(),
+        }
+    }
+
+    #[test]
+    fn an_untouched_clip_is_noop_even_if_it_was_moved_on_the_timeline() {
+        let mut e = whole();
+        // La posición en la línea de tiempo es estado del editor: no cambia lo que se exporta.
+        e.segments[0].pos_ms = Some(1234.0);
+        assert!(is_noop(&e));
+    }
+
+    #[test]
+    fn trimming_a_bound_or_dropping_a_block_is_an_edit() {
+        let mut trimmed = whole();
+        trimmed.segments[0].end_ms = 4000.0;
+        assert!(!is_noop(&trimmed));
+        let mut split = whole();
+        split.segments.push(Segment { start_ms: 5000.0, end_ms: 10_000.0, ..split.segments[0].clone() });
+        assert!(!is_noop(&split));
+    }
+
+    #[test]
+    fn changing_the_mix_the_format_or_the_look_is_an_edit() {
+        let mut mixed = whole();
+        mixed.mixer.tracks.insert("sys".into(), TrackMix { vol: 0.5, muted: false });
+        assert!(!is_noop(&mixed));
+
+        let mut muted = whole();
+        muted.mixer.tracks.insert("sys".into(), TrackMix { vol: 1.0, muted: true });
+        assert!(!is_noop(&muted));
+
+        let mut vertical = whole();
+        vertical.format = crate::reframe::OutputFormat::Vertical { fill: crate::reframe::Fill::Crop, zoom: None };
+        assert!(!is_noop(&vertical));
+
+        let mut graded = whole();
+        graded.look.brightness = 0.5;
+        assert!(!is_noop(&graded));
+    }
+
+    // Ediciones antiguas sin límites: no hay forma de saber si recorta, y se prefiere marcar de más
+    // antes que perder una edición real.
+    #[test]
+    fn a_mount_without_bounds_is_never_a_noop() {
+        let mut legacy = whole();
+        legacy.segments[0].bound_start_ms = None;
+        legacy.segments[0].bound_end_ms = None;
+        assert!(!is_noop(&legacy));
+    }
+
+    #[test]
+    fn resetting_a_clip_deletes_its_saved_mount() {
+        let dir = std::env::temp_dir().join(format!("fb_noop_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let index = dir.join("edits.json").to_string_lossy().into_owned();
+        let path = "C:/clips/a.mp4".to_string();
+
+        let mut cut = whole();
+        cut.segments[0].end_ms = 4000.0;
+        assert!(save_edit(index.clone(), path.clone(), cut).unwrap(), "un recorte deja montaje");
+        assert_eq!(edited_paths(std::path::Path::new(&index)), vec![path.clone()]);
+
+        assert!(!save_edit(index.clone(), path.clone(), whole()).unwrap(), "volver a intacto lo borra");
+        assert!(edited_paths(std::path::Path::new(&index)).is_empty());
+        assert!(crate::edits::load(std::path::Path::new(&index), &path).is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

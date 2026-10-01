@@ -266,7 +266,7 @@ fn clips_with_edits(app: tauri::AppHandle) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn save_clip_edit(app: tauri::AppHandle, path: String, edit: editor::ClipEdit) -> Result<(), String> {
+fn save_clip_edit(app: tauri::AppHandle, path: String, edit: editor::ClipEdit) -> Result<bool, String> {
     editor::save_edit(edit_index(&app)?.to_string_lossy().into_owned(), path, edit)
 }
 

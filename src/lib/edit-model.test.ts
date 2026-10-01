@@ -21,6 +21,7 @@ import {
   keptMs,
   outToSeg,
   toSaved,
+  type EditState,
   type Segment,
 } from './edit-model';
 import { NEUTRAL_LOOK } from './look';
@@ -46,6 +47,27 @@ describe('fullClip / initialState', () => {
     const s = initialState(10_000);
     expect(s.mixer).toEqual(DEFAULT_MIXER);
     expect(s.format).toEqual(DEFAULT_FORMAT);
+  });
+
+  // «Restablecer montaje» devuelve el clip a intacto, así que el estado inicial tiene que limpiar
+  // las cuatro partes por las que `is_noop` declara que algo se editó: cortes, mezcla, formato e
+  // imagen. Si se olvidara una, el montaje guardado sobrevive al reset y el clip sigue constando
+  // como editado.
+  it('restablecer devuelve el clip a intacto en las cuatro partes', () => {
+    const edited: EditState = {
+      segments: [seg(0, 4000, 0)],
+      mixer: { tracks: { sys: { vol: 0.5, muted: false } } },
+      format: { kind: 'vertical', fill: 'crop' },
+      look: { ...NEUTRAL_LOOK, brightness: 0.2 }
+    };
+    expect(initialState(10_000)).toEqual({
+      segments: fullClip(10_000),
+      mixer: DEFAULT_MIXER,
+      format: DEFAULT_FORMAT,
+      look: NEUTRAL_LOOK
+    });
+    // El estado inicial no arrastra nada de la edición que se iba a restablecer.
+    expect(initialState(10_000)).not.toEqual(edited);
   });
 });
 

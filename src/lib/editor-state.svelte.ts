@@ -9,7 +9,6 @@ import {
   DEFAULT_FORMAT,
   equalState,
   fromSaved,
-  fullClip,
   initialState,
   keptMs,
   toSaved,
@@ -166,9 +165,12 @@ export function redo(): boolean {
   return true;
 }
 
+// Restablecer el montaje entero: cortes, mezcla, formato e imagen. Devolver el clip a intacto
+// tiene que vaciar las cuatro partes, o el guardado se queda con la mezcla a medio ajustar y el
+// clip sigue constando como editado.
 export function resetEdit() {
   if (editorState.durationMs <= 0) return;
-  commit({ ...snapshot(), segments: fullClip(editorState.durationMs) });
+  commit(initialState(editorState.durationMs));
   editorState.active = 0;
 }
 
@@ -276,11 +278,14 @@ export async function flushEdit() {
   await persistEdit();
 }
 
+// El backend responde si el montaje quedó guardado o se borró por no editar nada: el badge de la
+// biblioteca se apaga con esa respuesta, en vez de quedarse encendido para el resto de la sesión.
 export async function persistEdit() {
   const path = editorState.clip?.path;
   if (!path || editorState.durationMs <= 0 || !settled) return;
   try {
-    await invoke('save_clip_edit', { path, edit: toSaved(snapshot()) });
+    const kept = await invoke<boolean>('save_clip_edit', { path, edit: toSaved(snapshot()) });
+    if (editorState.clip?.path === path) editorState.clip.edited = kept;
   } catch (e) {
     console.error('save_clip_edit', e);
   }
