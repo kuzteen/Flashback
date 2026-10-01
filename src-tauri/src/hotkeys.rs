@@ -194,13 +194,66 @@ fn mods_down() -> u8 {
     m
 }
 
+// Reiniciar explorer.exe deja los atajos muertos: Windows suelta lo registrado con RegisterHotKey
+// y no avisa, así que dejan de funcionar hasta registrarlos otra vez. Lo normal es enterarse con
+// el mensaje "TaskbarCreated", que solo llega a ventanas de primer nivel (la nuestra se destruye
+// al cerrar), así que se vigila el proceso del shell: dos llamadas baratas cada 2 s.
+#[cfg(target_os = "windows")]
+struct Shell {
+    pid: u32,
+    next: Instant,
+}
+
+#[cfg(target_os = "windows")]
+fn shell_pid() -> u32 {
+    use windows::Win32::UI::WindowsAndMessaging::{GetShellWindow, GetWindowThreadProcessId};
+    unsafe {
+        let hwnd = GetShellWindow();
+        if hwnd.0.is_null() {
+            return 0;
+        }
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        pid
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Shell {
+    fn new() -> Self {
+        Self { pid: shell_pid(), next: Instant::now() + Duration::from_secs(2) }
+    }
+
+    // true si el shell se ha reiniciado desde la última vuelta.
+    fn restarted(&mut self) -> bool {
+        if Instant::now() < self.next {
+            return false;
+        }
+        self.next = Instant::now() + Duration::from_secs(2);
+        let pid = shell_pid();
+        // 0 mientras la ventana del shell no ha vuelto tras el reinicio: se sigue vigilando.
+        if pid == 0 || pid == self.pid {
+            return false;
+        }
+        self.pid = pid;
+        true
+    }
+}
+
 // Solo sondea con un juego detectado o el replay en marcha: fuera de eso RegisterHotKey basta y
 // el hilo duerme. Cada vuelta son unas pocas llamadas baratas al estado del teclado.
 #[cfg(target_os = "windows")]
 pub fn spawn_poller(app: AppHandle) {
     let _ = std::thread::Builder::new().name("flashback-hotkey-poll".into()).spawn(move || {
         let mut down = [false; 3];
+        let mut shell = Shell::new();
         loop {
+            if shell.restarted() {
+                log::info!("atajos: el shell se reinició, registrando otra vez");
+                if let Some(p) = crate::session::prefs() {
+                    apply(&app, &p.hotkeys);
+                }
+            }
             let gaming = crate::detect::current_game_pid().is_some() || crate::capture::replay_active();
             if PAUSED.load(Ordering::SeqCst) || !gaming {
                 down = [false; 3];
