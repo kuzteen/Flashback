@@ -16,6 +16,8 @@ pub struct ClipInfo {
     pub detected: String,
     pub cover: Option<String>,
     pub cover_ms: u64,
+    // El clip salió de otro al exportar su montaje en el editor (`clipmeta.derived_from`).
+    pub exported: bool,
 }
 
 pub fn list_clips(dirs: Vec<PathBuf>) -> Vec<ClipInfo> {
@@ -71,6 +73,7 @@ fn scan_dir(dir: &Path, out: &mut Vec<ClipInfo>) {
             source,
             cover: None,
             cover_ms: 0,
+            exported: false,
         });
     }
 }
@@ -83,6 +86,7 @@ pub fn apply_meta(clips: &mut [ClipInfo], meta: &crate::clipmeta::Index) {
         }
         c.cover = m.cover.clone();
         c.cover_ms = m.cover_ms;
+        c.exported = m.derived_from.is_some();
     }
 }
 
@@ -623,15 +627,19 @@ mod tests {
             detected: "Pantalla 1".into(),
             cover: None,
             cover_ms: 0,
+            exported: false,
         };
-        let mut clips = vec![clip("a.mp4"), clip("b.mp4"), clip("c.mp4")];
+        let mut clips = vec![clip("a.mp4"), clip("b.mp4"), clip("c.mp4"), clip("d.mp4")];
         let mut meta = crate::clipmeta::Index::new();
-        meta.insert("a.mp4".into(), crate::clipmeta::ClipMeta { game: Some("VALORANT".into()), cover: None, cover_ms: 0 });
-        meta.insert("b.mp4".into(), crate::clipmeta::ClipMeta { game: None, cover: Some("x.png".into()), cover_ms: 7 });
+        meta.insert("a.mp4".into(), crate::clipmeta::ClipMeta { game: Some("VALORANT".into()), cover: None, cover_ms: 0, derived_from: None });
+        meta.insert("b.mp4".into(), crate::clipmeta::ClipMeta { game: None, cover: Some("x.png".into()), cover_ms: 7, derived_from: None });
+        meta.insert("d.mp4".into(), crate::clipmeta::ClipMeta::default());
+        meta.get_mut("d.mp4").unwrap().derived_from = Some("a.mp4".into());
         apply_meta(&mut clips, &meta);
         assert_eq!((clips[0].source.as_str(), clips[0].detected.as_str()), ("VALORANT", "Pantalla 1"));
         assert_eq!((clips[1].source.as_str(), clips[1].cover.as_deref(), clips[1].cover_ms), ("Pantalla 1", Some("x.png"), 7));
         assert_eq!((clips[2].source.as_str(), clips[2].cover.as_deref()), ("Pantalla 1", None));
+        assert_eq!((clips[3].exported, clips[2].exported), (true, false), "solo el derivado se marca como exportado");
     }
 
     #[test]

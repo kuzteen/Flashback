@@ -16,6 +16,10 @@ pub struct ClipMeta {
     pub cover: Option<String>,
     #[serde(default)]
     pub cover_ms: u64,
+    // Clip original del que salió este al exportar el montaje en el editor. Vive en el índice y no
+    // en el nombre del archivo, que el usuario puede cambiar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derived_from: Option<String>,
 }
 
 pub type Index = BTreeMap<String, ClipMeta>;
@@ -78,11 +82,17 @@ pub fn clear_cover(index: &Path, paths: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-// Un clip renombrado cambia de ruta: su juego y su portada se mueven con él.
+// Un clip renombrado cambia de ruta: su juego y su portada se mueven con él, y los exportados que
+// salieron de él actualizan su referencia para que no apunte al nombre viejo.
 pub fn rekey(index: &Path, old: &str, new: &str) {
     let _ = edit(index, |map| {
         if let Some(meta) = map.remove(old) {
             map.insert(new.to_string(), meta);
+        }
+        for meta in map.values_mut() {
+            if meta.derived_from.as_deref() == Some(old) {
+                meta.derived_from = Some(new.to_string());
+            }
         }
     });
 }
@@ -90,11 +100,15 @@ pub fn rekey(index: &Path, old: &str, new: &str) {
 // El clip exportado desde el editor se queda con el juego y la portada del original. La portada
 // se copia: borrar uno de los dos clips no debe dejar al otro sin imagen.
 pub fn inherit(index: &Path, dir: &Path, from: &str, to: &str) -> Result<(), String> {
+    let to_meta = vec![to.to_string()];
+    // La procedencia se registra siempre, tenga o no metadatos el original.
+    edit(index, |map| {
+        map.entry(to.to_string()).or_default().derived_from = Some(from.to_string());
+    })?;
     let Some(meta) = all(index).remove(from) else { return Ok(()) };
-    let to = vec![to.to_string()];
-    set_game(index, &to, meta.game.as_deref())?;
+    set_game(index, &to_meta, meta.game.as_deref())?;
     if let Some(bytes) = meta.cover.and_then(|c| std::fs::read(c).ok()) {
-        set_cover(index, dir, &to, &bytes)?;
+        set_cover(index, dir, &to_meta, &bytes)?;
     }
     Ok(())
 }
@@ -154,7 +168,7 @@ fn edit<T>(index: &Path, f: impl FnOnce(&mut Index) -> T) -> Result<T, String> {
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut map = read_all(index);
     let out = f(&mut map);
-    map.retain(|_, m| m.game.is_some() || m.cover.is_some());
+    map.retain(|_, m| m.game.is_some() || m.cover.is_some() || m.derived_from.is_some());
     write_all(index, &map)?;
     Ok(out)
 }
@@ -250,7 +264,25 @@ mod tests {
         assert_ne!(orig, copy);
         assert_eq!(std::fs::read(&copy).unwrap(), b"png");
         inherit(&index, &covers, "sin-meta.mp4", "otro.mp4").unwrap();
-        assert!(!all(&index).contains_key("otro.mp4"));
+        assert!(all(&index)["otro.mp4"].game.is_none(), "sin metadatos no hay juego que heredar");
+    }
+
+    #[test]
+    fn an_export_is_marked_as_derived_even_without_metadata_in_the_original() {
+        let (_t, index, covers) = tmp("derived");
+        inherit(&index, &covers, "a.mp4", "a_edit.mp4").unwrap();
+        assert_eq!(all(&index)["a_edit.mp4"].derived_from.as_deref(), Some("a.mp4"));
+        // Sin juego ni portada, la entrada sigue en el índice solo por la procedencia.
+        inherit(&index, &covers, "b.mp4", "b_edit.mp4").unwrap();
+        assert!(all(&index).contains_key("b_edit.mp4"));
+    }
+
+    #[test]
+    fn renaming_the_original_updates_the_reference_of_its_exports() {
+        let (_t, index, covers) = tmp("rekey-derived");
+        inherit(&index, &covers, "a.mp4", "a_edit.mp4").unwrap();
+        rekey(&index, "a.mp4", "b.mp4");
+        assert_eq!(all(&index)["a_edit.mp4"].derived_from.as_deref(), Some("b.mp4"));
     }
 
     #[test]
