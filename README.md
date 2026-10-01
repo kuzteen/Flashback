@@ -27,12 +27,12 @@
 ## Screenshots
 
 <p align="center">
-  <img src="docs/screenshots/library.webp" alt="Clip library" width="900">
+  <img src="docs/screenshots/gallery.webp" alt="Clip library" width="900">
 </p>
 
 <p align="center">
   <img src="docs/screenshots/editor.webp" alt="Editor" width="445">
-  <img src="docs/screenshots/capture.png" alt="Capture settings" width="445">
+  <img src="docs/screenshots/settings.webp" alt="Settings" width="445">
 </p>
 
 ---
