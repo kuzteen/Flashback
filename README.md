@@ -31,8 +31,11 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/editor.webp" alt="Editor" width="445">
-  <img src="docs/screenshots/settings.webp" alt="Settings" width="445">
+  <img src="docs/screenshots/editor.webp" alt="Editor" width="900">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/settings.webp" alt="Settings" width="900">
 </p>
 
 ---
