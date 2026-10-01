@@ -96,15 +96,17 @@ const SIDECARS: [&str; 2] = ["clip.json", "edit.json"];
 
 // Renombra el clip (y sus sidecars). Valida el nombre y evita pisar otro clip. Devuelve la
 // nueva ruta del MP4.
+// Los fallos del nombre se devuelven como código, no como frase: es la interfaz quien los
+// traduce y los enseña bajo el campo (`clipEdit.name*`). Un fallo de E/S sí vuelve su mensaje.
 pub fn rename_clip(path: &str, new_name: &str, edit_index: &Path) -> Result<String, String> {
     let p = Path::new(path);
-    let parent = p.parent().ok_or("Ruta inválida")?;
+    let parent = p.parent().ok_or("empty")?;
     let name = new_name.trim();
     if name.is_empty() {
-        return Err("El nombre no puede estar vacío".into());
+        return Err("empty".into());
     }
     if name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) {
-        return Err("El nombre contiene caracteres no válidos".into());
+        return Err("chars".into());
     }
     let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
     let new_mp4 = parent.join(format!("{name}.{ext}"));
@@ -112,7 +114,7 @@ pub fn rename_clip(path: &str, new_name: &str, edit_index: &Path) -> Result<Stri
         return Ok(path.to_string());
     }
     if new_mp4.exists() {
-        return Err("Ya existe un clip con ese nombre".into());
+        return Err("exists".into());
     }
     std::fs::rename(p, &new_mp4).map_err(|e| e.to_string())?;
     for ext in SIDECARS {
@@ -631,6 +633,28 @@ mod tests {
         let new = rename_clip(&p.to_string_lossy(), "nuevo", &index).unwrap();
         std::fs::remove_dir_all(&dir).ok();
         assert!(new.ends_with("nuevo.mkv"), "{new}");
+    }
+
+    // Los fallos del nombre vuelven como código: es la interfaz quien los traduce y los enseña
+    // bajo el campo (`clipEdit.name*`).
+    #[test]
+    fn a_rejected_name_comes_back_as_a_code() {
+        let dir = std::env::temp_dir().join(format!("fb_rename_err_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("uno.mp4");
+        std::fs::write(&p, b"x").unwrap();
+        std::fs::write(dir.join("dos.mp4"), b"x").unwrap();
+        let index = dir.join("edits.json");
+        let p = p.to_string_lossy().into_owned();
+
+        assert_eq!(rename_clip(&p, "   ", &index).unwrap_err(), "empty");
+        assert_eq!(rename_clip(&p, "a/b", &index).unwrap_err(), "chars");
+        assert_eq!(rename_clip(&p, "uno", &index).unwrap(), p, "el mismo nombre no es un fallo");
+        assert_eq!(rename_clip(&p, "dos", &index).unwrap_err(), "exists");
+        assert!(dir.join("uno.mp4").exists(), "el clip original sigue en su sitio");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

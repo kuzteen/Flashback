@@ -27,7 +27,9 @@ export type ClipEditChange = {
 
 export async function saveClipEdit(clips: Clip[], change: ClipEditChange) {
   let paths = clips.map((c) => c.path);
-  // Primero el nombre: renombrar cambia la ruta, y juego y portada se guardan por ruta.
+  // Primero el nombre: renombrar cambia la ruta, y juego y portada se guardan por ruta. Un fallo
+  // de nombre viaja como código desde el backend; lo captura el diálogo y lo enseña bajo el campo
+  // en vez de propagarse como un rechazo sin manejar.
   if (clips.length === 1 && change.name !== null) {
     const clip = clips[0];
     const name = change.name.trim();

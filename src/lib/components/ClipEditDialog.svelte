@@ -17,6 +17,9 @@
 
   let dialog = $state<ReturnType<typeof CoverFormDialog> | null>(null);
   let name = $state('');
+  // Fallo al renombrar (nombre repetido, caracteres no válidos). Se enseña bajo el campo y el
+  // diálogo se queda abierto: si se cerrara, el usuario creería que el guardado no hizo nada.
+  let nameError = $state('');
   // Lo que se ve en el campo y lo que se guardará: una pantalla se muestra traducida ("Screen 1")
   // pero se guarda con su nombre canónico, así que no pueden ser la misma variable.
   let gameText = $state('');
@@ -47,6 +50,7 @@
     void clipEdit.paths;
     untrack(() => {
       name = single?.title ?? '';
+      nameError = '';
       const src = commonSource ?? '';
       gameValue = src;
       gameText = src ? displaySource(src) : '';
@@ -133,14 +137,27 @@
     }
   }
 
-  async function save(cover: CoverChange) {
+  // El backend devuelve el fallo del nombre como código (`exists`, `chars`, `empty`); lo que no sea
+// uno de esos se enseña tal cual.
+const NAME_ERRORS: Record<string, string> = {
+  exists: 'clipEdit.nameExists',
+  chars: 'clipEdit.nameChars',
+  empty: 'clipEdit.nameEmpty'
+};
+
+async function save(cover: CoverChange) {
+  try {
     await saveClipEdit(clips, {
       name: single ? name : null,
       game: gameTouched ? gameValue : null,
       cover
     });
     closeClipEdit();
+  } catch (e) {
+    const code = String(e);
+    nameError = NAME_ERRORS[code] ? t(NAME_ERRORS[code]) : code;
   }
+}
 </script>
 
 <CoverFormDialog
@@ -208,11 +225,20 @@
       <label class="field">
         <span class="notch">{t('clipEdit.name')}</span>
         <input
+          class:invalid={!!nameError}
           bind:value={name}
           maxlength="120"
           placeholder={t('clipEdit.name')}
+          oninput={() => (nameError = '')}
           onkeydown={(e) => e.key === 'Enter' && dialog?.save()}
+          aria-invalid={!!nameError}
+          aria-describedby={nameError ? 'name-error' : undefined}
         />
+        <!-- Bajo el input, dentro de la columna de campos: sobra alto (los dos campos no llenan
+             el bloque), así que el error no empuja nada. -->
+        {#if nameError}
+          <span class="field-error" id="name-error" role="alert">{nameError}</span>
+        {/if}
       </label>
     {/if}
   {/snippet}
@@ -287,5 +313,20 @@
   }
   .revert:hover {
     color: var(--text-0);
+  }
+
+  .field-error {
+    display: block;
+    margin-top: 5px;
+    padding-left: 2px;
+    font-size: 11.5px;
+    line-height: 1.35;
+    color: var(--rec-text);
+  }
+  :global(.field input.invalid) {
+    border-color: var(--rec);
+  }
+  :global(.field input.invalid:focus) {
+    border-color: var(--rec);
   }
 </style>
