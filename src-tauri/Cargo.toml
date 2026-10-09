@@ -1,6 +1,6 @@
 [package]
 name = "flashback"
-version = "1.31.2"
+version = "1.31.3"
 description = "Captura y edición ligera de clips de juego para Windows"
 authors = ["kuzteen"]
 edition = "2021"
