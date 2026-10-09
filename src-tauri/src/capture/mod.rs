@@ -40,8 +40,8 @@ pub struct EncoderOptions {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn encoder_options() -> EncoderOptions {
-    EncoderOptions { available: Vec::new(), auto: "Software".into() }
+pub fn encoder_options() -> Result<EncoderOptions, String> {
+    Ok(EncoderOptions { available: Vec::new(), auto: "Software".into() })
 }
 
 #[cfg(target_os = "windows")]

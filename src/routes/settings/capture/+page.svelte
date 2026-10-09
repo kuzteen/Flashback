@@ -42,18 +42,25 @@
   // Solo los encoders que existen en este equipo, y Auto dice cuál elegiría. Uno guardado que ya
   // no está (otra GPU) se sigue mostrando para que la elección no cambie sola en pantalla.
   let encoder = $state('Auto');
-  let encoderInfo = $state<{ available: string[]; auto: string }>({ available: [], auto: '' });
+  let encoderInfo = $state<{ available: string[]; auto: string; error: string | null }>({ available: [], auto: '', error: null });
   const encoderOptions = $derived.by(() => {
     const values = ['Auto', ...encoderInfo.available, 'Software'];
     if (!values.includes(encoder)) values.splice(values.length - 1, 0, encoder);
     return values.map((v) => ({ label: v === 'Auto' && encoderInfo.auto ? `Auto (${encoderInfo.auto})` : v, value: v }));
   });
+  const encoderDescription = $derived.by(() => {
+    if (encoderInfo.error) return t('settings.encoder.enumerationError', { error: encoderInfo.error });
+    if (encoder !== 'Auto' && encoder !== 'Software' && !encoderInfo.available.includes(encoder)) {
+      return t('settings.encoder.unavailable', { encoder });
+    }
+    return t('settings.encoder.desc');
+  });
   invoke<string>('get_encoder')
     .then((e) => (encoder = e))
     .catch(() => {});
   invoke<{ available: string[]; auto: string }>('encoder_options')
-    .then((o) => (encoderInfo = o))
-    .catch(() => {});
+    .then((o) => (encoderInfo = { ...o, error: null }))
+    .catch((e) => (encoderInfo.error = String(e)));
 
   function setEncoder(opt: string) {
     encoder = opt;
@@ -435,7 +442,7 @@
 </SettingGroup>
 
 <SettingGroup id="advanced" title={t('settings.group.advanced')}>
-  <SettingRow title={t('settings.encoder')} desc={t('settings.encoder.desc')}>
+  <SettingRow title={t('settings.encoder')} desc={encoderDescription}>
     <Stepper value={encoder} options={encoderOptions} onchange={setEncoder} ariaLabel={t('settings.encoder')} />
   </SettingRow>
 </SettingGroup>

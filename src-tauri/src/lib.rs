@@ -89,7 +89,9 @@ fn get_encoder(app: tauri::AppHandle) -> String {
 
 #[tauri::command]
 async fn encoder_options() -> Result<capture::EncoderOptions, String> {
-    tokio::task::spawn_blocking(capture::encoder_options).await.map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(capture::encoder_options)
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

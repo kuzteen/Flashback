@@ -13,7 +13,7 @@ use windows::Graphics::Capture::{
 };
 use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
 use windows::Graphics::DirectX::DirectXPixelFormat;
-use windows::Win32::Foundation::{E_POINTER, HANDLE, HMODULE, HWND, LPARAM, RECT, SYSTEMTIME};
+use windows::Win32::Foundation::{E_POINTER, HANDLE, HMODULE, HWND, LPARAM, LUID, RECT, SYSTEMTIME};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread, ID3D11Texture2D,
@@ -25,7 +25,7 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC,
 };
-use windows::Win32::Graphics::Dxgi::IDXGIDevice;
+use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIDevice, IDXGIFactory1};
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, EnumDisplayMonitors,
     GetDC, GetDIBits, GetMonitorInfoW, ReleaseDC, SelectObject, SetStretchBltMode, StretchBlt,
@@ -64,17 +64,38 @@ mod scaler;
 use encoder::{build_converter, build_encoder};
 use scaler::VideoBlt;
 
-pub fn encoder_options() -> super::EncoderOptions {
+pub fn encoder_options() -> std::result::Result<super::EncoderOptions, String> {
     std::thread::spawn(|| {
-        unsafe {
-            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-        }
-        let (available, auto) = encoder::encoder_options();
+        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
+            .ok()
+            .map_err(|error| error.to_string())?;
+        let result = (|| {
+            let adapter_luid = default_capture_adapter_luid().map_err(|error| {
+                let code = error.code().0 as u32;
+                format!("capture adapter lookup failed HRESULT=0x{code:08X}: {error}")
+            })?;
+            let (available, auto) = encoder::encoder_options(adapter_luid)
+                .map_err(|error| {
+                    let code = error.code().0 as u32;
+                    format!("adapter-scoped encoder enumeration failed HRESULT=0x{code:08X}: {error}")
+                })?;
+            Ok(super::EncoderOptions { available, auto })
+        })();
         unsafe { CoUninitialize() };
-        super::EncoderOptions { available: available.into_iter().map(String::from).collect(), auto: auto.into() }
+        result
     })
     .join()
-    .unwrap_or_default()
+    .map_err(|_| "encoder options worker panicked".to_string())?
+}
+
+// create_device() uses D3D11CreateDevice with a null adapter, which selects the first DXGI
+// adapter. Settings uses the same DXGI enumeration without creating an extra D3D11 device.
+fn default_capture_adapter_luid() -> Result<LUID> {
+    unsafe {
+        let factory: IDXGIFactory1 = CreateDXGIFactory1()?;
+        let adapter = factory.EnumAdapters1(0)?;
+        Ok(adapter.GetDesc()?.AdapterLuid)
+    }
 }
 mod monitors;
 use monitors::{
@@ -1134,6 +1155,8 @@ struct ReplayPipeline {
     // None cuando el handler ya escribe NV12 de salida (FeedCtx::direct).
     converter: Option<IMFTransform>,
     encoder: IMFTransform,
+    encoder_name: String,
+    encoder_diagnostics: EncoderRuntimeDiagnostics,
     // None => encoder síncrono por software (no genera eventos): se bombea distinto.
     enc_events: Option<IMFMediaEventGenerator>,
     nv12_pool: Vec<IMFSample>,
@@ -1176,6 +1199,27 @@ struct ReplayPipeline {
     // recreación de la ventana al alternar fullscreen), en vez de quedarse mostrando el
     // cartel sobre una ventana muerta o capturando la equivocada.
     retarget: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct EncoderRuntimeDiagnostics {
+    input_error_logged: AtomicBool,
+    input_stalled_logged: AtomicBool,
+    output_error_logged: AtomicBool,
+}
+
+fn log_encoder_runtime_error_once(
+    flag: &AtomicBool,
+    encoder: &str,
+    stage: &str,
+    error: &windows::core::Error,
+) {
+    if !flag.swap(true, Ordering::Relaxed) {
+        let code = error.code().0 as u32;
+        log::error!(
+            "encoder runtime: encoder={encoder:?} stage={stage} failed HRESULT=0x{code:08X} ({error})"
+        );
+    }
 }
 unsafe impl Send for ReplayPipeline {}
 // Se comparte por referencia entre el hilo de pacing y el worker del encoder (thread::scope
@@ -1278,6 +1322,11 @@ fn create_device() -> Result<(ID3D11Device, IDirect3DDevice)> {
     Ok((device, d3d_device))
 }
 
+fn adapter_luid_for_device(device: &ID3D11Device) -> Result<LUID> {
+    let dxgi: IDXGIDevice = device.cast()?;
+    unsafe { Ok(dxgi.GetAdapter()?.GetDesc()?.AdapterLuid) }
+}
+
 // Núcleo del pipeline de codificación compartido por el Instant Replay y la grabación
 // manual: WGC + conversor + encoder + bombeo. La diferencia entre modos es solo el destino
 // de los paquetes (ring buffer vs muxer en directo) y las pistas de audio, que cablea cada
@@ -1306,6 +1355,7 @@ fn build_pipeline_core(
 ) -> Result<PipelineCore> {
     ensure_mf();
     let (device, d3d_device) = create_device()?;
+    let adapter_luid = adapter_luid_for_device(&device)?;
     // NV12/H.264 exigen dimensiones PARES. La ventana de un juego puede tener tamaño
     // impar (a diferencia de un monitor), lo que daba MF_E_INVALIDMEDIATYPE. Se redondea
     // a par hacia abajo y el frame pool se crea a ese tamaño (recorta ≤1px, imperceptible).
@@ -1333,7 +1383,8 @@ fn build_pipeline_core(
     // Encoder primero: si no hay H.264 por hardware (o se fuerza), cae a software
     // (MFT síncrono, codifica en CPU). El resto del pipeline se adapta a ese modo.
     // El encoder trabaja ya en la resolución de salida (out_*).
-    let (encoder, enc_events) = build_encoder(&manager, out_w, out_h, fps, bitrate, encoder_pref)?;
+    let (encoder, enc_events, encoder_name) =
+        build_encoder(&manager, adapter_luid, out_w, out_h, fps, bitrate, encoder_pref)?;
     let software = enc_events.is_none();
 
     // En hardware, el handler de WGC convierte y escala cada frame directo a NV12 de salida con el
@@ -1511,15 +1562,11 @@ fn build_pipeline_core(
     );
     let token = frame_pool.FrameArrived(&handler)?;
 
-    // Arrancar los MFT en streaming y la sesión WGC. START_OF_STREAM solo aplica al
-    // MFT asíncrono (hardware); el síncrono por software no lo necesita.
+    // El encoder ya inició streaming al construirse: así Auto puede recuperarse
+    // también si falla BEGIN_STREAMING/START_OF_STREAM. Aquí arranca el conversor.
     unsafe {
         if let Some(c) = &converter {
             c.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
-        }
-        encoder.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
-        if enc_events.is_some() {
-            encoder.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
         }
     }
 
@@ -1564,6 +1611,8 @@ fn build_pipeline_core(
         fps,
         converter,
         encoder,
+        encoder_name,
+        encoder_diagnostics: EncoderRuntimeDiagnostics::default(),
         enc_events,
         nv12_pool,
         nv12_next: std::cell::Cell::new(0),
@@ -1609,6 +1658,13 @@ fn build_replay(
         Some(card_text), true,
     )?;
     let PipelineCore { mut pipe, out_w, out_h, bitrate, video_base } = core;
+    log::info!(
+        "replay pipeline ready: encoder={:?}, {}x{}, {fps} fps, bitrate={} kbps",
+        pipe.encoder_name,
+        out_w,
+        out_h,
+        bitrate / 1000,
+    );
 
     {
         let mut b = buffer.lock_ok();
@@ -1649,6 +1705,12 @@ fn build_manual(
         stats, item, fps, factor, resolution, encoder_pref, false, None, false,
     )?;
     let PipelineCore { mut pipe, out_w, out_h, video_base, .. } = core;
+    log::info!(
+        "grabación manual pipeline ready: encoder={:?}, {}x{}, {fps} fps",
+        pipe.encoder_name,
+        out_w,
+        out_h,
+    );
 
     let out_path = reserve_clip_path(out_dir);
     let mux = LiveMux::new(out_path, out_w, out_h, layout.specs.clone());
@@ -1833,18 +1895,42 @@ fn feed_encoder_async(
     sink: &Arc<dyn VideoPacketSink>,
     seq_grabbed: &mut bool,
     pts_fifo: &mut VecDeque<i64>,
+    encoder_name: &str,
+    diagnostics: &EncoderRuntimeDiagnostics,
 ) -> bool {
     for _ in 0..64 {
         match unsafe { enc.ProcessInput(0, nv12, 0) } {
             Ok(()) => return true,
             Err(e) if e.code() == MF_E_NOTACCEPTING => {
-                let n = drain_encoder_output(enc, sink, seq_grabbed, pts_fifo).unwrap_or(0);
+                let n = drain_encoder_output(
+                    enc,
+                    sink,
+                    seq_grabbed,
+                    pts_fifo,
+                    encoder_name,
+                    diagnostics,
+                )
+                .unwrap_or(0);
                 if n == 0 {
                     std::thread::sleep(Duration::from_millis(1));
                 }
             }
-            Err(_) => return false,
+            Err(error) => {
+                log_encoder_runtime_error_once(
+                    &diagnostics.input_error_logged,
+                    encoder_name,
+                    "ProcessInput",
+                    &error,
+                );
+                return false;
+            }
         }
+    }
+    if !diagnostics.input_stalled_logged.swap(true, Ordering::Relaxed) {
+        let code = MF_E_NOTACCEPTING.0 as u32;
+        log::warn!(
+            "encoder runtime: encoder={encoder_name:?} stage=ProcessInput remained MF_E_NOTACCEPTING for 64 attempts (HRESULT=0x{code:08X})"
+        );
     }
     false
 }
@@ -2064,7 +2150,14 @@ fn run_encoder_thread(
             if et == ME_TRANSFORM_NEED_INPUT {
                 need += 1;
             } else if et == ME_TRANSFORM_HAVE_OUTPUT {
-                let _ = drain_encoder_output(encoder, sink, &mut seq_grabbed, &mut pts_fifo);
+                let _ = drain_encoder_output(
+                    encoder,
+                    sink,
+                    &mut seq_grabbed,
+                    &mut pts_fifo,
+                    &pipe.encoder_name,
+                    &pipe.encoder_diagnostics,
+                );
             }
         }
 
@@ -2114,7 +2207,15 @@ fn run_encoder_thread(
             if item.force_key {
                 force_keyframe(encoder);
             }
-            if feed_encoder_async(encoder, &nv12, sink, &mut seq_grabbed, &mut pts_fifo) {
+            if feed_encoder_async(
+                encoder,
+                &nv12,
+                sink,
+                &mut seq_grabbed,
+                &mut pts_fifo,
+                &pipe.encoder_name,
+                &pipe.encoder_diagnostics,
+            ) {
                 pts_fifo.push_back(item.pts);
                 did = true;
             } else if device_removed(&pipe._device) {
@@ -2262,6 +2363,7 @@ fn encode_one(
     };
 
     let mut fed_ok = false;
+    let mut hard_input_error = false;
     for _ in 0..64 {
         match unsafe { pipe.encoder.ProcessInput(0, &nv12, 0) } {
             Ok(()) => {
@@ -2269,9 +2371,23 @@ fn encode_one(
                 break;
             }
             Err(e) if e.code() == MF_E_NOTACCEPTING => {
-                let _ = drain_encoder_output(&pipe.encoder, sink, seq_grabbed, pts_fifo);
+                let _ = drain_encoder_output(
+                    &pipe.encoder,
+                    sink,
+                    seq_grabbed,
+                    pts_fifo,
+                    &pipe.encoder_name,
+                    &pipe.encoder_diagnostics,
+                );
             }
-            Err(_) => {
+            Err(error) => {
+                hard_input_error = true;
+                log_encoder_runtime_error_once(
+                    &pipe.encoder_diagnostics.input_error_logged,
+                    &pipe.encoder_name,
+                    "ProcessInput",
+                    &error,
+                );
                 if device_removed(&pipe._device) {
                     pipe.device_lost.store(true, Ordering::Relaxed);
                 }
@@ -2281,7 +2397,22 @@ fn encode_one(
     }
     if fed_ok {
         pts_fifo.push_back(pts);
-        let _ = drain_encoder_output(&pipe.encoder, sink, seq_grabbed, pts_fifo);
+        let _ = drain_encoder_output(
+            &pipe.encoder,
+            sink,
+            seq_grabbed,
+            pts_fifo,
+            &pipe.encoder_name,
+            &pipe.encoder_diagnostics,
+        );
+    } else if !hard_input_error
+        && !pipe.encoder_diagnostics.input_stalled_logged.swap(true, Ordering::Relaxed)
+    {
+        let code = MF_E_NOTACCEPTING.0 as u32;
+        log::warn!(
+            "encoder runtime: encoder={:?} stage=ProcessInput remained MF_E_NOTACCEPTING for 64 attempts (HRESULT=0x{code:08X})",
+            pipe.encoder_name,
+        );
     }
 }
 
@@ -2549,6 +2680,8 @@ fn drain_encoder_output(
     sink: &Arc<dyn VideoPacketSink>,
     seq_grabbed: &mut bool,
     pts_fifo: &mut VecDeque<i64>,
+    encoder_name: &str,
+    diagnostics: &EncoderRuntimeDiagnostics,
 ) -> Result<usize> {
     let mut drained = 0usize;
     loop {
@@ -2558,7 +2691,15 @@ fn drain_encoder_output(
         match hr {
             Ok(()) => {}
             Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => break,
-            Err(e) => return Err(e),
+            Err(error) => {
+                log_encoder_runtime_error_once(
+                    &diagnostics.output_error_logged,
+                    encoder_name,
+                    "ProcessOutput",
+                    &error,
+                );
+                return Err(error);
+            }
         }
 
         if !*seq_grabbed {
