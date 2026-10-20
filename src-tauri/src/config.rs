@@ -410,6 +410,83 @@ pub fn set_language(app: &tauri::AppHandle, lang: &str) -> Result<(), String> {
     write_setting(app, "language", serde_json::json!(lang))
 }
 
+fn onboarding_should_show(marker: Option<&str>, legacy_data_exists: bool) -> bool {
+    match marker {
+        Some("in_progress") => true,
+        Some("completed" | "skipped" | "legacy") => false,
+        Some(_) => false,
+        None => !legacy_data_exists,
+    }
+}
+
+fn with_onboarding_marker(mut settings: serde_json::Value, marker: &str) -> serde_json::Value {
+    settings["onboarding"] = serde_json::Value::String(marker.to_string());
+    settings
+}
+
+pub fn begin_onboarding(app: &tauri::AppHandle, legacy_local_data: bool) -> Result<bool, String> {
+    let path = settings_path(app).ok_or("No se pudo resolver el directorio de la app")?;
+    let exists = path.exists();
+    let settings = if exists {
+        match std::fs::read_to_string(&path) {
+            Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
+                Ok(value) if value.is_object() => Some(value),
+                // Un archivo antiguo ilegible no es prueba de una instalación nueva y no se
+                // sobrescribe al decidir el onboarding.
+                _ => return Ok(false),
+            },
+            Err(error) => return Err(error.to_string()),
+        }
+    } else {
+        None
+    };
+    let marker = settings
+        .as_ref()
+        .and_then(|value| value.get("onboarding"))
+        .and_then(serde_json::Value::as_str);
+
+    if !onboarding_should_show(marker, exists || legacy_local_data) {
+        if marker.is_none() && (exists || legacy_local_data) {
+            let value = settings.unwrap_or_else(|| serde_json::json!({}));
+            let value = with_onboarding_marker(value, "legacy");
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            std::fs::write(&path, value.to_string()).map_err(|error| error.to_string())?;
+        }
+        return Ok(false);
+    }
+
+    if marker.is_none() {
+        let value = settings.unwrap_or_else(|| serde_json::json!({}));
+        let value = with_onboarding_marker(value, "in_progress");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        std::fs::write(&path, value.to_string()).map_err(|error| error.to_string())?;
+    }
+    Ok(true)
+}
+
+pub fn finish_onboarding(app: &tauri::AppHandle, skipped: bool) -> Result<(), String> {
+    let path = settings_path(app).ok_or("No se pudo resolver el directorio de la app")?;
+    let settings = match std::fs::read_to_string(&path) {
+        Ok(raw) => serde_json::from_str::<serde_json::Value>(&raw)
+            .map_err(|error| format!("No se pudieron leer los ajustes actuales: {error}"))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+        Err(error) => return Err(error.to_string()),
+    };
+    if !settings.is_object() {
+        return Err("Los ajustes actuales tienen un formato no compatible".to_string());
+    }
+    let marker = if skipped { "skipped" } else { "completed" };
+    let settings = with_onboarding_marker(settings, marker);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    std::fs::write(&path, settings.to_string()).map_err(|error| error.to_string())
+}
+
 pub fn set_clips_dir(app: &tauri::AppHandle, dir: &str) -> Result<(), String> {
     let path = PathBuf::from(dir);
     std::fs::create_dir_all(&path).map_err(|e| format!("No se pudo crear la carpeta: {e}"))?;
@@ -535,5 +612,42 @@ mod toast_prefs_tests {
         let off = ToastPrefs { enabled: false, ..ToastPrefs::default() };
         assert!(!off.allows(ToastTopic::Saved));
         assert!(!off.allows(ToastTopic::Problems));
+    }
+}
+
+#[cfg(test)]
+mod onboarding_tests {
+    use super::*;
+
+    #[test]
+    fn first_run_starts_but_existing_installations_do_not() {
+        assert!(onboarding_should_show(None, false));
+        assert!(!onboarding_should_show(None, true));
+        assert!(onboarding_should_show(Some("in_progress"), true));
+    }
+
+    #[test]
+    fn completed_and_skipped_onboarding_stay_closed() {
+        assert!(!onboarding_should_show(Some("completed"), false));
+        assert!(!onboarding_should_show(Some("skipped"), false));
+        assert!(!onboarding_should_show(Some("legacy"), false));
+    }
+
+    #[test]
+    fn onboarding_marker_preserves_existing_preferences() {
+        let existing = serde_json::json!({
+            "encoder": "NVENC",
+            "language": "es",
+            "capture": { "fps": 120, "quality": "ultra" }
+        });
+        let skipped = with_onboarding_marker(existing.clone(), "skipped");
+        assert_eq!(skipped["onboarding"], "skipped");
+        assert_eq!(skipped["encoder"], existing["encoder"]);
+        assert_eq!(skipped["language"], existing["language"]);
+        assert_eq!(skipped["capture"], existing["capture"]);
+
+        let completed = with_onboarding_marker(existing.clone(), "completed");
+        assert_eq!(completed["onboarding"], "completed");
+        assert_eq!(completed["capture"], existing["capture"]);
     }
 }

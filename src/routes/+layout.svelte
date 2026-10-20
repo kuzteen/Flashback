@@ -40,7 +40,7 @@
   import { gameSettings, loadDisabledGames } from '$lib/games.svelte';
   import { displaySource, isScreenSource } from '$lib/clips';
   import { artSrc, ensureGameHero, gameHero } from '$lib/artwork.svelte';
-  import { t, initLocale } from '$lib/i18n.svelte';
+  import { t } from '$lib/i18n.svelte';
   import { installUiLog } from '$lib/ui-log';
   import { releaseWhenIdle } from '$lib/ui-release';
   import {
@@ -55,8 +55,6 @@
   let { children } = $props();
 
   installUiLog();
-  initLocale();
-
   const nav = [
     { href: '/', icon: 'clips-fill', labelKey: 'clips.title' },
     { href: '/playlists', icon: 'folder-fill', labelKey: 'nav.playlists' }

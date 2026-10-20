@@ -5,10 +5,10 @@
   import { contextInset, place, ZOOM_MAX, zoomOf } from '$lib/frame-math';
   import { isNeutral, sharpenKernel, svgColorValues } from '$lib/look';
   import { t } from '$lib/i18n.svelte';
-  import { formatTimecode } from '$lib/timeline-math';
   import { playback } from './playback.svelte';
   import { ui } from './ui.svelte';
   import Transport from './Transport.svelte';
+  import PlaybackBar from './PlaybackBar.svelte';
   import Icon from '../Icon.svelte';
 
   let video = $state<HTMLVideoElement | null>(null);
@@ -59,43 +59,6 @@
     srcH = video?.videoHeight ?? 0;
     setDuration((video?.duration || 0) * 1000);
     playback.onReady();
-  }
-
-  const frac = $derived(playback.kept > 0 ? Math.min(1, playback.outPos / playback.kept) : 0);
-  let progEl = $state<HTMLDivElement | null>(null);
-  let progDrag = $state(false);
-  // Posición bajo el puntero (0..1) para la burbuja de tiempo: se ve adónde se salta antes de
-  // hacer clic.
-  let hoverFrac = $state<number | null>(null);
-
-  function fracAt(clientX: number): number {
-    if (!progEl) return 0;
-    const r = progEl.getBoundingClientRect();
-    return Math.max(0, Math.min(1, (clientX - r.left) / Math.max(1, r.width)));
-  }
-
-  function progAt(clientX: number) {
-    playback.seekOutput(fracAt(clientX) * playback.kept);
-  }
-
-  function onProgDown(e: PointerEvent) {
-    if (e.button !== 0 || !progEl) return;
-    e.preventDefault();
-    progEl.setPointerCapture(e.pointerId);
-    playback.pauseForSeek();
-    progDrag = true;
-    progAt(e.clientX);
-  }
-
-  function onProgMove(e: PointerEvent) {
-    hoverFrac = fracAt(e.clientX);
-    if (progDrag) progAt(e.clientX);
-  }
-
-  function onProgUp() {
-    if (!progDrag) return;
-    progDrag = false;
-    playback.resumeAfterGesture();
   }
 
   // Lienzo virtual del formato vertical, en las mismas unidades que el export (1080x1920): el
@@ -444,7 +407,6 @@
           style:height={vert ? `${(fg.h / OH) * 100}%` : null}
           style:clip-path={contextClip}
           onloadedmetadata={onLoaded}
-          onended={() => playback.pause()}
           onclick={vert ? undefined : () => playback.toggle()}
         ><track kind="captions" /></video>
         {#if vert && guideX}<span class="guide gx"></span>{/if}
@@ -496,34 +458,11 @@
   {:else if editorState.error}
     <div class="prep mono err">{t('ed.trackSplitError', { error: String(editorState.error) })}</div>
   {/if}
+  {#if !ui.fs}<PlaybackBar surface={vert ? frameEl : video} container={stageEl} />{/if}
 </div>
 
 {#if ui.fs && ui.fsCtrlShow}
-  <div class="fs-bar">
-    <span class="fs-time mono">{formatTimecode(playback.outPos)}</span>
-    <div
-      class="fs-prog"
-      class:active={progDrag || hoverFrac !== null}
-      bind:this={progEl}
-      role="presentation"
-      onpointerdown={onProgDown}
-      onpointermove={onProgMove}
-      onpointerup={onProgUp}
-      onpointercancel={onProgUp}
-      onpointerleave={() => (hoverFrac = null)}
-    >
-      <div class="track">
-        <div class="fill" style:width="{frac * 100}%"></div>
-        <div class="knob" style:left="{frac * 100}%"></div>
-      </div>
-      {#if hoverFrac !== null}
-        <span class="hover-time mono" style:left="{hoverFrac * 100}%">
-          {formatTimecode(hoverFrac * playback.kept)}
-        </span>
-      {/if}
-    </div>
-    <span class="fs-time end mono">{formatTimecode(playback.kept)}</span>
-  </div>
+  <PlaybackBar fullscreen />
   <Transport floating />
 {/if}
 
@@ -544,6 +483,7 @@
     align-items: center;
     justify-content: center;
     padding: 18px;
+    transition: padding-left var(--panel-duration) var(--panel-ease), padding-right var(--panel-duration) var(--panel-ease);
   }
   /* Con un solo panel abierto se reserva su ancho también en el lado contrario, para que el vídeo
      siga centrado en la ventana; con los dos abiertos ya se compensan solos. */
@@ -552,6 +492,9 @@
   }
   .fit.balance-r {
     padding-right: calc(18px + var(--format-w));
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fit { transition: none; }
   }
   /* Capa sobre el vídeo: solo la línea recibe el puntero, el resto deja pasar el clic de
      reproducir y el arrastre del encuadre. */
@@ -682,7 +625,7 @@
   }
   .prep {
     position: absolute;
-    bottom: 16px;
+    bottom: 48px;
     left: 50%;
     transform: translateX(-50%);
     padding: 7px 12px;
@@ -694,80 +637,6 @@
   }
   .prep.err {
     color: var(--rec);
-  }
-  .fs-bar {
-    position: fixed;
-    left: 40px;
-    right: 40px;
-    bottom: 22px;
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    z-index: 10000;
-  }
-  .fs-time {
-    min-width: 64px;
-    font-size: 12px;
-    color: var(--text-0);
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
-  }
-  .fs-time.end {
-    text-align: right;
-  }
-  /* Fina en reposo y más gruesa al pasar o arrastrar; el punto solo aparece entonces. El área
-     de clic es más alta que la pista para no tener que apuntar a 4 px. */
-  .fs-prog {
-    position: relative;
-    flex: 1;
-    height: 22px;
-    display: flex;
-    align-items: center;
-    cursor: pointer;
-    touch-action: none;
-  }
-  .track {
-    position: relative;
-    width: 100%;
-    height: 4px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.22);
-    transition: height 0.15s ease;
-  }
-  .fs-prog.active .track {
-    height: 7px;
-  }
-  .fill {
-    height: 100%;
-    border-radius: inherit;
-    background: var(--accent);
-  }
-  .knob {
-    position: absolute;
-    top: 50%;
-    width: 18px;
-    height: 11px;
-    border-radius: 3px;
-    background: var(--accent-soft);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
-    transform: translate(-50%, -50%) scale(0);
-    transition: transform 0.15s ease;
-    pointer-events: none;
-  }
-  .fs-prog.active .knob {
-    transform: translate(-50%, -50%) scale(1);
-  }
-  .hover-time {
-    position: absolute;
-    bottom: calc(100% + 6px);
-    transform: translateX(-50%);
-    padding: 4px 8px;
-    font-size: 11.5px;
-    color: var(--text-0);
-    white-space: nowrap;
-    background: rgba(18, 18, 20, 0.8);
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    pointer-events: none;
   }
   /* En horizontal el envoltorio no existe para el layout y el vídeo se coloca como siempre; en
      vertical pasa a ser el lienzo 9:16 y el vídeo se sitúa dentro con las cuentas del export. */

@@ -198,6 +198,7 @@
   onpointermove={onMove}
   onpointerup={onUp}
   onpointercancel={onUp}
+  onlostpointercapture={onUp}
 >
   {#each segs as s, i (keys[i])}
     <div

@@ -1,21 +1,50 @@
 // Rich Presence de Discord (opt-in, off por defecto). Un hilo en segundo plano mantiene la
 // conexión IPC con el cliente de Discord y refresca la presencia según el estado (grabando /
-// Instant Replay / biblioteca) y el juego detectado; el tiempo cuenta desde el juego actual o
+// Instant Replay / galería / ausente) y el juego detectado; el tiempo cuenta desde el juego actual o
 // la vuelta a la biblioteca, no desde que se abrió la app. Aislado del camino de captura: solo lee
 // estado cada pocos segundos y reconecta solo si Discord se cierra/abre.
 
 use std::collections::HashMap;
 use std::sync::{Condvar, Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use discord_rich_presence::activity::{Activity, Assets, Button, Timestamps};
 use discord_rich_presence::{DiscordIpc, DiscordIpcClient};
 
 const APP_ID: &str = "1495797767245922498";
-// Asset subido en la app de Discord (Rich Presence → Art Assets) con el logo de Flashback.
-const FLASHBACK_ASSET: &str = "flashback";
+// PNG público del mismo isotipo que usa la app; evita mantener otro logo en Discord Art Assets.
+const FLASHBACK_ASSET: &str =
+    "https://raw.githubusercontent.com/kuzteen/Flashback/main/static/flashback-presence.png";
 const DOWNLOAD_URL: &str = "https://github.com/kuzteen/Flashback/releases/latest";
 const SUPPORT_URL: &str = "https://discord.gg/WckwXRrhrR";
+const AWAY_AFTER: Duration = Duration::from_secs(60);
+
+// Solo importa la actividad de Flashback: usar otra app no mantiene esta presencia activa.
+// El reloj vive en Rust para seguir funcionando con el webview descargado en la bandeja.
+struct Inactivity {
+    last_active: Instant,
+}
+
+impl Inactivity {
+    fn new(now: Instant) -> Self {
+        Self { last_active: now }
+    }
+
+    fn update(&mut self, now: Instant, focused: bool, capturing: bool) -> bool {
+        if focused || capturing {
+            self.last_active = now;
+            return false;
+        }
+        now.saturating_duration_since(self.last_active) >= AWAY_AFTER
+    }
+}
+
+fn main_focused() -> bool {
+    use tauri::Manager;
+    APP.get()
+        .and_then(|app| app.get_webview_window("main"))
+        .is_some_and(|window| window.is_focused().unwrap_or(true))
+}
 
 struct Shared {
     enabled: bool,
@@ -62,7 +91,7 @@ struct Presence {
     // Juego que se está capturando; None es la biblioteca. Al cambiar se reinicia el tiempo.
     game: Option<String>,
     name: String,
-    details: String,
+    details: Option<&'static str>,
     large_image: String,
     large_text: String,
     buttons: [&'static str; 2],
@@ -80,6 +109,7 @@ fn run() {
     let mut last_key = String::new();
     let mut last_game: Option<String> = None;
     let mut started = now_ms();
+    let mut inactivity = Inactivity::new(Instant::now());
     // Arte resuelto por nombre de juego: una sola llamada HTTP por juego (URL pública o el
     // asset de fallback). Se puebla perezosamente en presence.
     let mut art_cache: HashMap<String, String> = HashMap::new();
@@ -94,8 +124,16 @@ fn run() {
             if let Ok(g) = m.lock() {
                 let _ = cv.wait_timeout_while(g, Duration::from_secs(60), |s| !s.enabled);
             }
+            inactivity = Inactivity::new(Instant::now());
             continue;
         }
+
+        // Usa el estado real de captura, no el toggle del replay: puede estar armado esperando
+        // un juego sin estar clipeando. Se actualiza incluso si Discord está desconectado.
+        let recording = crate::capture::status().running;
+        let replay = crate::capture::replay_active();
+        let capturing = recording || replay;
+        let away = inactivity.update(Instant::now(), !capturing && main_focused(), capturing);
 
         // Asegurar conexión: si Discord no está abierto, reintentar en 15 s.
         if client.is_none() {
@@ -109,7 +147,7 @@ fn run() {
             }
         }
 
-        let p = presence(&mut art_cache);
+        let p = presence(&mut art_cache, recording, replay, away);
         if p.game != last_game {
             last_game = p.game.clone();
             started = now_ms();
@@ -117,7 +155,7 @@ fn run() {
         // Solo se reenvía a Discord si algo cambió (evita spam de set_activity).
         let key = format!(
             "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{started}",
-            p.name, p.details, p.large_image, p.large_text
+            p.name, p.details.unwrap_or(""), p.large_image, p.large_text
         );
         if key != last_key {
             if let Some(c) = client.as_mut() {
@@ -127,15 +165,17 @@ fn run() {
                 if p.game.is_some() {
                     assets = assets.small_image(FLASHBACK_ASSET).small_text("Flashback");
                 }
-                let act = Activity::new()
+                let mut act = Activity::new()
                     .name(p.name.as_str())
-                    .details(p.details.as_str())
                     .assets(assets)
                     .buttons(vec![
                         Button::new(p.buttons[0], DOWNLOAD_URL),
                         Button::new(p.buttons[1], SUPPORT_URL),
                     ])
                     .timestamps(Timestamps::new().start(started));
+                if let Some(details) = p.details {
+                    act = act.details(details);
+                }
                 if c.set_activity(act).is_err() {
                     // Conexión caída (Discord cerrado): reconectar en el próximo ciclo.
                     let _ = c.close();
@@ -154,7 +194,7 @@ fn run() {
 
 // Con un juego capturándose, la tarjeta es del juego ("Valorant con Flashback", su arte en
 // grande y el logo en pequeño); si no, la de Flashback con el estado de la app.
-fn presence(art_cache: &mut HashMap<String, String>) -> Presence {
+fn presence(art_cache: &mut HashMap<String, String>, recording: bool, replay: bool, away: bool) -> Presence {
     let es = APP
         .get()
         .map(|app| crate::config::get_language(app) == "es")
@@ -164,24 +204,15 @@ fn presence(art_cache: &mut HashMap<String, String>) -> Presence {
     } else {
         ["Get Flashback", "Need help?"]
     };
-    let recording = crate::capture::status().running;
-    let replay = crate::capture::replay_active();
-
     if recording || replay {
         if let Some(g) = crate::detect::current_game() {
-            let details = match (recording, es) {
-                (true, true) => "Grabando la partida",
-                (true, false) => "Recording gameplay",
-                (false, true) => "Clipeando cada jugada",
-                (false, false) => "Clipping every play",
-            };
             return Presence {
                 name: if es {
                     format!("{} con Flashback", g.name)
                 } else {
                     format!("{} with Flashback", g.name)
                 },
-                details: details.to_string(),
+                details: None,
                 large_image: art_url(art_cache, &g),
                 large_text: g.name.clone(),
                 game: Some(g.name),
@@ -190,18 +221,15 @@ fn presence(art_cache: &mut HashMap<String, String>) -> Presence {
         }
     }
 
-    let details = match (recording, replay, es) {
-        (true, _, true) => "Grabando",
-        (true, _, false) => "Recording",
-        (false, true, true) => "Instant Replay activo",
-        (false, true, false) => "Instant Replay active",
-        (false, false, true) => "En la biblioteca",
-        (false, false, false) => "In the library",
-    };
     Presence {
         game: None,
         name: "Flashback".to_string(),
-        details: details.to_string(),
+        details: Some(match (away, es) {
+            (true, true) => "Ausente",
+            (true, false) => "Away",
+            (false, true) => "En la galería",
+            (false, false) => "In the gallery",
+        }),
         large_image: FLASHBACK_ASSET.to_string(),
         large_text: "Flashback".to_string(),
         buttons,
@@ -226,4 +254,48 @@ fn art_url(cache: &mut HashMap<String, String>, g: &crate::detect::DetectedGame)
         .unwrap_or_else(|| FLASHBACK_ASSET.to_string());
     cache.insert(g.name.clone(), resolved.clone());
     resolved
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn background_waits_one_minute_before_away() {
+        let now = Instant::now();
+        let mut idle = Inactivity::new(now);
+        assert!(!idle.update(now + Duration::from_secs(59), false, false));
+        assert!(idle.update(now + AWAY_AFTER, false, false));
+        assert!(idle.update(now + Duration::from_secs(120), false, false));
+    }
+
+    #[test]
+    fn returning_to_flashback_clears_away_and_restarts_the_grace_period() {
+        let now = Instant::now();
+        let mut idle = Inactivity::new(now);
+        let later = now + Duration::from_secs(120);
+        assert!(idle.update(later, false, false));
+        assert!(!idle.update(later, true, false));
+        assert!(!idle.update(later + Duration::from_secs(59), false, false));
+        assert!(idle.update(later + AWAY_AFTER, false, false));
+    }
+
+    #[test]
+    fn active_capture_never_goes_away_and_gets_a_grace_period_after_stopping() {
+        let now = Instant::now();
+        let mut idle = Inactivity::new(now);
+        let later = now + Duration::from_secs(300);
+        assert!(!idle.update(later, false, true));
+        assert!(!idle.update(later + Duration::from_secs(59), false, false));
+        assert!(idle.update(later + AWAY_AFTER, false, false));
+    }
+
+    #[test]
+    fn starting_capture_clears_an_existing_away_state() {
+        let now = Instant::now();
+        let mut idle = Inactivity::new(now);
+        let later = now + AWAY_AFTER;
+        assert!(idle.update(later, false, false));
+        assert!(!idle.update(later, false, true));
+    }
 }

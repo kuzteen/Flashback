@@ -132,6 +132,16 @@ fn set_language(app: tauri::AppHandle, lang: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn begin_onboarding(app: tauri::AppHandle, legacy_local_data: bool) -> Result<bool, String> {
+    config::begin_onboarding(&app, legacy_local_data)
+}
+
+#[tauri::command]
+fn finish_onboarding(app: tauri::AppHandle, skipped: bool) -> Result<(), String> {
+    config::finish_onboarding(&app, skipped)
+}
+
+#[tauri::command]
 fn get_watermark(app: tauri::AppHandle) -> bool {
     config::get_watermark(&app)
 }
@@ -681,16 +691,29 @@ fn playlist_mark_seen(app: tauri::AppHandle, id: String, path: String) -> Result
 }
 
 #[tauri::command]
-fn list_clips(app: tauri::AppHandle) -> Vec<library::ClipInfo> {
-    let mut clips = library::list_clips(config::library_dirs(&app));
-    if let Ok(index) = clipmeta_index(&app) {
-        library::apply_meta(&mut clips, &clipmeta::all(&index));
-    }
-    if !clips.is_empty() {
-        let paths: Vec<String> = clips.iter().map(|c| c.path.clone()).collect();
-        std::thread::spawn(move || prune_thumbs(&app, &paths));
-    }
-    clips
+async fn list_clips(
+    app: tauri::AppHandle,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    oldest: Option<bool>,
+) -> Result<library::ClipPage, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let files = library::scan_clips(config::library_dirs(&app));
+        let offset = offset.unwrap_or(0);
+        // La limpieza necesita TODAS las rutas, también las de páginas aún sin cargar.
+        let paths = (offset == 0 && !files.is_empty())
+            .then(|| files.iter().map(|f| f.path()).collect::<Vec<_>>());
+        let mut page = library::clip_page(files, offset, limit, oldest.unwrap_or(false));
+        if let Ok(index) = clipmeta_index(&app) {
+            library::apply_meta(&mut page.clips, &clipmeta::all(&index));
+        }
+        if let Some(paths) = paths {
+            std::thread::spawn(move || prune_thumbs(&app, &paths));
+        }
+        page
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 // Borra las miniaturas de clips que ya no existen o que cambiaron (su nombre ya no coincide).
@@ -1066,6 +1089,8 @@ pub fn run() {
             set_discord_rpc,
             get_language,
             set_language,
+            begin_onboarding,
+            finish_onboarding,
             list_monitors,
             list_audio_inputs,
             audio_apps_supported,

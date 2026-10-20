@@ -8,9 +8,14 @@
   import { artSrc } from '$lib/artwork.svelte';
   import { t } from '$lib/i18n.svelte';
 
-  let { clips, selected = $bindable() }: { clips: Clip[]; selected: LibraryFilter[] } = $props();
+  let { clips, selected = $bindable(), onopen }: {
+    clips: Clip[];
+    selected: LibraryFilter[];
+    onopen?: () => Promise<unknown>;
+  } = $props();
 
   let open = $state(false);
+  let loading = $state(false);
   let el = $state<HTMLElement | null>(null);
 
   // Orígenes presentes en la biblioteca, separados en juegos y pantallas (orden alfabético).
@@ -48,6 +53,13 @@
     selected = [];
   }
 
+  async function toggleOpen() {
+    open = !open;
+    if (!open || !onopen) return;
+    loading = true;
+    try { await onopen(); } finally { loading = false; }
+  }
+
   $effect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
@@ -59,7 +71,7 @@
 </script>
 
 <div class="dd" class:open bind:this={el}>
-  <button class="ctrl" onclick={() => (open = !open)} aria-haspopup="menu" aria-expanded={open}>
+  <button class="ctrl" onclick={toggleOpen} aria-haspopup="menu" aria-expanded={open}>
     <Icon name="filter" size={14} />
     <span class="lbl">{t('filter.label')}</span>
     <Icon name="chevron-down" size={12} sw={2} />
@@ -67,6 +79,7 @@
 
   {#if open}
     <div class="menu" role="menu" use:flip use:hoverPill={{ selector: '.item', axis: 'y' }}>
+      {#if loading}<div class="sep" role="status">{t('clips.loading')}</div>{/if}
       <button class="item" class:on={selected.length === 0} onclick={clearAll} role="menuitemradio" aria-checked={selected.length === 0}>
         <span class="lead"><Icon name="clips-fill" size={15} /></span>
         <span class="txt">{t('filter.all')}</span>

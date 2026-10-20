@@ -23,6 +23,7 @@ type CapturePrefs = {
 };
 
 let ready = false;
+let pendingWrite: Promise<void> = Promise.resolve();
 
 function current(): CapturePrefs {
   return {
@@ -86,7 +87,17 @@ export async function initCapturePrefs() {
 
 export function pushCapturePrefs() {
   if (!ready) return;
-  invoke<string[]>('set_capture_prefs', { prefs: current() })
+  const prefs = current();
+  pendingWrite = pendingWrite
+    .then(() => invoke<string[]>('set_capture_prefs', { prefs }))
     .then(markFailed)
     .catch((e) => console.error('set_capture_prefs', e));
+}
+
+// El wizard espera este guardado antes de marcar la finalización. Las escrituras se serializan
+// con las que disparan los controles existentes para que no se pisen entre sí.
+export async function persistCapturePrefs(): Promise<void> {
+  await pendingWrite;
+  const prefs = current();
+  markFailed(await invoke<string[]>('set_capture_prefs', { prefs }));
 }

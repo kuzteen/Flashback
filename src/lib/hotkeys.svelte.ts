@@ -2,6 +2,12 @@ import { pushCapturePrefs } from './capture-prefs';
 
 export type HotkeyAction = 'saveReplay' | 'record' | 'open';
 
+export const SHORTCUT_ROWS: { key: HotkeyAction; labelKey: string }[] = [
+  { key: 'saveReplay', labelKey: 'settings.hk.saveReplay' },
+  { key: 'record', labelKey: 'settings.hk.record' },
+  { key: 'open', labelKey: 'settings.hk.open' }
+];
+
 // Se lee del localStorage solo para migrar a Rust la primera vez (ver capture-prefs.ts).
 const STORAGE_KEY = 'flashback.hotkeys';
 

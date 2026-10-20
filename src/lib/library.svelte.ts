@@ -1,5 +1,6 @@
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import type { Clip } from './clips';
+import { ClipPager, type LibraryState, type LibraryWindow } from './library-paging';
 
 type RawClip = {
   id: string;
@@ -37,7 +38,9 @@ export function setClipView(mode: ClipView) {
   } catch {}
 }
 
-export const library = $state<{ clips: Clip[]; loaded: boolean }>({ clips: [], loaded: false });
+export const library = $state<LibraryState<Clip>>({
+  clips: [], loaded: false, loading: false, error: false, total: 0, hasMore: false
+});
 
 function toClip(r: RawClip, withEdits: Set<string>): Clip {
   return {
@@ -111,22 +114,28 @@ export function requestThumb(path: string): Promise<string | null> {
   });
 }
 
-export async function refreshLibrary() {
-  try {
-    const [raw, withEdits] = await Promise.all([
-      invoke<RawClip[]>('list_clips'),
-      invoke<string[]>('clips_with_edits').catch(() => [] as string[])
-    ]);
-    const edited = new Set(withEdits);
-    for (const r of raw) {
-      const was = thumbStamp.get(r.path);
-      if (was !== undefined && was !== r.modified_ms) thumbCache.delete(r.path);
-      thumbStamp.set(r.path, r.modified_ms);
-    }
-    library.clips = raw.map((r) => toClip(r, edited));
-  } catch {
-    // fuera de Tauri (preview en navegador): biblioteca vacía
-    library.clips = [];
+const pager = new ClipPager(library, async (offset, limit, oldest) => {
+  const [page, withEdits] = await Promise.all([
+    invoke<{ clips: RawClip[]; total: number; has_more: boolean }>('list_clips', { offset, limit, oldest }),
+    invoke<string[]>('clips_with_edits').catch(() => [] as string[])
+  ]);
+  const edited = new Set(withEdits);
+  for (const r of page.clips) {
+    const was = thumbStamp.get(r.path);
+    if (was !== undefined && was !== r.modified_ms) thumbCache.delete(r.path);
+    thumbStamp.set(r.path, r.modified_ms);
   }
-  library.loaded = true;
+  return { clips: page.clips.map((r) => toClip(r, edited)), total: page.total, hasMore: page.has_more };
+});
+
+export function refreshLibrary(options: LibraryWindow = {}) {
+  return pager.refresh(options);
+}
+
+export function loadMoreLibrary() {
+  return pager.loadMore();
+}
+
+export function loadEntireLibrary() {
+  return pager.loadAll();
 }

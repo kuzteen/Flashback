@@ -345,7 +345,7 @@ export function closeEditor() {
 // montaje, igual que al cambiar de clip, y se relee la biblioteca porque el exportado aún no
 // estaba en ella.
 export async function openExported(dst: string): Promise<boolean> {
-  await refreshLibrary();
+  await refreshLibrary({ limit: null });
   const exported = library.clips.find((c) => c.path?.toLowerCase() === dst.toLowerCase());
   if (!exported) return false;
   cancelPersist();

@@ -1,9 +1,10 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
+  import { untrack } from 'svelte';
   import Icon from '$lib/components/Icon.svelte';
   import PlaylistCard from '$lib/components/PlaylistCard.svelte';
   import SortableGrid from '$lib/components/SortableGrid.svelte';
-  import { library, refreshLibrary } from '$lib/library.svelte';
+  import { loadEntireLibrary } from '$lib/library.svelte';
   import {
     playlists,
     refreshPlaylists,
@@ -16,7 +17,7 @@
 
   $effect(() => {
     refreshPlaylists();
-    if (!library.loaded) refreshLibrary();
+    untrack(() => loadEntireLibrary());
   });
 
   const sorted = $derived(orderedPlaylists(playlists.list));

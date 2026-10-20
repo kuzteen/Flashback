@@ -1,9 +1,7 @@
 <script lang="ts">
   import ValueInput from './ValueInput.svelte';
-  import MorphTip from '../MorphTip.svelte';
-  import { TipGroup } from '$lib/morph-tip.svelte';
+  import SidePanel from './SidePanel.svelte';
   import { pill } from '$lib/pill';
-  import Icon from '../Icon.svelte';
   import { beginGesture, commit, editorState, endGesture, preview } from '$lib/editor-state.svelte';
   import type { OutputFormat } from '$lib/edit-model';
   import { ZOOM_MAX } from '$lib/frame-math';
@@ -53,190 +51,97 @@
     endGesture();
   }
 
-  const tips = new TipGroup('left');
 </script>
 
-<aside class="panel" class:open={ui.formatOpen}>
-  <button
-    class="toggle"
-    class:on={ui.formatOpen}
-    aria-label={t('ed.format')}
-    aria-expanded={ui.formatOpen}
-    use:tips.trigger={t('ed.format')}
-    onclick={() => ui.toggleFormat()}
-  >
-    <Icon name="crop" size={18} />
-  </button>
+<SidePanel side="right" open={ui.formatOpen} label={t('ed.format')} icon="crop" ontoggle={() => ui.toggleFormat()}>
+  <div class="body">
+    <h3 class="title">{t('ed.format')}</h3>
+    <div class="tiles" role="radiogroup" aria-label={t('ed.format')}>
+      <button
+        class="tile"
+        role="radio"
+        aria-checked={format.kind === 'horizontal'}
+        class:on={format.kind === 'horizontal'}
+        onclick={() => set({ kind: 'horizontal' })}
+      >
+        <span class="box"><span class="shape h"></span></span>
+        <span class="name">{t('ed.fmtOriginal')}</span>
+      </button>
+      <button
+        class="tile"
+        role="radio"
+        aria-checked={format.kind === 'vertical'}
+        class:on={format.kind === 'vertical'}
+        onclick={() => set({ kind: 'vertical', fill: format.kind === 'vertical' ? format.fill : 'crop' })}
+      >
+        <span class="box"><span class="shape v"></span></span>
+        <span class="name">9:16</span>
+      </button>
+    </div>
 
-  {#if ui.formatOpen}
-    <div class="body">
-      <h3 class="title">{t('ed.format')}</h3>
-      <div class="tiles" role="radiogroup" aria-label={t('ed.format')}>
+    {#if format.kind === 'vertical'}
+      <div class="seg" role="radiogroup" aria-label={t('ed.fill')} use:pill={{ key: format.fill }}>
         <button
-          class="tile"
           role="radio"
-          aria-checked={format.kind === 'horizontal'}
-          class:on={format.kind === 'horizontal'}
-          onclick={() => set({ kind: 'horizontal' })}
+          aria-checked={format.fill === 'crop'}
+          class:on={format.fill === 'crop'}
+          onclick={() => set({ kind: 'vertical', fill: 'crop' })}
         >
-          <span class="box"><span class="shape h"></span></span>
-          <span class="name">{t('ed.fmtOriginal')}</span>
+          {t('ed.fillCrop')}
         </button>
         <button
-          class="tile"
           role="radio"
-          aria-checked={format.kind === 'vertical'}
-          class:on={format.kind === 'vertical'}
-          onclick={() => set({ kind: 'vertical', fill: format.kind === 'vertical' ? format.fill : 'crop' })}
+          aria-checked={format.fill === 'fit'}
+          class:on={format.fill === 'fit'}
+          onclick={() => set({ kind: 'vertical', fill: 'fit' })}
         >
-          <span class="box"><span class="shape v"></span></span>
-          <span class="name">9:16</span>
+          {t('ed.fillFit')}
+        </button>
+        <button
+          role="radio"
+          aria-checked={format.fill === 'custom'}
+          class:on={format.fill === 'custom'}
+          onclick={() => set({ kind: 'vertical', fill: 'custom', zoom: customZoom })}
+        >
+          {t('ed.fillCustom')}
         </button>
       </div>
-
-      {#if format.kind === 'vertical'}
-        <div class="seg" role="radiogroup" aria-label={t('ed.fill')} use:pill={{ key: format.fill }}>
-          <button
-            role="radio"
-            aria-checked={format.fill === 'crop'}
-            class:on={format.fill === 'crop'}
-            onclick={() => set({ kind: 'vertical', fill: 'crop' })}
-          >
-            {t('ed.fillCrop')}
-          </button>
-          <button
-            role="radio"
-            aria-checked={format.fill === 'fit'}
-            class:on={format.fill === 'fit'}
-            onclick={() => set({ kind: 'vertical', fill: 'fit' })}
-          >
-            {t('ed.fillFit')}
-          </button>
-          <button
-            role="radio"
-            aria-checked={format.fill === 'custom'}
-            class:on={format.fill === 'custom'}
-            onclick={() => set({ kind: 'vertical', fill: 'custom', zoom: customZoom })}
-          >
-            {t('ed.fillCustom')}
-          </button>
-        </div>
-        {#if format.fill === 'custom'}
-          <label class="zoom">
-            <span class="zl">{t('ed.zoom')}</span>
-            <input
-              class="fader"
-              type="range"
-              min="0"
-              max={ZOOM_MAX * 100}
-              step="1"
-              value={Math.round(customZoom * 100)}
-              onpointerdown={startSlide}
-              onpointerup={endSlide}
-              onpointercancel={endSlide}
-              oninput={(e) => setZoom(Number(e.currentTarget.value) / 100)}
-              oncontextmenu={editZoom}
-            />
-            <span class="val">
-              <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <span class="zv mono" class:hidden={editingZoom} oncontextmenu={editZoom}>{Math.round(customZoom * 100)}%</span>
-              {#if editingZoom}
-                <ValueInput value={Math.round(customZoom * 100)} min={0} max={ZOOM_MAX * 100} label={t('ed.zoom')} ondone={typedZoom} />
-              {/if}
-            </span>
-          </label>
-        {/if}
-        <p class="note">{t('ed.frameHint')}</p>
+      {#if format.fill === 'custom'}
+        <label class="zoom">
+          <span class="zl">{t('ed.zoom')}</span>
+          <input
+            class="fader"
+            type="range"
+            min="0"
+            max={ZOOM_MAX * 100}
+            step="1"
+            value={Math.round(customZoom * 100)}
+            onpointerdown={startSlide}
+            onpointerup={endSlide}
+            onpointercancel={endSlide}
+            oninput={(e) => setZoom(Number(e.currentTarget.value) / 100)}
+            oncontextmenu={editZoom}
+          />
+          <span class="val">
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <span class="zv mono" class:hidden={editingZoom} oncontextmenu={editZoom}>{Math.round(customZoom * 100)}%</span>
+            {#if editingZoom}
+              <ValueInput value={Math.round(customZoom * 100)} min={0} max={ZOOM_MAX * 100} label={t('ed.zoom')} ondone={typedZoom} />
+            {/if}
+          </span>
+        </label>
       {/if}
-    </div>
-  {/if}
-</aside>
-<MorphTip group={tips} />
+      <p class="note">{t('ed.frameHint')}</p>
+    {/if}
+  </div>
+</SidePanel>
 
 <style>
-  /* Plegado no ocupa sitio: solo el botón, flotando sobre la esquina del visor. Abierto pasa a
-     ser una columna; el visor compensa su ancho para que el vídeo no se mueva del centro. */
-  .panel {
-    position: absolute;
-    top: 12px;
-    right: 12px;
-    z-index: 5;
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 14px;
-  }
-  .panel.open {
-    position: static;
-    flex: none;
-    width: var(--format-w);
-    padding: 10px 3px 14px 14px;
-    background: var(--base);
-    /* Con la ventana baja las opciones no caben: el panel se desplaza en vez de cortarlas. El hueco
-       de la barra (11px) va siempre reservado y sale del relleno derecho, así las opciones quedan a
-       14px de ambos bordes y no se mueven cuando aparece. */
-    overflow: hidden auto;
-    overscroll-behavior: contain;
-    scrollbar-gutter: stable;
-    /* Se abre hacia el lado desde el tamaño del botón (36px + rellenos + hueco de la barra), así el
-       botón que se acaba de pulsar no desaparece. Solo se anima lo visible: el hueco del panel se
-       reserva entero desde el principio y el vídeo no se mueve. */
-    animation: panel-open 0.3s cubic-bezier(0.23, 1, 0.32, 1);
-  }
-  @keyframes panel-open {
-    from {
-      clip-path: inset(0 0 0 calc(100% - 64px));
-    }
-    to {
-      clip-path: inset(0);
-    }
-  }
-  .toggle {
-    align-self: flex-end;
-    width: 36px;
-    height: 36px;
-    flex: none;
-    display: grid;
-    place-items: center;
-    color: var(--text-2);
-    border-radius: var(--r-sm);
-    transition: color 0.14s ease, background 0.14s ease;
-  }
-  .toggle:hover,
-  .toggle.on {
-    color: var(--text-0);
-    background: var(--bg-hover);
-  }
-  /* Sobre el vídeo necesita su propio fondo para verse en escenas claras. */
-  .panel:not(.open) .toggle {
-    color: var(--text-1);
-    background: var(--glass);
-    backdrop-filter: blur(12px);
-    border: 1px solid var(--line);
-  }
-  .panel:not(.open) .toggle:hover {
-    color: var(--text-0);
-  }
   .body {
     display: flex;
     flex-direction: column;
     gap: 8px;
     min-width: 230px;
-  }
-  .open .body {
-    animation: panel-body-in 0.3s cubic-bezier(0.23, 1, 0.32, 1);
-  }
-  @keyframes panel-body-in {
-    from {
-      opacity: 0;
-      translate: 12px 0;
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .panel.open,
-    .open .body {
-      animation: none;
-    }
   }
   .title {
     margin-bottom: 4px;

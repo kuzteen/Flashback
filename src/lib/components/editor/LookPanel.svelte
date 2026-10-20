@@ -1,7 +1,6 @@
 <script lang="ts">
-  import MorphTip from '../MorphTip.svelte';
-  import { TipGroup } from '$lib/morph-tip.svelte';
-  import Icon from '../Icon.svelte';
+  import { onDestroy } from 'svelte';
+  import SidePanel from './SidePanel.svelte';
   import ValueInput from './ValueInput.svelte';
   import { beginGesture, commit, editorState, endGesture, preview } from '$lib/editor-state.svelte';
   import { NEUTRAL_LOOK, isNeutral, type Look } from '$lib/look';
@@ -32,7 +31,9 @@
     else commit(next);
   }
 
-  function startSlide() {
+  function startSlide(e: PointerEvent) {
+    if (e.button !== 0) return;
+    (e.currentTarget as HTMLInputElement).setPointerCapture(e.pointerId);
     sliding = true;
     beginGesture();
   }
@@ -42,6 +43,8 @@
     sliding = false;
     endGesture();
   }
+
+  onDestroy(endSlide);
 
   // Fila cuyo valor se está escribiendo a mano (clic derecho en el número o en el deslizador).
   let editing = $state<keyof Look | null>(null);
@@ -69,148 +72,62 @@
     if (!neutral) commit({ ...editorState.edit, look: { ...NEUTRAL_LOOK } });
   }
 
-  const tips = new TipGroup('right');
 </script>
 
-<aside class="panel" class:open={ui.lookOpen}>
-  <button
-    class="toggle"
-    class:on={ui.lookOpen}
-    aria-label={t('ed.look')}
-    aria-expanded={ui.lookOpen}
-    use:tips.trigger={t('ed.look')}
-    onclick={() => ui.toggleLook()}
-  >
-    <Icon name="wand" size={18} />
-  </button>
-
-  {#if ui.lookOpen}
-    <div class="body">
-      <div class="top">
-        <h3 class="title">{t('ed.look')}</h3>
-        <button class="reset" disabled={neutral} onclick={resetAll}>{t('ed.lookReset')}</button>
-      </div>
-      {#each ROWS as r (r.key)}
-        {@const v = Math.round(look[r.key] * 100)}
-        <label class="row">
-          <span class="rl">{t(r.label)}</span>
-          <span class="val">
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <span class="rv mono" class:set={v !== 0} class:hidden={editing === r.key} oncontextmenu={(e) => editValue(e, r.key)}
-              >{v}</span
-            >
-            {#if editing === r.key}
-              <ValueInput value={v} min={r.min} max={100} label={t(r.label)} ondone={(n) => typed(r.key, n)} />
-            {/if}
-          </span>
-          <input
-            class="fader"
-            type="range"
-            min={r.min}
-            max="100"
-            step="1"
-            value={v}
-            onpointerdown={startSlide}
-            onpointerup={endSlide}
-            onpointercancel={endSlide}
-            oninput={(e) => set(r.key, Number(e.currentTarget.value))}
-            ondblclick={() => reset(r.key)}
-            oncontextmenu={(e) => editValue(e, r.key)}
-          />
-        </label>
-      {/each}
-      <button class="compare" class:on={ui.compare} aria-pressed={ui.compare} disabled={neutral} onclick={() => (ui.compare = !ui.compare)}>
-        {t('ed.compare')}
-      </button>
-      <p class="note">{t('ed.lookHint')}</p>
+<SidePanel side="left" open={ui.lookOpen} label={t('ed.look')} icon="wand" ontoggle={() => ui.toggleLook()}>
+  <div class="body">
+    <div class="top">
+      <h3 class="title">{t('ed.look')}</h3>
+      <button class="reset" disabled={neutral} onclick={resetAll}>{t('ed.lookReset')}</button>
     </div>
-  {/if}
-</aside>
-<MorphTip group={tips} />
+    {#each ROWS as r (r.key)}
+      {@const v = Math.round(look[r.key] * 100)}
+      {@const position = (v - r.min) / (100 - r.min)}
+      {@const zero = -r.min / (100 - r.min)}
+      <label class="row">
+        <span class="rl">{t(r.label)}</span>
+        <span class="val">
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <span class="rv mono" class:set={v !== 0} class:hidden={editing === r.key} oncontextmenu={(e) => editValue(e, r.key)}
+            >{v}</span
+          >
+          {#if editing === r.key}
+            <ValueInput value={v} min={r.min} max={100} label={t(r.label)} ondone={(n) => typed(r.key, n)} />
+          {/if}
+        </span>
+        <input
+          class="fader"
+          class:signed={r.min < 0}
+          style:--fill-from={Math.min(zero, position)}
+          style:--fill-to={Math.max(zero, position)}
+          type="range"
+          min={r.min}
+          max="100"
+          step="1"
+          value={v}
+          onpointerdown={startSlide}
+          onpointerup={endSlide}
+          onpointercancel={endSlide}
+          onlostpointercapture={endSlide}
+          oninput={(e) => set(r.key, Number(e.currentTarget.value))}
+          ondblclick={() => reset(r.key)}
+          oncontextmenu={(e) => editValue(e, r.key)}
+        />
+      </label>
+    {/each}
+    <button class="compare" class:on={ui.compare} aria-pressed={ui.compare} disabled={neutral} onclick={() => (ui.compare = !ui.compare)}>
+      {t('ed.compare')}
+    </button>
+    <p class="note">{t('ed.lookHint')}</p>
+  </div>
+</SidePanel>
 
 <style>
-  /* Gemelo del panel de formato, en el lado izquierdo: plegado es solo el botón sobre el visor;
-     abierto, una columna. */
-  .panel {
-    position: absolute;
-    top: 12px;
-    left: 12px;
-    z-index: 5;
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 14px;
-  }
-  .panel.open {
-    position: static;
-    flex: none;
-    width: var(--format-w);
-    padding: 10px 3px 14px 14px;
-    background: var(--base);
-    /* Con la ventana baja las opciones no caben: el panel se desplaza en vez de cortarlas. El hueco
-       de la barra (11px) va siempre reservado y sale del relleno derecho, así las opciones quedan a
-       14px de ambos bordes y no se mueven cuando aparece. */
-    overflow: hidden auto;
-    overscroll-behavior: contain;
-    scrollbar-gutter: stable;
-    /* Se abre hacia el lado desde el tamaño del botón (36px + rellenos + hueco de la barra), así el
-       botón que se acaba de pulsar no desaparece. Solo se anima lo visible: el hueco del panel se
-       reserva entero desde el principio y el vídeo no se mueve. */
-    animation: panel-open 0.3s cubic-bezier(0.23, 1, 0.32, 1);
-  }
-  @keyframes panel-open {
-    from {
-      clip-path: inset(0 calc(100% - 64px) 0 0);
-    }
-    to {
-      clip-path: inset(0);
-    }
-  }
-  .toggle {
-    align-self: flex-start;
-    width: 36px;
-    height: 36px;
-    flex: none;
-    display: grid;
-    place-items: center;
-    color: var(--text-2);
-    border-radius: var(--r-sm);
-    transition: color 0.14s ease, background 0.14s ease;
-  }
-  .toggle:hover,
-  .toggle.on {
-    color: var(--text-0);
-    background: var(--bg-hover);
-  }
-  .panel:not(.open) .toggle {
-    color: var(--text-1);
-    background: var(--glass);
-    backdrop-filter: blur(12px);
-    border: 1px solid var(--line);
-  }
-  .panel:not(.open) .toggle:hover {
-    color: var(--text-0);
-  }
   .body {
     display: flex;
     flex-direction: column;
     gap: 14px;
     min-width: 230px;
-  }
-  .open .body {
-    animation: panel-body-in 0.3s cubic-bezier(0.23, 1, 0.32, 1);
-  }
-  @keyframes panel-body-in {
-    from {
-      opacity: 0;
-      translate: -12px 0;
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .panel.open,
-    .open .body {
-      animation: none;
-    }
   }
   .top {
     display: flex;
@@ -263,6 +180,24 @@
   }
   .row .fader {
     grid-column: 1 / -1;
+  }
+  .row .fader::-webkit-slider-runnable-track {
+    background:
+      linear-gradient(to right,
+        var(--text-3) 0,
+        var(--text-3) calc(12px + (100% - 24px) * var(--fill-to)),
+        transparent calc(12px + (100% - 24px) * var(--fill-to))),
+      var(--bg-3);
+  }
+  .row .fader.signed::-webkit-slider-runnable-track {
+    background:
+      linear-gradient(var(--text-3), var(--text-3)) center / 1px 6px no-repeat,
+      linear-gradient(to right,
+        transparent calc(12px + (100% - 24px) * var(--fill-from)),
+        var(--text-3) calc(12px + (100% - 24px) * var(--fill-from)),
+        var(--text-3) calc(12px + (100% - 24px) * var(--fill-to)),
+        transparent calc(12px + (100% - 24px) * var(--fill-to))),
+      var(--bg-3);
   }
   .compare {
     height: 32px;

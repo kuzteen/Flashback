@@ -124,13 +124,8 @@ mod win {
             let factory: IWICImagingFactory =
                 unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)? };
             let wic_stream = unsafe { factory.CreateStream()? };
-            // ID2D1SvgDocument respeta el width/height explícito del <svg> raíz (1024): con ambos
-            // presentes nada cae dentro del viewport pequeño. Sin ellos, el viewBox escala al
-            // viewport (misma corrección que en toast.rs).
-            let svg_data = MARK_SVG
-                .replace(" width=\"1024\"", "")
-                .replace(" height=\"1024\"", "");
-            unsafe { wic_stream.InitializeFromMemory(svg_data.as_bytes())? };
+            // El SVG compartido solo declara viewBox para escalar al viewport de Direct2D.
+            unsafe { wic_stream.InitializeFromMemory(MARK_SVG.as_bytes())? };
             let stream: IStream = wic_stream.cast()?;
 
             let fmt = D2D1_PIXEL_FORMAT {

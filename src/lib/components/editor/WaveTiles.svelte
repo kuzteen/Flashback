@@ -46,14 +46,22 @@
     const mid = h / 2;
     const amp = h * 0.4;
     const path = new Path2D();
+    const ghost = vol < 1 ? new Path2D() : null;
     for (let x = 0; x < w; x++) {
       const src = startMs + (x0 + x) * mpp;
       const b = Math.min(p.length - 1, Math.max(0, Math.floor((src / dur) * p.length)));
-      const y = Math.max(0.5, Math.min(1, p[b] * 1.8) * amp * vol);
+      const original = Math.min(1, p[b] * 1.8) * amp;
+      const y = Math.max(0.5, original * vol);
+      if (ghost) ghost.rect(x, mid - Math.max(0.5, original), 1, Math.max(1, original * 2));
       path.rect(x, mid - y, 1, y * 2);
     }
     // El lienzo no entiende var(): los colores se leen de los tokens del tema al pintar.
-    ctx.fillStyle = getComputedStyle(c).getPropertyValue(dim ? '--wave-off' : '--wave').trim();
+    const colors = getComputedStyle(c);
+    if (ghost) {
+      ctx.fillStyle = colors.getPropertyValue('--wave-base').trim();
+      ctx.fill(ghost);
+    }
+    ctx.fillStyle = colors.getPropertyValue(dim ? '--wave-off' : '--wave').trim();
     ctx.fill(path);
   }
 

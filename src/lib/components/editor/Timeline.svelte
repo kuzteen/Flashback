@@ -198,6 +198,7 @@
         onpointermove={onRulerMove}
         onpointerup={onRulerUp}
         onpointercancel={onRulerUp}
+        onlostpointercapture={onRulerUp}
       >
         {#each ticks as tk (tk.pos)}
           <span class="tick" class:major={tk.major} style:left="{px(tk.pos)}px">
@@ -234,6 +235,7 @@
           onpointermove={onKnobMove}
           onpointerup={onKnobUp}
           onpointercancel={onKnobUp}
+          onlostpointercapture={onKnobUp}
           ><svg viewBox="116 81 280 350" aria-hidden="true"
             ><path
               d="M 133.49 355.79C 124.41 344.92 116.32 328.41 116.26 313.75Q 115.92 216.02 116.29 145.01C 116.45 115.24 137.29 90.01 166.63 82.85Q 173.87 81.08 191.56 81.31Q 197.55 81.39 332.5 81.36Q 340.79 81.35 348.98 83.83C 372.73 90.99 390.39 109.9 394.83 134.46Q 395.81 139.87 395.83 154.65Q 395.95 281.01 395.74 311.25C 395.63 326.88 387.43 344.19 376.78 355.98Q 373.09 360.06 363 367.12Q 320.78 396.63 287.17 420.11C 268.71 433 241.97 433.59 221.52 424.23Q 215.48 421.46 203.12 411.64Q 192.46 403.16 145.96 367.01Q 137.12 360.14 133.49 355.79Z"

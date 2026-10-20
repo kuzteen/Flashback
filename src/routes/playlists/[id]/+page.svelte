@@ -15,7 +15,7 @@
     type Clip,
     type LibraryFilter as Filter
   } from '$lib/clips';
-  import { library, refreshLibrary, clipView } from '$lib/library.svelte';
+  import { library, refreshLibrary, loadEntireLibrary, clipView } from '$lib/library.svelte';
   import {
     playlists,
     refreshPlaylists,
@@ -126,7 +126,7 @@
 
   $effect(() => {
     refreshPlaylists();
-    if (!library.loaded) refreshLibrary();
+    untrack(() => loadEntireLibrary());
   });
 
   // Al entrar y al salir: la selección es global y arrastrarla entre la biblioteca y una

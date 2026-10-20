@@ -148,6 +148,8 @@
   }
   .middle {
     --format-w: 280px;
+    --panel-duration: 320ms;
+    --panel-ease: cubic-bezier(0.23, 1, 0.32, 1);
     position: relative;
     flex: 1;
     min-height: 0;

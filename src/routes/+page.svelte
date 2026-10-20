@@ -7,7 +7,8 @@
   import ClipToolbar from '$lib/components/ClipToolbar.svelte';
   import PlaylistPicker from '$lib/components/PlaylistPicker.svelte';
   import { sortClips, clipMatchesFilters, displaySource, type LibraryFilter as Filter } from '$lib/clips';
-  import { library, refreshLibrary, clipView } from '$lib/library.svelte';
+  import { library, refreshLibrary, loadMoreLibrary, loadEntireLibrary, clipView } from '$lib/library.svelte';
+  import { CLIP_PAGE_SIZE } from '$lib/library-paging';
   import { refreshPlaylists } from '$lib/playlists.svelte';
   import { clipOrder, editorState } from '$lib/editor-state.svelte';
   import { selected, clearSelection, selectAll, pruneSelection } from '$lib/selection.svelte';
@@ -24,6 +25,9 @@
   let query = $state('');
   let filters = $state<Filter[]>([]);
   let sort = $state<'newest' | 'oldest'>('newest');
+  let visibleLimit = $state(CLIP_PAGE_SIZE);
+  let browsingStarted = false;
+  const needsFullLibrary = $derived(!!query.trim() || filters.length > 0);
   let toolbar = $state<ClipToolbar<'newest' | 'oldest'> | null>(null);
   const sorts = [
     { value: 'newest' as const, label: 'clips.newest' },
@@ -65,10 +69,28 @@
   }
 
   $effect(() => {
-    refreshLibrary();
     // La pertenencia a playlists se marca en el menú de cada tarjeta, así que el índice tiene
     // que estar cargado antes de abrirlo.
     refreshPlaylists();
+  });
+
+  $effect(() => {
+    const all = needsFullLibrary;
+    const oldest = sort === 'oldest';
+    untrack(() => {
+      if (all) loadEntireLibrary();
+      else if (!browsingStarted || library.hasMore || library.loading || library.error) {
+        refreshLibrary({ limit: CLIP_PAGE_SIZE, oldest });
+      }
+      browsingStarted = true;
+    });
+  });
+
+  $effect(() => {
+    query;
+    filters;
+    sort;
+    visibleLimit = CLIP_PAGE_SIZE;
   });
 
   const filtered = $derived.by(() => {
@@ -83,10 +105,17 @@
     });
   });
   const sorted = $derived(sortClips(filtered, sort === 'oldest'));
+  const displayed = $derived(sorted.slice(0, visibleLimit));
+  const hasMore = $derived(displayed.length < sorted.length || library.hasMore);
+
+  async function showMore() {
+    if (library.loading) return;
+    if (visibleLimit < sorted.length || await loadMoreLibrary()) visibleLimit += CLIP_PAGE_SIZE;
+  }
 
   // Por pertenencia, no por tamaño: con un filtro activo la selección puede ser mayor que lo
   // visible sin contener un solo clip de la lista.
-  const allSelected = $derived(sorted.length > 0 && sorted.every((c) => selected.has(c.id)));
+  const allSelected = $derived(displayed.length > 0 && displayed.every((c) => selected.has(c.id)));
 
   function toggleAll() {
     if (allSelected) clearSelection();
@@ -135,7 +164,7 @@
 
   // El editor navega anterior/siguiente por este mismo orden.
   $effect(() => {
-    clipOrder.list = sorted;
+    clipOrder.list = displayed;
   });
 
   // Contra la biblioteca entera, no contra lo filtrado: buscar no debe deshacer una selección.
@@ -153,28 +182,40 @@
       <h1>{t('clips.title')}</h1>
     </div>
 
-    <ClipToolbar clips={library.clips} bind:query bind:filters bind:sort {sorts} bind:this={toolbar} />
+    <ClipToolbar clips={library.clips} bind:query bind:filters bind:sort {sorts} onfilteropen={loadEntireLibrary} bind:this={toolbar} />
   </header>
 
-  {#if library.clips.length === 0}
+  {#if library.loading && (!library.loaded || filtered.length === 0)}
+    <div class="empty" role="status"><p>{t('clips.loading')}</p></div>
+  {:else if library.clips.length === 0 && !library.error}
     <div class="empty">
       <Icon name="clips" size={50} sw={1.3} />
       <p>{t('clips.emptyNone')}</p>
       <span class="hint mono">{t('clips.emptyNoneHint')}</span>
     </div>
-  {:else if filtered.length === 0}
+  {:else if filtered.length === 0 && !library.error}
     <div class="empty">
       <span class="logo-mark"></span>
       <p>{query ? t('clips.noResultsQuery', { query }) : t('clips.noResultsFilter')}</p>
     </div>
-  {:else}
+  {:else if displayed.length > 0}
     <!-- Remontar al cambiar de vista: la virtualización mide el alto de fila al montar, y con
          la rejilla viva se quedaría con el de la vista anterior. -->
     {#key clipView.mode}
-      <SortableGrid items={sorted} key={(c) => c.id}>
+      <SortableGrid items={displayed} key={(c) => c.id}>
         {#snippet children(clip)}<ClipCard {clip} playlistTag compact={clipView.mode === 'list'} />{/snippet}
       </SortableGrid>
     {/key}
+  {/if}
+
+  {#if library.error || hasMore}
+    <div class="load-more" aria-live="polite">
+      {#if library.error}<p>{t('clips.loadError')}</p>{/if}
+      <button class="load-more-btn" disabled={library.loading} onclick={library.error ? () => refreshLibrary() : showMore}>
+        {library.loading ? t('clips.loading') : library.error ? t('clips.retry') : t('clips.loadMore', { n: CLIP_PAGE_SIZE })}
+        {#if !library.loading && !library.error}<Icon name="chevron-down" size={16} />{/if}
+      </button>
+    </div>
   {/if}
 </div>
 
@@ -240,6 +281,30 @@
     margin-bottom: 26px;
     flex-wrap: wrap;
   }
+  .load-more {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 28px 0 16px;
+    color: var(--text-2);
+    font-size: 13px;
+  }
+  .load-more-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    padding: 10px 18px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-sm);
+    background: var(--surface);
+    color: var(--text-1);
+  }
+  .load-more-btn:hover:not(:disabled) {
+    background: var(--bg-3);
+    color: var(--text-0);
+  }
+  .load-more-btn:disabled { opacity: 0.55; cursor: wait; }
   .left {
     display: flex;
     align-items: center;

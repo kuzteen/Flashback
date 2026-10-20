@@ -20,19 +20,74 @@ pub struct ClipInfo {
     pub exported: bool,
 }
 
-pub fn list_clips(dirs: Vec<PathBuf>) -> Vec<ClipInfo> {
+#[derive(serde::Serialize)]
+pub struct ClipPage {
+    pub clips: Vec<ClipInfo>,
+    pub total: usize,
+    pub has_more: bool,
+}
+
+pub struct ClipFile {
+    path: PathBuf,
+    size_bytes: u64,
+    modified_ms: i64,
+}
+
+impl ClipFile {
+    pub fn path(&self) -> String {
+        self.path.to_string_lossy().into_owned()
+    }
+
+    fn read(self) -> ClipInfo {
+        let path = self.path();
+        let source = clip_source(&self.path).unwrap_or_default();
+        ClipInfo {
+            id: path.clone(),
+            name: self.path.file_stem().and_then(|s| s.to_str()).unwrap_or("Clip").to_string(),
+            path,
+            size_bytes: self.size_bytes,
+            modified_ms: self.modified_ms,
+            duration_sec: clip_duration_secs(&self.path).unwrap_or(0.0),
+            detected: source.clone(),
+            source,
+            cover: None,
+            cover_ms: 0,
+            exported: false,
+        }
+    }
+}
+
+// Enumerar y ordenar solo usa metadatos del directorio. Los vídeos se abren después de
+// seleccionar la página, para que arrancar no lea la duración y el origen de toda la biblioteca.
+pub fn scan_clips(dirs: Vec<PathBuf>) -> Vec<ClipFile> {
     let mut out = Vec::new();
     for dir in dirs {
         scan_dir(&dir, &mut out);
     }
     // Dedup por ruta por si dos carpetas escaneadas se solapan; se conserva la primera.
     let mut seen = std::collections::HashSet::new();
-    out.retain(|c| seen.insert(c.path.to_lowercase()));
-    out.sort_by_key(|c| std::cmp::Reverse(c.modified_ms));
+    out.retain(|c| seen.insert(c.path().to_lowercase()));
+    // La ruta desempata fechas iguales: las páginas deben mantener el mismo orden entre llamadas.
+    out.sort_unstable_by(|a, b| b.modified_ms.cmp(&a.modified_ms).then_with(|| a.path.cmp(&b.path)));
     out
 }
 
-fn scan_dir(dir: &Path, out: &mut Vec<ClipInfo>) {
+pub fn clip_page(mut files: Vec<ClipFile>, offset: usize, limit: Option<usize>, oldest: bool) -> ClipPage {
+    let total = files.len();
+    if oldest {
+        files.reverse();
+    }
+    let count = limit.unwrap_or(total).min(total.saturating_sub(offset));
+    let clips = files.into_iter().skip(offset).take(count).map(ClipFile::read).collect();
+    ClipPage { clips, total, has_more: offset.saturating_add(count) < total }
+}
+
+#[cfg(test)]
+fn list_clips(dirs: Vec<PathBuf>) -> Vec<ClipInfo> {
+    clip_page(scan_clips(dirs), 0, None, false).clips
+}
+
+fn scan_dir(dir: &Path, out: &mut Vec<ClipFile>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -45,35 +100,16 @@ fn scan_dir(dir: &Path, out: &mut Vec<ClipInfo>) {
         if !meta.is_file() {
             continue;
         }
-        // El id es la ruta, no el nombre: la biblioteca escanea varias carpetas y dos archivos
-        // homónimos (un original y su copia en `Clips-Edit`, p. ej.) colapsarían en la misma clave
-        // de la rejilla. La ruta es lo único único, y es lo que ya se deduplica y se usa de cara al
-        // backend. El nombre sigue siendo lo que se muestra.
-        let id = path.to_string_lossy().into_owned();
-        let name = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("Clip")
-            .to_string();
         let modified_ms = meta
             .modified()
             .ok()
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
-        let source = clip_source(&path).unwrap_or_default();
-        out.push(ClipInfo {
-            id,
-            name,
-            path: path.to_string_lossy().into_owned(),
+        out.push(ClipFile {
+            path,
             size_bytes: meta.len(),
             modified_ms,
-            duration_sec: clip_duration_secs(&path).unwrap_or(0.0),
-            detected: source.clone(),
-            source,
-            cover: None,
-            cover_ms: 0,
-            exported: false,
         });
     }
 }
@@ -522,6 +558,65 @@ fn legacy_source(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pages_are_bounded_and_cover_the_library_in_both_orders() {
+        let dir = std::env::temp_dir().join(format!("fb_pages_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..205u64 {
+            let file = File::create(dir.join(format!("{i:03}.mp4"))).unwrap();
+            file.set_times(std::fs::FileTimes::new().set_modified(
+                UNIX_EPOCH + std::time::Duration::from_secs(i + 1),
+            )).unwrap();
+        }
+        let scan = || scan_clips(vec![dir.clone(), dir.clone()]);
+        let first = clip_page(scan(), 0, Some(100), false);
+        assert_eq!((first.clips.len(), first.total, first.has_more), (100, 205, true));
+        assert_eq!(first.clips[0].name, "204");
+        assert_eq!(first.clips[99].name, "105");
+        let second = clip_page(scan(), 100, Some(100), false);
+        assert_eq!(second.clips[0].name, "104");
+        assert_eq!(second.clips[99].name, "005");
+        let last = clip_page(scan(), 200, Some(100), false);
+        assert_eq!((last.clips.len(), last.has_more), (5, false));
+        assert_eq!(last.clips[4].name, "000");
+        let oldest = clip_page(scan(), 0, Some(100), true);
+        assert_eq!(oldest.clips[0].name, "000");
+        assert_eq!(oldest.clips[99].name, "099");
+        let past_end = clip_page(scan(), usize::MAX, Some(100), false);
+        assert!(past_end.clips.is_empty());
+        assert!(!past_end.has_more);
+        assert_eq!(clip_page(scan(), 0, None, false).clips.len(), 205);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn scan_defers_reading_embedded_metadata_until_the_page_is_loaded() {
+        let dir = std::env::temp_dir().join(format!("fb_lazy_page_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("clip.mp4");
+        std::fs::write(&path, b"\x00\x00\x00\x08ftyp").unwrap();
+        let files = scan_clips(vec![dir.clone()]);
+        write_embedded_source(&path, "After scanning").unwrap();
+        let page = clip_page(files, 0, Some(100), false);
+        assert_eq!(page.clips[0].source, "After scanning");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn equal_timestamps_have_a_stable_order_across_scans() {
+        let dir = std::env::temp_dir().join(format!("fb_page_ties_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["c", "a", "b"] {
+            let file = File::create(dir.join(format!("{name}.mp4"))).unwrap();
+            file.set_times(std::fs::FileTimes::new().set_modified(UNIX_EPOCH)).unwrap();
+        }
+        let scan = || scan_clips(vec![dir.clone()]);
+        assert_eq!(clip_page(scan(), 0, Some(1), false).clips[0].name, "a");
+        assert_eq!(clip_page(scan(), 1, Some(1), false).clips[0].name, "b");
+        assert_eq!(clip_page(scan(), 2, Some(1), false).clips[0].name, "c");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn list_clips_aggregates_and_dedupes() {

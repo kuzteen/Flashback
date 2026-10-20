@@ -14,13 +14,15 @@
     query = $bindable(''),
     filters = $bindable([]),
     sort = $bindable(),
-    sorts
+    sorts,
+    onfilteropen
   }: {
     clips: Clip[];
     query?: string;
     filters?: Filter[];
     sort: S;
     sorts: { value: S; label: string }[];
+    onfilteropen?: () => Promise<unknown>;
   } = $props();
 
   const viewTips = new TipGroup('bottom');
@@ -60,7 +62,7 @@
       onkeydown={(e) => e.key === 'Escape' && searchEl?.blur()}
     />
   </label>
-  <LibraryFilter {clips} bind:selected={filters} />
+  <LibraryFilter {clips} bind:selected={filters} onopen={onfilteropen} />
   <div class="sort-dd" class:open={sortOpen} bind:this={sortEl}>
     <button class="ctrl" onclick={() => (sortOpen = !sortOpen)}>
       <Icon name="sort" size={14} />
