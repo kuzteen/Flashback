@@ -12,9 +12,9 @@ use discord_rich_presence::activity::{Activity, Assets, Button, Timestamps};
 use discord_rich_presence::{DiscordIpc, DiscordIpcClient};
 
 const APP_ID: &str = "1495797767245922498";
-// PNG público del mismo isotipo que usa la app; evita mantener otro logo en Discord Art Assets.
+// El sufijo cambia con el arte para que Discord no reutilice su imagen anterior en caché.
 const FLASHBACK_ASSET: &str =
-    "https://raw.githubusercontent.com/kuzteen/Flashback/main/static/flashback-presence.png";
+    "https://raw.githubusercontent.com/kuzteen/Flashback/main/static/flashback-presence.png?v=1.32.1";
 const DOWNLOAD_URL: &str = "https://github.com/kuzteen/Flashback/releases/latest";
 const SUPPORT_URL: &str = "https://discord.gg/WckwXRrhrR";
 const AWAY_AFTER: Duration = Duration::from_secs(60);
